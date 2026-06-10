@@ -30,6 +30,11 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Restore stable debug signing key
+        run: |
+          base64 -d app/signing/dailycut-debug.jks.b64 > app/signing/dailycut-debug.jks
+          keytool -list -keystore app/signing/dailycut-debug.jks -storepass dailycutdebug -alias dailycut
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
