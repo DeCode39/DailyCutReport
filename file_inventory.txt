@@ -1,0 +1,17 @@
+/mnt/data/DailyCutReport/README.md
+/mnt/data/DailyCutReport/app/build.gradle.kts
+/mnt/data/DailyCutReport/app/src/main/AndroidManifest.xml
+/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/HealthConnectManager.kt
+/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/LocalStore.kt
+/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/MainActivity.kt
+/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/Models.kt
+/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/PermissionsRationaleActivity.kt
+/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/ReportImageExporter.kt
+/mnt/data/DailyCutReport/app/src/main/res/values/colors.xml
+/mnt/data/DailyCutReport/app/src/main/res/values/strings.xml
+/mnt/data/DailyCutReport/app/src/main/res/values/styles.xml
+/mnt/data/DailyCutReport/app/src/main/res/xml/file_paths.xml
+/mnt/data/DailyCutReport/build.gradle.kts
+/mnt/data/DailyCutReport/file_inventory.txt
+/mnt/data/DailyCutReport/gradle.properties
+/mnt/data/DailyCutReport/settings.gradle.kts
