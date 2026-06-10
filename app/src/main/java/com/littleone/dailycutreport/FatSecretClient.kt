@@ -102,7 +102,7 @@ class FatSecretClient(context: Context) {
         }
         val signed = signParams("GET", baseUrl, params, secret, tokenSecret)
         val response = httpRequest("GET", baseUrl, signed)
-        parseDiary(response)
+        parseDiary(response, key, secret, token, tokenSecret)
     }
 
     private fun consumerKey(): String = prefs.getString("consumer_key", null)?.takeIf { it.isNotBlank() }
@@ -139,6 +139,22 @@ class FatSecretClient(context: Context) {
         mac.init(SecretKeySpec(signingKey.toByteArray(Charsets.UTF_8), "HmacSHA1"))
         val signature = Base64.encodeToString(mac.doFinal(base.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
         return params + ("oauth_signature" to signature)
+    }
+
+    private fun signedApiRequest(
+        key: String,
+        secret: String,
+        token: String,
+        tokenSecret: String,
+        apiParams: Map<String, String>
+    ): String {
+        val baseUrl = "https://platform.fatsecret.com/rest/server.api"
+        val params = oauthParams(key, token).toMutableMap().apply {
+            putAll(apiParams)
+            put("format", "json")
+        }
+        val signed = signParams("GET", baseUrl, params, secret, tokenSecret)
+        return httpRequest("GET", baseUrl, signed)
     }
 
     private fun httpRequest(method: String, baseUrl: String, params: Map<String, String>): String {
@@ -183,7 +199,7 @@ class FatSecretClient(context: Context) {
             }
         }.toMap()
 
-    private fun parseDiary(body: String): DiaryImport {
+    private fun parseDiary(body: String, key: String, secret: String, token: String, tokenSecret: String): DiaryImport {
         val root = JSONObject(body)
         if (root.has("error")) error(root.getJSONObject("error").toString())
         val foodEntries = root.optJSONObject("food_entries") ?: return DiaryImport(0.0, 0.0, 0.0, 0)
@@ -200,9 +216,51 @@ class FatSecretClient(context: Context) {
             val entry = entries.optJSONObject(i) ?: continue
             calories += entry.optString("calories", "0").toDoubleOrNull() ?: 0.0
             protein += entry.optString("protein", "0").toDoubleOrNull() ?: 0.0
-            sodium += entry.optString("sodium", "0").toDoubleOrNull() ?: 0.0
+
+            val directSodium = entry.optString("sodium", "").toDoubleOrNull()
+            sodium += directSodium ?: sodiumFromFoodDetails(entry, key, secret, token, tokenSecret)
         }
         return DiaryImport(calories, protein, sodium, entries.length())
+    }
+
+    private fun sodiumFromFoodDetails(
+        entry: JSONObject,
+        key: String,
+        secret: String,
+        token: String,
+        tokenSecret: String
+    ): Double {
+        val foodId = entry.optString("food_id", "").takeIf { it.isNotBlank() } ?: return 0.0
+        val targetServingId = entry.optString("serving_id", "")
+        val units = entry.optString("number_of_units", "1").toDoubleOrNull() ?: 1.0
+        val response = runCatching {
+            signedApiRequest(
+                key,
+                secret,
+                token,
+                tokenSecret,
+                mapOf("method" to "food.get.v2", "food_id" to foodId)
+            )
+        }.getOrNull() ?: return 0.0
+        val food = runCatching { JSONObject(response).optJSONObject("food") }.getOrNull() ?: return 0.0
+        val servings = food.optJSONObject("servings") ?: return 0.0
+        val rawServing = servings.opt("serving") ?: return 0.0
+        val servingArray = when (rawServing) {
+            is JSONArray -> rawServing
+            is JSONObject -> JSONArray().put(rawServing)
+            else -> JSONArray()
+        }
+        var selected: JSONObject? = null
+        for (i in 0 until servingArray.length()) {
+            val serving = servingArray.optJSONObject(i) ?: continue
+            if (targetServingId.isNotBlank() && serving.optString("serving_id") == targetServingId) {
+                selected = serving
+                break
+            }
+            if (selected == null) selected = serving
+        }
+        val sodiumPerServing = selected?.optString("sodium", "")?.toDoubleOrNull() ?: 0.0
+        return sodiumPerServing * units
     }
 
     private fun percent(value: String): String = URLEncoder.encode(value, "UTF-8")
