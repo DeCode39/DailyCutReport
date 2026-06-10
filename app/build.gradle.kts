@@ -11,8 +11,17 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("signing/dailycut-debug.jks")
+            storePassword = "dailycutdebug"
+            keyAlias = "dailycut"
+            keyPassword = "dailycutdebug"
+        }
     }
 
     compileOptions {
