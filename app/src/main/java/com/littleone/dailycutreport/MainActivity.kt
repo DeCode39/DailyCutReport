@@ -2,6 +2,8 @@ package com.littleone.dailycutreport
 
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
@@ -9,6 +11,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -20,9 +23,12 @@ import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
+    private enum class Tab { TODAY, SETTINGS }
+
     private lateinit var healthConnectManager: HealthConnectManager
     private lateinit var fatSecretClient: FatSecretClient
     private lateinit var store: LocalStore
@@ -30,31 +36,19 @@ class MainActivity : ComponentActivity() {
 
     private var selectedDate: LocalDate = LocalDate.now()
     private var currentReport: DailyReport = DailyReport(selectedDate)
+    private var currentTab: Tab = Tab.TODAY
 
+    private lateinit var scroll: ScrollView
     private lateinit var root: LinearLayout
-    private lateinit var dateText: TextView
-    private lateinit var statusText: TextView
-    private lateinit var stepsText: TextView
-    private lateinit var distanceText: TextView
-    private lateinit var activeCaloriesText: TextView
-    private lateinit var totalCaloriesText: TextView
-    private lateinit var exercisesText: TextView
-    private lateinit var nutritionText: TextView
-    private lateinit var fatSecretStatusText: TextView
-    private lateinit var finalBurnText: TextView
-    private lateinit var finalFoodText: TextView
-    private lateinit var finalProteinText: TextView
-    private lateinit var finalSodiumText: TextView
-    private lateinit var deficitText: TextView
 
-    private lateinit var consumerKeyInput: EditText
-    private lateinit var consumerSecretInput: EditText
-    private lateinit var verifierInput: EditText
-    private lateinit var foodInput: EditText
-    private lateinit var proteinInput: EditText
-    private lateinit var sodiumInput: EditText
-    private lateinit var manualBurnInput: EditText
-    private lateinit var notesInput: EditText
+    private var foodInput: EditText? = null
+    private var proteinInput: EditText? = null
+    private var sodiumInput: EditText? = null
+    private var manualBurnInput: EditText? = null
+    private var notesInput: EditText? = null
+    private var consumerKeyInput: EditText? = null
+    private var consumerSecretInput: EditText? = null
+    private var verifierInput: EditText? = null
 
     private val numberFmt = DecimalFormat("#,##0")
     private val oneFmt = DecimalFormat("#,##0.0")
@@ -72,112 +66,178 @@ class MainActivity : ComponentActivity() {
         fatSecretClient = FatSecretClient(this)
         store = LocalStore(this)
         exporter = ReportImageExporter(this)
-        buildUi()
-        loadDate(LocalDate.now())
-    }
-
-    private fun buildUi() {
-        val scroll = ScrollView(this)
+        scroll = ScrollView(this)
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(40))
-            setBackgroundColor(Color.rgb(248, 248, 246))
+            setPadding(dp(18), dp(18), dp(18), dp(32))
+            setBackgroundColor(Color.rgb(246, 247, 246))
         }
         scroll.addView(root)
         setContentView(scroll)
+        loadDate(LocalDate.now())
+    }
 
-        root.addView(title("Daily Cut Report"))
-        root.addView(body("Health data comes from Health Connect. Food can come from FatSecret API, Health Connect nutrition, or manual override."))
-        root.addView(spacer(16))
-
-        val dateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        dateRow.addView(button("◀") { loadDate(selectedDate.minusDays(1)) }, weight = 1f)
-        dateText = sectionText("", center = true)
-        dateRow.addView(dateText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f))
-        dateRow.addView(button("Today") { loadDate(LocalDate.now()) }, weight = 1.2f)
-        dateRow.addView(button("▶") { loadDate(selectedDate.plusDays(1)) }, weight = 1f)
-        root.addView(dateRow)
-        root.addView(spacer(10))
-
-        statusText = body("")
-        root.addView(statusText)
-        root.addView(spacer(10))
-
-        val permissionButton = button("Grant / update Health Connect permissions") {
-            requestHealthPermissions.launch(HealthConnectManager.PERMISSIONS)
+    private fun render() {
+        root.removeAllViews()
+        clearScreenInputs()
+        renderHeader()
+        when (currentTab) {
+            Tab.TODAY -> renderTodayTab()
+            Tab.SETTINGS -> renderSettingsTab()
         }
-        root.addView(permissionButton)
-        root.addView(button("Refresh from Health Connect") {
-            lifecycleScope.launch { refreshFromHealthConnect() }
+    }
+
+    private fun renderHeader() {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(12))
+        }
+        header.addView(ImageView(this).apply {
+            setImageResource(resources.getIdentifier("ic_dailycut_logo", "drawable", packageName))
+        }, LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(12) })
+
+        val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titleBox.addView(TextView(this).apply {
+            text = "Daily Cut Report"
+            textSize = 26f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(22, 28, 32))
         })
+        titleBox.addView(TextView(this).apply {
+            text = "Fitness + FatSecret daily image exporter"
+            textSize = 13f
+            setTextColor(Color.rgb(92, 99, 105))
+        })
+        header.addView(titleBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(header)
 
-        root.addView(section("Health Connect import"))
-        stepsText = metric("Steps", "—")
-        distanceText = metric("Distance", "—")
-        activeCaloriesText = metric("Active calories", "—")
-        totalCaloriesText = metric("Total calories", "—")
-        exercisesText = metric("Exercise sessions", "—")
-        nutritionText = metric("Nutrition records", "—")
-        root.addView(stepsText)
-        root.addView(distanceText)
-        root.addView(activeCaloriesText)
-        root.addView(totalCaloriesText)
-        root.addView(exercisesText)
-        root.addView(nutritionText)
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(14))
+        }
+        tabs.addView(tabButton("Today", currentTab == Tab.TODAY) { currentTab = Tab.TODAY; render() }, weight = 1f)
+        tabs.addView(tabButton("Settings", currentTab == Tab.SETTINGS) { currentTab = Tab.SETTINGS; render() }, weight = 1f)
+        root.addView(tabs)
+    }
 
-        root.addView(section("FatSecret API import"))
-        root.addView(body("One-time setup: paste your OAuth 1.0 Consumer Key and Secret, save them locally, authorize in browser, then enter the verifier code. After that, import the selected date's diary."))
-        fatSecretStatusText = metric("FatSecret", "—")
-        consumerKeyInput = input("Consumer Key", text = true)
-        consumerSecretInput = input("Consumer Secret", text = true)
-        verifierInput = input("Verifier code from FatSecret", text = true)
-        root.addView(fatSecretStatusText)
-        root.addView(label("Consumer Key")); root.addView(consumerKeyInput)
-        root.addView(label("Consumer Secret")); root.addView(consumerSecretInput)
-        root.addView(button("Save FatSecret credentials locally") { saveFatSecretCredentials() })
-        root.addView(button("Start FatSecret authorization") { startFatSecretAuthorization() })
-        root.addView(label("Verifier code")); root.addView(verifierInput)
-        root.addView(button("Complete FatSecret authorization") { completeFatSecretAuthorization() })
-        root.addView(button("Import FatSecret diary for selected date") { importFatSecretDiary() })
+    private fun renderTodayTab() {
+        root.addView(dateCard())
+        root.addView(summaryCard())
+        root.addView(importCard())
+        root.addView(manualCard())
+        root.addView(exportCard())
+    }
 
-        root.addView(section("Manual food finalizer"))
-        root.addView(body("Manual food/protein/sodium override imported FatSecret or Health Connect nutrition. Leave them blank to use imported values."))
-        foodInput = input("Food calories, kcal")
-        proteinInput = input("Protein, g")
-        sodiumInput = input("Sodium, mg")
-        manualBurnInput = input("Optional final burn override, kcal")
-        notesInput = input("Notes", multiline = true, text = true)
-        root.addView(label("Food calories")); root.addView(foodInput)
-        root.addView(label("Protein")); root.addView(proteinInput)
-        root.addView(label("Sodium")); root.addView(sodiumInput)
-        root.addView(label("Final burn override, optional")); root.addView(manualBurnInput)
-        root.addView(label("Notes")); root.addView(notesInput)
-        root.addView(button("Save manual entries") { saveManualEntries() })
+    private fun renderSettingsTab() {
+        root.addView(settingsStatusCard())
+        root.addView(healthConnectSettingsCard())
+        root.addView(fatSecretSettingsCard())
+    }
 
-        root.addView(section("Final daily result"))
-        finalBurnText = metric("Final burn", "—")
-        finalFoodText = metric("Final food", "—")
-        finalProteinText = metric("Final protein", "—")
-        finalSodiumText = metric("Final sodium", "—")
-        deficitText = metric("Estimated deficit", "—")
-        root.addView(finalBurnText)
-        root.addView(finalFoodText)
-        root.addView(finalProteinText)
-        root.addView(finalSodiumText)
-        root.addView(deficitText)
-        root.addView(body("Burn rule: manual override → Health Connect total calories → active calories only. Nutrition rule: manual entries → FatSecret import → Health Connect nutrition → missing."))
+    private fun dateCard(): View = card {
+        addView(sectionTitle("Report date"))
+        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        row.addView(smallButton("◀") { loadDate(selectedDate.minusDays(1)) }, weight = 0.8f)
+        row.addView(TextView(context).apply {
+            text = selectedDate.format(dateFmt)
+            textSize = 16f
+            gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(35, 35, 35))
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2.6f))
+        row.addView(smallButton("Today") { loadDate(LocalDate.now()) }, weight = 1.2f)
+        row.addView(smallButton("▶") { loadDate(selectedDate.plusDays(1)) }, weight = 0.8f)
+        addView(row)
+    }
 
-        root.addView(section("Export"))
-        root.addView(button("Save PNG to Pictures/DailyCutReport") { exportImage(share = false) })
-        root.addView(button("Save and share PNG") { exportImage(share = true) })
+    private fun summaryCard(): View = card {
+        addView(sectionTitle("Final daily result"))
+        val deficit = currentReport.deficitCalories
+        val verdict = when {
+            deficit >= 300 -> "Cut day"
+            deficit <= -200 -> "Surplus day"
+            else -> "Maintenance-ish"
+        }
+        addView(bigResult(verdict, if (deficit >= 0) "−${numberFmt.format(deficit.roundToInt())} kcal" else "+${numberFmt.format(abs(deficit).roundToInt())} kcal"))
+        addView(twoColumnMetrics(
+            "Burn" to "${numberFmt.format(currentReport.finalBurnCalories.roundToInt())} kcal",
+            "Food" to "${numberFmt.format(currentReport.finalFoodCalories.roundToInt())} kcal",
+            "Protein" to "${numberFmt.format(currentReport.finalProteinG.roundToInt())} g",
+            "Sodium" to "${numberFmt.format(currentReport.finalSodiumMg.roundToInt())} mg"
+        ))
+        addView(body("Burn source: ${currentReport.burnSource}"))
+        addView(body("Food source: ${currentReport.nutritionSource}"))
+    }
+
+    private fun importCard(): View = card {
+        addView(sectionTitle("Daily imports"))
+        val h = currentReport.health
+        addView(body("Health Connect: ${h.healthConnectStatus}"))
+        addView(twoColumnMetrics(
+            "Steps" to numberFmt.format(h.steps),
+            "Distance" to "${oneFmt.format(h.distanceKm)} km",
+            "Active" to "${numberFmt.format(h.activeCalories.roundToInt())} kcal",
+            "Total" to "${numberFmt.format(h.totalCalories.roundToInt())} kcal"
+        ))
+        addView(body("Exercises: ${h.exerciseSessions} sessions, ${h.exerciseMinutes} min"))
+        addView(body("Health nutrition records: ${h.nutritionRecords}"))
+        addView(spacer(8))
+        addView(primaryButton("Refresh Health Connect") { lifecycleScope.launch { refreshFromHealthConnect() } })
+        addView(primaryButton("Import FatSecret diary") { importFatSecretDiary() })
+    }
+
+    private fun manualCard(): View = card {
+        addView(sectionTitle("Manual overrides"))
+        addView(body("Leave blank to keep imported FatSecret/Health Connect values."))
+        foodInput = input("Food calories, kcal").also { addView(label("Food calories")); addView(it) }
+        proteinInput = input("Protein, g").also { addView(label("Protein")); addView(it) }
+        sodiumInput = input("Sodium, mg").also { addView(label("Sodium")); addView(it) }
+        manualBurnInput = input("Final burn override, kcal").also { addView(label("Final burn override")); addView(it) }
+        notesInput = input("Notes", multiline = true, text = true).also { addView(label("Notes")); addView(it) }
+        fillInputs(currentReport.manual)
+        addView(primaryButton("Save overrides") { saveManualEntries() })
+    }
+
+    private fun exportCard(): View = card {
+        addView(sectionTitle("Export"))
+        addView(body("Creates a local PNG in Pictures/DailyCutReport."))
+        addView(primaryButton("Save PNG") { exportImage(share = false) })
+        addView(secondaryButton("Save and share PNG") { exportImage(share = true) })
+    }
+
+    private fun settingsStatusCard(): View = card {
+        addView(sectionTitle("Settings status"))
+        addView(body("Health Connect: ${currentReport.health.healthConnectStatus}"))
+        addView(body("FatSecret: ${fatSecretClient.status()}"))
+        addView(body("Network access is used for FatSecret API calls only."))
+    }
+
+    private fun healthConnectSettingsCard(): View = card {
+        addView(sectionTitle("Health Connect"))
+        addView(body("Grant read permissions for steps, distance, calories, exercises, and nutrition. Nutrition is optional because FatSecret API is the primary food source."))
+        addView(primaryButton("Grant / update Health Connect permissions") {
+            requestHealthPermissions.launch(HealthConnectManager.PERMISSIONS)
+        })
+        addView(secondaryButton("Refresh Health Connect") { lifecycleScope.launch { refreshFromHealthConnect() } })
+    }
+
+    private fun fatSecretSettingsCard(): View = card {
+        addView(sectionTitle("FatSecret authorization"))
+        addView(body("Your Consumer Secret and access token are stored only in this app's local private storage."))
+        consumerKeyInput = input("Consumer Key", text = true).also { addView(label("Consumer Key")); addView(it) }
+        consumerSecretInput = input("Consumer Secret", text = true).also { addView(label("Consumer Secret")); addView(it) }
+        addView(primaryButton("Save credentials locally") { saveFatSecretCredentials() })
+        addView(secondaryButton("Start browser authorization") { startFatSecretAuthorization() })
+        verifierInput = input("Verifier code", text = true).also { addView(label("Verifier code")); addView(it) }
+        addView(primaryButton("Complete authorization") { completeFatSecretAuthorization() })
+        addView(body("After authorization, return to Today and tap Import FatSecret diary."))
     }
 
     private fun loadDate(date: LocalDate) {
         selectedDate = date
         currentReport = store.load(date) ?: DailyReport(date = date)
-        dateText.text = date.format(dateFmt)
-        fillInputs(currentReport.manual)
-        updateDisplay()
+        render()
     }
 
     private suspend fun refreshFromHealthConnect() {
@@ -186,34 +246,31 @@ class MainActivity : ComponentActivity() {
             currentReport = currentReport.copy(
                 health = currentReport.health.copy(healthConnectStatus = healthConnectManager.availabilityMessage())
             )
-            updateDisplay()
+            render()
             return
         }
-
-        val hasPermissions = healthConnectManager.hasAllPermissions()
-        if (!hasPermissions) {
+        if (!healthConnectManager.hasAllPermissions()) {
             Toast.makeText(this, "Health Connect permissions are not fully granted.", Toast.LENGTH_LONG).show()
             requestHealthPermissions.launch(HealthConnectManager.PERMISSIONS)
             return
         }
-
         val summary = runCatching { healthConnectManager.readDailySummary(selectedDate) }
             .getOrElse { HealthSummary(healthConnectStatus = "Read failed: ${it.message ?: it::class.java.simpleName}") }
         currentReport = store.mergeHealth(selectedDate, summary)
-        updateDisplay()
-        Toast.makeText(this, "Health Connect data refreshed.", Toast.LENGTH_SHORT).show()
+        render()
+        Toast.makeText(this, "Health Connect refreshed.", Toast.LENGTH_SHORT).show()
     }
 
     private fun saveFatSecretCredentials() {
-        val key = consumerKeyInput.text.toString().trim()
-        val secret = consumerSecretInput.text.toString().trim()
+        val key = consumerKeyInput?.text?.toString()?.trim().orEmpty()
+        val secret = consumerSecretInput?.text?.toString()?.trim().orEmpty()
         if (key.isBlank() || secret.isBlank()) {
             Toast.makeText(this, "Enter both Consumer Key and Consumer Secret.", Toast.LENGTH_LONG).show()
             return
         }
         fatSecretClient.saveConsumerCredentials(key, secret)
-        consumerSecretInput.setText("")
-        updateDisplay()
+        consumerSecretInput?.setText("")
+        render()
         Toast.makeText(this, "FatSecret credentials saved locally.", Toast.LENGTH_SHORT).show()
     }
 
@@ -221,7 +278,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val result = runCatching { fatSecretClient.startAuthorization() }
             result.onSuccess { url ->
-                updateDisplay()
+                render()
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
             }.onFailure {
                 Toast.makeText(this@MainActivity, "FatSecret auth failed: ${it.message}", Toast.LENGTH_LONG).show()
@@ -230,7 +287,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun completeFatSecretAuthorization() {
-        val verifier = verifierInput.text.toString().trim()
+        val verifier = verifierInput?.text?.toString()?.trim().orEmpty()
         if (verifier.isBlank()) {
             Toast.makeText(this, "Enter the verifier code shown by FatSecret.", Toast.LENGTH_LONG).show()
             return
@@ -238,8 +295,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val result = runCatching { fatSecretClient.completeAuthorization(verifier) }
             result.onSuccess {
-                verifierInput.setText("")
-                updateDisplay()
+                verifierInput?.setText("")
+                render()
                 Toast.makeText(this@MainActivity, "FatSecret authorized.", Toast.LENGTH_SHORT).show()
             }.onFailure {
                 Toast.makeText(this@MainActivity, "FatSecret verifier failed: ${it.message}", Toast.LENGTH_LONG).show()
@@ -259,8 +316,7 @@ class MainActivity : ComponentActivity() {
                     notes = mergeNote(existing.notes, "FatSecret API import: ${diary.entries} entries")
                 )
                 currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
-                fillInputs(currentReport.manual)
-                updateDisplay()
+                render()
                 Toast.makeText(this@MainActivity, "FatSecret imported ${diary.entries} entries.", Toast.LENGTH_SHORT).show()
             }.onFailure {
                 Toast.makeText(this@MainActivity, "FatSecret import failed: ${it.message}", Toast.LENGTH_LONG).show()
@@ -270,14 +326,14 @@ class MainActivity : ComponentActivity() {
 
     private fun saveManualEntries() {
         val manual = ManualEntry(
-            foodCalories = foodInput.toDoubleValue(),
-            proteinG = proteinInput.toDoubleValue(),
-            sodiumMg = sodiumInput.toDoubleValue(),
-            manualBurnCalories = manualBurnInput.text.toString().trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull(),
-            notes = notesInput.text.toString().trim()
+            foodCalories = foodInput?.toDoubleValue() ?: currentReport.manual.foodCalories,
+            proteinG = proteinInput?.toDoubleValue() ?: currentReport.manual.proteinG,
+            sodiumMg = sodiumInput?.toDoubleValue() ?: currentReport.manual.sodiumMg,
+            manualBurnCalories = manualBurnInput?.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.toDoubleOrNull(),
+            notes = notesInput?.text?.toString()?.trim().orEmpty()
         )
         currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
-        updateDisplay()
+        render()
         Toast.makeText(this, "Saved locally.", Toast.LENGTH_SHORT).show()
     }
 
@@ -293,38 +349,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun fillInputs(manual: ManualEntry) {
-        foodInput.setText(if (manual.foodCalories == 0.0) "" else manual.foodCalories.roundToInt().toString())
-        proteinInput.setText(if (manual.proteinG == 0.0) "" else manual.proteinG.roundToInt().toString())
-        sodiumInput.setText(if (manual.sodiumMg == 0.0) "" else manual.sodiumMg.roundToInt().toString())
-        manualBurnInput.setText(manual.manualBurnCalories?.roundToInt()?.toString() ?: "")
-        notesInput.setText(manual.notes)
+        foodInput?.setText(if (manual.foodCalories == 0.0) "" else manual.foodCalories.roundToInt().toString())
+        proteinInput?.setText(if (manual.proteinG == 0.0) "" else manual.proteinG.roundToInt().toString())
+        sodiumInput?.setText(if (manual.sodiumMg == 0.0) "" else manual.sodiumMg.roundToInt().toString())
+        manualBurnInput?.setText(manual.manualBurnCalories?.roundToInt()?.toString() ?: "")
+        notesInput?.setText(manual.notes)
     }
 
-    private fun updateDisplay() {
-        val h = currentReport.health
-        statusText.text = "${h.healthConnectStatus}. Network access enabled only for FatSecret API."
-        fatSecretStatusText.text = "FatSecret: ${fatSecretClient.status()}"
-        stepsText.text = "Steps: ${numberFmt.format(h.steps)}"
-        distanceText.text = "Distance: ${oneFmt.format(h.distanceKm)} km"
-        activeCaloriesText.text = "Active calories: ${numberFmt.format(h.activeCalories.roundToInt())} kcal"
-        totalCaloriesText.text = "Total calories: ${numberFmt.format(h.totalCalories.roundToInt())} kcal"
-        exercisesText.text = "Exercise sessions: ${h.exerciseSessions} (${h.exerciseMinutes} min)"
-        nutritionText.text = "Nutrition records: ${h.nutritionRecords} | ${numberFmt.format(h.nutritionCalories.roundToInt())} kcal, ${numberFmt.format(h.nutritionProteinG.roundToInt())} g protein, ${numberFmt.format(h.nutritionSodiumMg.roundToInt())} mg sodium"
-        finalBurnText.text = "Final burn: ${numberFmt.format(currentReport.finalBurnCalories.roundToInt())} kcal (${currentReport.burnSource})"
-        finalFoodText.text = "Final food: ${numberFmt.format(currentReport.finalFoodCalories.roundToInt())} kcal (${currentReport.nutritionSource})"
-        finalProteinText.text = "Final protein: ${numberFmt.format(currentReport.finalProteinG.roundToInt())} g"
-        finalSodiumText.text = "Final sodium: ${numberFmt.format(currentReport.finalSodiumMg.roundToInt())} mg"
-
-        val deficit = currentReport.deficitCalories
-        val sign = if (deficit >= 0) "−" else "+"
-        deficitText.text = "Estimated deficit: $sign${numberFmt.format(kotlin.math.abs(deficit).roundToInt())} kcal"
-        deficitText.setTextColor(
-            when {
-                deficit >= 300 -> Color.rgb(20, 110, 55)
-                deficit <= -200 -> Color.rgb(165, 45, 45)
-                else -> Color.rgb(80, 80, 80)
-            }
-        )
+    private fun clearScreenInputs() {
+        foodInput = null
+        proteinInput = null
+        sodiumInput = null
+        manualBurnInput = null
+        notesInput = null
+        consumerKeyInput = null
+        consumerSecretInput = null
+        verifierInput = null
     }
 
     private fun mergeNote(old: String, addition: String): String = when {
@@ -333,47 +373,75 @@ class MainActivity : ComponentActivity() {
         else -> "$old\n$addition"
     }
 
-    private fun title(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 28f
-        setTextColor(Color.rgb(20, 20, 20))
-        typeface = android.graphics.Typeface.DEFAULT_BOLD
+    private fun card(build: LinearLayout.() -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+        background = rounded(Color.WHITE, dp(18))
+        elevation = dp(2).toFloat()
+        build()
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(14)
+        }
     }
 
-    private fun section(text: String) = TextView(this).apply {
+    private fun sectionTitle(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 20f
-        setTextColor(Color.rgb(35, 95, 130))
-        typeface = android.graphics.Typeface.DEFAULT_BOLD
-        setPadding(0, dp(24), 0, dp(8))
+        textSize = 18f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(Color.rgb(29, 42, 50))
+        setPadding(0, 0, 0, dp(8))
     }
 
-    private fun sectionText(text: String, center: Boolean = false) = TextView(this).apply {
-        this.text = text
-        textSize = 16f
-        setTextColor(Color.rgb(45, 45, 45))
-        if (center) gravity = Gravity.CENTER
+    private fun bigResult(label: String, value: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(2), 0, dp(12))
+        addView(TextView(context).apply {
+            text = label
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(35, 95, 130))
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(TextView(context).apply {
+            text = value
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.END
+            setTextColor(Color.rgb(35, 35, 35))
+        })
+    }
+
+    private fun twoColumnMetrics(vararg items: Pair<String, String>) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        for (chunk in items.toList().chunked(2)) {
+            val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            for (item in chunk) row.addView(metricTile(item.first, item.second), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6); bottomMargin = dp(8) })
+            if (chunk.size == 1) row.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(row)
+        }
+    }
+
+    private fun metricTile(label: String, value: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = rounded(Color.rgb(244, 246, 247), dp(14))
+        addView(TextView(context).apply { text = label; textSize = 12f; setTextColor(Color.rgb(99, 105, 110)) })
+        addView(TextView(context).apply { text = value; textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.rgb(31, 35, 38)) })
     }
 
     private fun body(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 15f
-        setTextColor(Color.rgb(80, 80, 80))
-        setPadding(0, dp(4), 0, dp(4))
-    }
-
-    private fun metric(label: String, value: String) = TextView(this).apply {
-        text = "$label: $value"
-        textSize = 17f
-        setTextColor(Color.rgb(35, 35, 35))
-        setPadding(0, dp(4), 0, dp(4))
+        textSize = 14f
+        setTextColor(Color.rgb(84, 91, 97))
+        setPadding(0, dp(2), 0, dp(6))
     }
 
     private fun label(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 13f
-        setTextColor(Color.rgb(80, 80, 80))
-        setPadding(0, dp(8), 0, dp(2))
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(Color.rgb(88, 96, 102))
+        setPadding(0, dp(8), 0, dp(4))
     }
 
     private fun input(hint: String, multiline: Boolean = false, text: Boolean = false) = EditText(this).apply {
@@ -384,25 +452,40 @@ class MainActivity : ComponentActivity() {
             multiline || text -> InputType.TYPE_CLASS_TEXT or if (multiline) InputType.TYPE_TEXT_FLAG_MULTI_LINE else 0
             else -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
-        setPadding(dp(12), dp(8), dp(12), dp(8))
-        setBackgroundColor(Color.WHITE)
+        setPadding(dp(12), dp(9), dp(12), dp(9))
+        background = rounded(Color.rgb(250, 250, 250), dp(12), Color.rgb(224, 228, 230))
     }
 
-    private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
+    private fun primaryButton(text: String, onClick: () -> Unit) = button(text, Color.rgb(35, 95, 130), Color.WHITE, onClick)
+    private fun secondaryButton(text: String, onClick: () -> Unit) = button(text, Color.rgb(230, 236, 239), Color.rgb(35, 95, 130), onClick)
+    private fun smallButton(text: String, onClick: () -> Unit) = button(text, Color.rgb(230, 236, 239), Color.rgb(29, 42, 50), onClick)
+    private fun tabButton(text: String, selected: Boolean, onClick: () -> Unit) = button(text, if (selected) Color.rgb(35, 95, 130) else Color.rgb(230, 236, 239), if (selected) Color.WHITE else Color.rgb(35, 95, 130), onClick)
+
+    private fun button(text: String, bg: Int, fg: Int, onClick: () -> Unit) = Button(this).apply {
         this.text = text
         isAllCaps = false
+        textSize = 14f
+        setTextColor(fg)
+        background = rounded(bg, dp(14))
         setOnClickListener { onClick() }
+        setPadding(dp(8), dp(8), dp(8), dp(8))
     }
 
     private fun LinearLayout.addView(view: View, weight: Float) {
         addView(view, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight).apply {
-            marginStart = dp(2)
-            marginEnd = dp(2)
+            marginStart = dp(3)
+            marginEnd = dp(3)
         })
     }
 
     private fun spacer(heightDp: Int) = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(heightDp))
+    }
+
+    private fun rounded(color: Int, radius: Int, stroke: Int? = null) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = radius.toFloat()
+        if (stroke != null) setStroke(dp(1), stroke)
     }
 
     private fun EditText.toDoubleValue(): Double = text.toString().trim().toDoubleOrNull() ?: 0.0
