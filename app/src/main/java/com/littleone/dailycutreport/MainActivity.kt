@@ -1,6 +1,8 @@
 package com.littleone.dailycutreport
 
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -22,6 +24,7 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var healthConnectManager: HealthConnectManager
+    private lateinit var fatSecretClient: FatSecretClient
     private lateinit var store: LocalStore
     private lateinit var exporter: ReportImageExporter
 
@@ -37,12 +40,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var totalCaloriesText: TextView
     private lateinit var exercisesText: TextView
     private lateinit var nutritionText: TextView
+    private lateinit var fatSecretStatusText: TextView
     private lateinit var finalBurnText: TextView
     private lateinit var finalFoodText: TextView
     private lateinit var finalProteinText: TextView
     private lateinit var finalSodiumText: TextView
     private lateinit var deficitText: TextView
 
+    private lateinit var consumerKeyInput: EditText
+    private lateinit var consumerSecretInput: EditText
+    private lateinit var verifierInput: EditText
     private lateinit var foodInput: EditText
     private lateinit var proteinInput: EditText
     private lateinit var sodiumInput: EditText
@@ -62,6 +69,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         healthConnectManager = HealthConnectManager(this)
+        fatSecretClient = FatSecretClient(this)
         store = LocalStore(this)
         exporter = ReportImageExporter(this)
         buildUi()
@@ -79,7 +87,7 @@ class MainActivity : ComponentActivity() {
         setContentView(scroll)
 
         root.addView(title("Daily Cut Report"))
-        root.addView(body("Offline Android MVP. Health and nutrition data are read from Health Connect; manual food entries remain as overrides."))
+        root.addView(body("Health data comes from Health Connect. Food can come from FatSecret API, Health Connect nutrition, or manual override."))
         root.addView(spacer(16))
 
         val dateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -117,13 +125,28 @@ class MainActivity : ComponentActivity() {
         root.addView(exercisesText)
         root.addView(nutritionText)
 
+        root.addView(section("FatSecret API import"))
+        root.addView(body("One-time setup: paste your OAuth 1.0 Consumer Key and Secret, save them locally, authorize in browser, then enter the verifier code. After that, import the selected date's diary."))
+        fatSecretStatusText = metric("FatSecret", "—")
+        consumerKeyInput = input("Consumer Key", text = true)
+        consumerSecretInput = input("Consumer Secret", text = true)
+        verifierInput = input("Verifier code from FatSecret", text = true)
+        root.addView(fatSecretStatusText)
+        root.addView(label("Consumer Key")); root.addView(consumerKeyInput)
+        root.addView(label("Consumer Secret")); root.addView(consumerSecretInput)
+        root.addView(button("Save FatSecret credentials locally") { saveFatSecretCredentials() })
+        root.addView(button("Start FatSecret authorization") { startFatSecretAuthorization() })
+        root.addView(label("Verifier code")); root.addView(verifierInput)
+        root.addView(button("Complete FatSecret authorization") { completeFatSecretAuthorization() })
+        root.addView(button("Import FatSecret diary for selected date") { importFatSecretDiary() })
+
         root.addView(section("Manual food finalizer"))
-        root.addView(body("Leave food/protein/sodium blank to use Health Connect nutrition, e.g. data written there by FatSecret. Enter values here to override imported nutrition."))
+        root.addView(body("Manual food/protein/sodium override imported FatSecret or Health Connect nutrition. Leave them blank to use imported values."))
         foodInput = input("Food calories, kcal")
         proteinInput = input("Protein, g")
         sodiumInput = input("Sodium, mg")
         manualBurnInput = input("Optional final burn override, kcal")
-        notesInput = input("Notes", multiline = true)
+        notesInput = input("Notes", multiline = true, text = true)
         root.addView(label("Food calories")); root.addView(foodInput)
         root.addView(label("Protein")); root.addView(proteinInput)
         root.addView(label("Sodium")); root.addView(sodiumInput)
@@ -142,7 +165,7 @@ class MainActivity : ComponentActivity() {
         root.addView(finalProteinText)
         root.addView(finalSodiumText)
         root.addView(deficitText)
-        root.addView(body("Burn rule: manual override → Health Connect total calories → active calories only. Nutrition rule: manual entries → Health Connect nutrition → missing."))
+        root.addView(body("Burn rule: manual override → Health Connect total calories → active calories only. Nutrition rule: manual entries → FatSecret import → Health Connect nutrition → missing."))
 
         root.addView(section("Export"))
         root.addView(button("Save PNG to Pictures/DailyCutReport") { exportImage(share = false) })
@@ -181,6 +204,70 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "Health Connect data refreshed.", Toast.LENGTH_SHORT).show()
     }
 
+    private fun saveFatSecretCredentials() {
+        val key = consumerKeyInput.text.toString().trim()
+        val secret = consumerSecretInput.text.toString().trim()
+        if (key.isBlank() || secret.isBlank()) {
+            Toast.makeText(this, "Enter both Consumer Key and Consumer Secret.", Toast.LENGTH_LONG).show()
+            return
+        }
+        fatSecretClient.saveConsumerCredentials(key, secret)
+        consumerSecretInput.setText("")
+        updateDisplay()
+        Toast.makeText(this, "FatSecret credentials saved locally.", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun startFatSecretAuthorization() {
+        lifecycleScope.launch {
+            val result = runCatching { fatSecretClient.startAuthorization() }
+            result.onSuccess { url ->
+                updateDisplay()
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            }.onFailure {
+                Toast.makeText(this@MainActivity, "FatSecret auth failed: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun completeFatSecretAuthorization() {
+        val verifier = verifierInput.text.toString().trim()
+        if (verifier.isBlank()) {
+            Toast.makeText(this, "Enter the verifier code shown by FatSecret.", Toast.LENGTH_LONG).show()
+            return
+        }
+        lifecycleScope.launch {
+            val result = runCatching { fatSecretClient.completeAuthorization(verifier) }
+            result.onSuccess {
+                verifierInput.setText("")
+                updateDisplay()
+                Toast.makeText(this@MainActivity, "FatSecret authorized.", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(this@MainActivity, "FatSecret verifier failed: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun importFatSecretDiary() {
+        lifecycleScope.launch {
+            val result = runCatching { fatSecretClient.importFoodDiary(selectedDate) }
+            result.onSuccess { diary ->
+                val existing = currentReport.manual
+                val manual = existing.copy(
+                    foodCalories = diary.calories,
+                    proteinG = diary.proteinG,
+                    sodiumMg = diary.sodiumMg,
+                    notes = mergeNote(existing.notes, "FatSecret API import: ${diary.entries} entries")
+                )
+                currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
+                fillInputs(currentReport.manual)
+                updateDisplay()
+                Toast.makeText(this@MainActivity, "FatSecret imported ${diary.entries} entries.", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(this@MainActivity, "FatSecret import failed: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun saveManualEntries() {
         val manual = ManualEntry(
             foodCalories = foodInput.toDoubleValue(),
@@ -215,7 +302,8 @@ class MainActivity : ComponentActivity() {
 
     private fun updateDisplay() {
         val h = currentReport.health
-        statusText.text = "${h.healthConnectStatus}. Runtime network access: not requested."
+        statusText.text = "${h.healthConnectStatus}. Network access enabled only for FatSecret API."
+        fatSecretStatusText.text = "FatSecret: ${fatSecretClient.status()}"
         stepsText.text = "Steps: ${numberFmt.format(h.steps)}"
         distanceText.text = "Distance: ${oneFmt.format(h.distanceKm)} km"
         activeCaloriesText.text = "Active calories: ${numberFmt.format(h.activeCalories.roundToInt())} kcal"
@@ -237,6 +325,12 @@ class MainActivity : ComponentActivity() {
                 else -> Color.rgb(80, 80, 80)
             }
         )
+    }
+
+    private fun mergeNote(old: String, addition: String): String = when {
+        old.isBlank() -> addition
+        old.contains(addition) -> old
+        else -> "$old\n$addition"
     }
 
     private fun title(text: String) = TextView(this).apply {
@@ -282,14 +376,13 @@ class MainActivity : ComponentActivity() {
         setPadding(0, dp(8), 0, dp(2))
     }
 
-    private fun input(hint: String, multiline: Boolean = false) = EditText(this).apply {
+    private fun input(hint: String, multiline: Boolean = false, text: Boolean = false) = EditText(this).apply {
         this.hint = hint
         setSingleLine(!multiline)
         minLines = if (multiline) 2 else 1
-        inputType = if (multiline) {
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        } else {
-            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        inputType = when {
+            multiline || text -> InputType.TYPE_CLASS_TEXT or if (multiline) InputType.TYPE_TEXT_FLAG_MULTI_LINE else 0
+            else -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
         setPadding(dp(12), dp(8), dp(12), dp(8))
         setBackgroundColor(Color.WHITE)
