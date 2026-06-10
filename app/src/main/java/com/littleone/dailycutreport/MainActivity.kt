@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
     private var selectedDate: LocalDate = LocalDate.now()
     private var currentReport: DailyReport = DailyReport(selectedDate)
     private var currentTab: Tab = Tab.TODAY
+    private var autoImportSessionDone = false
+    private var autoImportInProgress = false
 
     private lateinit var scroll: ScrollView
     private lateinit var root: LinearLayout
@@ -75,6 +77,52 @@ class MainActivity : ComponentActivity() {
         scroll.addView(root)
         setContentView(scroll)
         loadDate(LocalDate.now())
+    }
+
+    override fun onStart() {
+        super.onStart()
+        autoImportOnOpen()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        autoImportSessionDone = false
+    }
+
+    private fun autoImportOnOpen() {
+        if (autoImportSessionDone || autoImportInProgress) return
+        autoImportSessionDone = true
+        autoImportInProgress = true
+        lifecycleScope.launch {
+            var changed = false
+            var fatSecretImported = false
+
+            val healthSummary = runCatching {
+                if (healthConnectManager.isAvailable() && healthConnectManager.hasAllPermissions()) {
+                    healthConnectManager.readDailySummary(selectedDate)
+                } else null
+            }.getOrNull()
+            if (healthSummary != null) {
+                currentReport = store.mergeHealth(selectedDate, healthSummary)
+                changed = true
+            }
+
+            if (fatSecretClient.hasAccessToken()) {
+                val diary = runCatching { fatSecretClient.importFoodDiary(selectedDate) }.getOrNull()
+                if (diary != null) {
+                    applyFatSecretDiary(diary)
+                    changed = true
+                    fatSecretImported = true
+                }
+            }
+
+            autoImportInProgress = false
+            if (changed) {
+                render()
+                val message = if (fatSecretImported) "Auto import complete." else "Health Connect auto refreshed."
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun render() {
@@ -173,6 +221,7 @@ class MainActivity : ComponentActivity() {
     private fun importCard(): View = card {
         addView(sectionTitle("Daily imports"))
         val h = currentReport.health
+        addView(body("Auto import runs once whenever the app is opened. It does not run in the background."))
         addView(body("Health Connect: ${h.healthConnectStatus}"))
         addView(twoColumnMetrics(
             "Steps" to numberFmt.format(h.steps),
@@ -308,20 +357,24 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val result = runCatching { fatSecretClient.importFoodDiary(selectedDate) }
             result.onSuccess { diary ->
-                val existing = currentReport.manual
-                val manual = existing.copy(
-                    foodCalories = diary.calories,
-                    proteinG = diary.proteinG,
-                    sodiumMg = diary.sodiumMg,
-                    notes = mergeNote(existing.notes, "FatSecret API import: ${diary.entries} entries")
-                )
-                currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
+                applyFatSecretDiary(diary)
                 render()
                 Toast.makeText(this@MainActivity, "FatSecret imported ${diary.entries} entries.", Toast.LENGTH_SHORT).show()
             }.onFailure {
                 Toast.makeText(this@MainActivity, "FatSecret import failed: ${it.message}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun applyFatSecretDiary(diary: FatSecretClient.DiaryImport) {
+        val existing = currentReport.manual
+        val manual = existing.copy(
+            foodCalories = diary.calories,
+            proteinG = diary.proteinG,
+            sodiumMg = diary.sodiumMg,
+            notes = mergeNote(existing.notes, "FatSecret API import: ${diary.entries} entries")
+        )
+        currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
     }
 
     private fun saveManualEntries() {
