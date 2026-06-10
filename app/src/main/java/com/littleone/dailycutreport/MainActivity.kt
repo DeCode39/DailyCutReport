@@ -36,7 +36,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var activeCaloriesText: TextView
     private lateinit var totalCaloriesText: TextView
     private lateinit var exercisesText: TextView
+    private lateinit var nutritionText: TextView
     private lateinit var finalBurnText: TextView
+    private lateinit var finalFoodText: TextView
+    private lateinit var finalProteinText: TextView
+    private lateinit var finalSodiumText: TextView
     private lateinit var deficitText: TextView
 
     private lateinit var foodInput: EditText
@@ -75,7 +79,7 @@ class MainActivity : ComponentActivity() {
         setContentView(scroll)
 
         root.addView(title("Daily Cut Report"))
-        root.addView(body("Offline Android MVP. Health data is read from Health Connect; food data is entered manually."))
+        root.addView(body("Offline Android MVP. Health and nutrition data are read from Health Connect; manual food entries remain as overrides."))
         root.addView(spacer(16))
 
         val dateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -105,13 +109,16 @@ class MainActivity : ComponentActivity() {
         activeCaloriesText = metric("Active calories", "—")
         totalCaloriesText = metric("Total calories", "—")
         exercisesText = metric("Exercise sessions", "—")
+        nutritionText = metric("Nutrition records", "—")
         root.addView(stepsText)
         root.addView(distanceText)
         root.addView(activeCaloriesText)
         root.addView(totalCaloriesText)
         root.addView(exercisesText)
+        root.addView(nutritionText)
 
         root.addView(section("Manual food finalizer"))
+        root.addView(body("Leave food/protein/sodium blank to use Health Connect nutrition, e.g. data written there by FatSecret. Enter values here to override imported nutrition."))
         foodInput = input("Food calories, kcal")
         proteinInput = input("Protein, g")
         sodiumInput = input("Sodium, mg")
@@ -126,10 +133,16 @@ class MainActivity : ComponentActivity() {
 
         root.addView(section("Final daily result"))
         finalBurnText = metric("Final burn", "—")
+        finalFoodText = metric("Final food", "—")
+        finalProteinText = metric("Final protein", "—")
+        finalSodiumText = metric("Final sodium", "—")
         deficitText = metric("Estimated deficit", "—")
         root.addView(finalBurnText)
+        root.addView(finalFoodText)
+        root.addView(finalProteinText)
+        root.addView(finalSodiumText)
         root.addView(deficitText)
-        root.addView(body("Rule: final burn uses your manual override if entered; otherwise Health Connect total calories; otherwise active calories only."))
+        root.addView(body("Burn rule: manual override → Health Connect total calories → active calories only. Nutrition rule: manual entries → Health Connect nutrition → missing."))
 
         root.addView(section("Export"))
         root.addView(button("Save PNG to Pictures/DailyCutReport") { exportImage(share = false) })
@@ -208,7 +221,11 @@ class MainActivity : ComponentActivity() {
         activeCaloriesText.text = "Active calories: ${numberFmt.format(h.activeCalories.roundToInt())} kcal"
         totalCaloriesText.text = "Total calories: ${numberFmt.format(h.totalCalories.roundToInt())} kcal"
         exercisesText.text = "Exercise sessions: ${h.exerciseSessions} (${h.exerciseMinutes} min)"
+        nutritionText.text = "Nutrition records: ${h.nutritionRecords} | ${numberFmt.format(h.nutritionCalories.roundToInt())} kcal, ${numberFmt.format(h.nutritionProteinG.roundToInt())} g protein, ${numberFmt.format(h.nutritionSodiumMg.roundToInt())} mg sodium"
         finalBurnText.text = "Final burn: ${numberFmt.format(currentReport.finalBurnCalories.roundToInt())} kcal (${currentReport.burnSource})"
+        finalFoodText.text = "Final food: ${numberFmt.format(currentReport.finalFoodCalories.roundToInt())} kcal (${currentReport.nutritionSource})"
+        finalProteinText.text = "Final protein: ${numberFmt.format(currentReport.finalProteinG.roundToInt())} g"
+        finalSodiumText.text = "Final sodium: ${numberFmt.format(currentReport.finalSodiumMg.roundToInt())} mg"
 
         val deficit = currentReport.deficitCalories
         val sign = if (deficit >= 0) "−" else "+"
