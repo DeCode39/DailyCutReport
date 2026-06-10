@@ -6,6 +6,7 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.request.AggregateRequest
@@ -14,7 +15,6 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneId
-import kotlin.reflect.KClass
 
 class HealthConnectManager(private val context: Context) {
     companion object {
@@ -23,7 +23,8 @@ class HealthConnectManager(private val context: Context) {
             HealthPermission.getReadPermission(DistanceRecord::class),
             HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
             HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
-            HealthPermission.getReadPermission(ExerciseSessionRecord::class)
+            HealthPermission.getReadPermission(ExerciseSessionRecord::class),
+            HealthPermission.getReadPermission(NutritionRecord::class)
         )
     }
 
@@ -80,9 +81,29 @@ class HealthConnectManager(private val context: Context) {
             ).records
         }.getOrDefault(emptyList())
 
+        val nutritionRecords = runCatching {
+            hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = NutritionRecord::class,
+                    timeRangeFilter = timeRange,
+                    ascendingOrder = false,
+                    pageSize = 200
+                )
+            ).records
+        }.getOrDefault(emptyList())
+
         val exerciseMinutes = sessions.sumOf { session ->
             val minutes = Duration.between(session.startTime, session.endTime).toMinutes()
             minutes.coerceAtLeast(0)
+        }
+
+        val nutritionCalories = nutritionRecords.sumOf { it.energy?.inKilocalories ?: 0.0 }
+        val nutritionProteinG = nutritionRecords.sumOf { it.protein?.inGrams ?: 0.0 }
+        val nutritionSodiumMg = nutritionRecords.sumOf { it.sodium?.inMilligrams ?: 0.0 }
+        val nutritionStatus = if (nutritionRecords.isEmpty()) {
+            "No Health Connect nutrition records found"
+        } else {
+            "Loaded from Health Connect, including ${nutritionRecords.size} nutrition record(s)"
         }
 
         return HealthSummary(
@@ -92,7 +113,11 @@ class HealthConnectManager(private val context: Context) {
             totalCalories = aggregate[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0,
             exerciseSessions = sessions.size,
             exerciseMinutes = exerciseMinutes,
-            healthConnectStatus = "Loaded from Health Connect"
+            nutritionCalories = nutritionCalories,
+            nutritionProteinG = nutritionProteinG,
+            nutritionSodiumMg = nutritionSodiumMg,
+            nutritionRecords = nutritionRecords.size,
+            healthConnectStatus = nutritionStatus
         )
     }
 }
