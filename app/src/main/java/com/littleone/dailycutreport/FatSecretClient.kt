@@ -142,21 +142,31 @@ class FatSecretClient(context: Context) {
     }
 
     private fun httpRequest(method: String, baseUrl: String, params: Map<String, String>): String {
-        val query = params.entries
+        val encodedParams = params.entries
             .sortedWith(compareBy({ it.key }, { it.value }))
             .joinToString("&") { "${percent(it.key)}=${percent(it.value)}" }
-        val url = URL("$baseUrl?$query")
+        val isPost = method.equals("POST", ignoreCase = true)
+        val url = URL(if (isPost) baseUrl else "$baseUrl?$encodedParams")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method.uppercase()
             connectTimeout = 20000
             readTimeout = 20000
             setRequestProperty("Accept", "application/json, text/plain, */*")
-            if (requestMethod == "POST") doOutput = true
+            if (isPost) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            }
         }
         try {
-            val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
-            val body = BufferedReader(InputStreamReader(stream)).use { it.readText() }
-            if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode}: $body")
+            if (isPost) {
+                conn.outputStream.use { out ->
+                    out.write(encodedParams.toByteArray(Charsets.UTF_8))
+                }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = if (stream != null) BufferedReader(InputStreamReader(stream)).use { it.readText() } else ""
+            if (code !in 200..299) error("HTTP $code: $body")
             return body
         } finally {
             conn.disconnect()
