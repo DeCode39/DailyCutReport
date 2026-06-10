@@ -102,10 +102,10 @@ class ReportImageExporter(private val context: Context) {
         metric("Distance", one.format(report.health.distanceKm), "km", 570f, y)
         y += 138f
         metric("Final burn", whole.format(report.finalBurnCalories.roundToInt()), "kcal", 72f, y)
-        metric("Food", whole.format(report.manual.foodCalories.roundToInt()), "kcal", 570f, y)
+        metric("Food", whole.format(report.finalFoodCalories.roundToInt()), "kcal", 570f, y)
         y += 138f
-        metric("Protein", whole.format(report.manual.proteinG.roundToInt()), "g", 72f, y)
-        metric("Sodium", whole.format(report.manual.sodiumMg.roundToInt()), "mg", 570f, y)
+        metric("Protein", whole.format(report.finalProteinG.roundToInt()), "g", 72f, y)
+        metric("Sodium", whole.format(report.finalSodiumMg.roundToInt()), "mg", 570f, y)
         y += 138f
         metric("Active burn", whole.format(report.health.activeCalories.roundToInt()), "kcal", 72f, y)
         metric("Exercises", "${report.health.exerciseSessions}", "${report.health.exerciseMinutes} min", 570f, y)
@@ -119,8 +119,10 @@ class ReportImageExporter(private val context: Context) {
         text("$deficitSign${whole.format(kotlin.math.abs(report.deficitCalories).roundToInt())} kcal", 72f, y, 68f, dark, true)
         y += 54f
         text("Burn source: ${report.burnSource}", 72f, y, 26f, muted)
-        y += 54f
-        text("Health: ${report.health.healthConnectStatus}", 72f, y, 24f, muted)
+        y += 42f
+        text("Nutrition source: ${report.nutritionSource}", 72f, y, 26f, muted)
+        y += 42f
+        text("Health: ${report.health.healthConnectStatus.take(64)}", 72f, y, 24f, muted)
 
         if (report.manual.notes.isNotBlank()) {
             y += 72f
