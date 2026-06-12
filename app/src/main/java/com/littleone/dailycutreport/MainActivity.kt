@@ -1,5 +1,7 @@
-package com.littleone.dailycutreport
+﻿package com.littleone.dailycutreport
 
+import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -15,6 +17,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -73,6 +76,22 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { refreshFromHealthConnect() }
     }
 
+    private val barcodeScannerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+
+        val barcode = result.data
+            ?.getStringExtra(BarcodeScannerActivity.RESULT_BARCODE)
+            .orEmpty()
+
+        if (barcode.isBlank()) return@registerForActivityResult
+
+        currentTab = Tab.FOODS
+        render()
+        barcodeInput?.setText(barcode)
+        loadProductFromBarcode()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         healthConnectManager = HealthConnectManager(this)
@@ -195,7 +214,7 @@ class MainActivity : ComponentActivity() {
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(smallButton("◀") { loadDate(selectedDate.minusDays(1)) }, weight = 0.7f)
+            addView(smallButton("â—€") { loadDate(selectedDate.minusDays(1)) }, weight = 0.7f)
             addView(TextView(context).apply {
                 text = selectedDate.format(dateFmt)
                 textSize = 16f
@@ -204,7 +223,7 @@ class MainActivity : ComponentActivity() {
                 setTextColor(Color.rgb(35, 35, 35))
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2.6f))
             addView(smallButton("Today") { loadDate(LocalDate.now()) }, weight = 1f)
-            addView(smallButton("▶") { loadDate(selectedDate.plusDays(1)) }, weight = 0.7f)
+            addView(smallButton("â–¶") { loadDate(selectedDate.plusDays(1)) }, weight = 0.7f)
         })
     }
 
@@ -216,7 +235,7 @@ class MainActivity : ComponentActivity() {
             deficit <= -200 -> "Surplus day"
             else -> "Maintenance-ish"
         }
-        addView(bigResult(verdict, if (deficit >= 0) "−${numberFmt.format(deficit.roundToInt())} kcal" else "+${numberFmt.format(abs(deficit).roundToInt())} kcal"))
+        addView(bigResult(verdict, if (deficit >= 0) "âˆ’${numberFmt.format(deficit.roundToInt())} kcal" else "+${numberFmt.format(abs(deficit).roundToInt())} kcal"))
         addView(twoColumnMetrics(
             "Burn" to "${numberFmt.format(currentReport.finalBurnCalories.roundToInt())} kcal",
             "Food" to "${numberFmt.format(currentReport.finalFoodCalories.roundToInt())} kcal",
@@ -266,6 +285,9 @@ class MainActivity : ComponentActivity() {
         addView(sectionTitle("Add product / barcode"))
         addView(body("Stable rollback: manual barcode/product entry. Camera/OCR will be reintroduced later in smaller steps."))
         barcodeInput = input("Barcode / product code", text = true).also { addView(label("Barcode")); addView(it) }
+        addView(secondaryButton("Scan barcode with camera") {
+            barcodeScannerLauncher.launch(Intent(this@MainActivity, BarcodeScannerActivity::class.java))
+        })
         quantityInput = input("Quantity").also { it.setText("1"); addView(label("Quantity")); addView(it) }
         addView(secondaryButton("Load saved product") { loadProductFromBarcode() })
 
@@ -312,7 +334,7 @@ class MainActivity : ComponentActivity() {
             addView(body("No offline food entries for this date yet."))
         } else {
             currentLogs.forEach { log ->
-                addView(body("${log.quantity} × ${log.productName} ${if (log.brand.isBlank()) "" else "(${log.brand})"}"))
+                addView(body("${log.quantity} Ã— ${log.productName} ${if (log.brand.isBlank()) "" else "(${log.brand})"}"))
                 addView(body("${numberFmt.format(log.calories.roundToInt())} kcal | ${numberFmt.format(log.proteinG.roundToInt())} g protein | ${numberFmt.format(log.sodiumMg.roundToInt())} mg sodium"))
                 addView(secondaryButton("Delete this entry") { deleteFoodLog(log.id) })
                 addView(spacer(8))
@@ -645,3 +667,5 @@ class MainActivity : ComponentActivity() {
     private fun EditText.toDoubleValue(): Double = text.toString().trim().replace(',', '.').toDoubleOrNull() ?: 0.0
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 }
+
+
