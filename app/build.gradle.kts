@@ -52,8 +52,11 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
     implementation("androidx.camera:camera-view:$cameraXVersion")
     implementation("androidx.concurrent:concurrent-futures:1.2.0")
+    implementation("com.google.guava:guava:33.3.1-android")
+    implementation("com.google.guava:listenablefuture:1.0")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 }
+
 
 
 
