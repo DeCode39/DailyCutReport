@@ -19,6 +19,19 @@ data class HealthSummary(
     val healthConnectStatus: String = "Not loaded"
 )
 
+data class LocalNutritionSummary(
+    val calories: Double = 0.0,
+    val proteinG: Double = 0.0,
+    val sodiumMg: Double = 0.0,
+    val carbsG: Double = 0.0,
+    val fatG: Double = 0.0,
+    val sugarG: Double = 0.0,
+    val fiberG: Double = 0.0,
+    val saturatedFatG: Double = 0.0,
+    val entries: Int = 0,
+    val extras: Map<String, String> = emptyMap()
+)
+
 data class ManualEntry(
     val foodCalories: Double = 0.0,
     val proteinG: Double = 0.0,
@@ -30,6 +43,7 @@ data class ManualEntry(
 data class DailyReport(
     val date: LocalDate,
     val health: HealthSummary = HealthSummary(),
+    val localNutrition: LocalNutritionSummary = LocalNutritionSummary(),
     val manual: ManualEntry = ManualEntry(),
     val savedAtEpochMs: Long = System.currentTimeMillis()
 ) {
@@ -43,6 +57,7 @@ data class DailyReport(
     val finalFoodCalories: Double
         get() = when {
             manual.foodCalories > 0.0 -> manual.foodCalories
+            localNutrition.calories > 0.0 -> localNutrition.calories
             health.nutritionCalories > 0.0 -> health.nutritionCalories
             else -> 0.0
         }
@@ -50,6 +65,7 @@ data class DailyReport(
     val finalProteinG: Double
         get() = when {
             manual.proteinG > 0.0 -> manual.proteinG
+            localNutrition.proteinG > 0.0 -> localNutrition.proteinG
             health.nutritionProteinG > 0.0 -> health.nutritionProteinG
             else -> 0.0
         }
@@ -57,13 +73,15 @@ data class DailyReport(
     val finalSodiumMg: Double
         get() = when {
             manual.sodiumMg > 0.0 -> manual.sodiumMg
+            localNutrition.sodiumMg > 0.0 -> localNutrition.sodiumMg
             health.nutritionSodiumMg > 0.0 -> health.nutritionSodiumMg
             else -> 0.0
         }
 
     val nutritionSource: String
         get() = when {
-            manual.foodCalories > 0.0 || manual.proteinG > 0.0 || manual.sodiumMg > 0.0 -> "Manual food entries"
+            manual.foodCalories > 0.0 || manual.proteinG > 0.0 || manual.sodiumMg > 0.0 -> "Manual override"
+            localNutrition.entries > 0 -> "Offline barcode database"
             health.nutritionRecords > 0 -> "Health Connect nutrition"
             else -> "Missing"
         }
@@ -92,6 +110,16 @@ data class DailyReport(
         put("nutritionSodiumMg", health.nutritionSodiumMg)
         put("nutritionRecords", health.nutritionRecords)
         put("healthConnectStatus", health.healthConnectStatus)
+        put("localCalories", localNutrition.calories)
+        put("localProteinG", localNutrition.proteinG)
+        put("localSodiumMg", localNutrition.sodiumMg)
+        put("localCarbsG", localNutrition.carbsG)
+        put("localFatG", localNutrition.fatG)
+        put("localSugarG", localNutrition.sugarG)
+        put("localFiberG", localNutrition.fiberG)
+        put("localSaturatedFatG", localNutrition.saturatedFatG)
+        put("localEntries", localNutrition.entries)
+        put("localExtras", org.json.JSONObject(localNutrition.extras))
         put("foodCalories", manual.foodCalories)
         put("proteinG", manual.proteinG)
         put("sodiumMg", manual.sodiumMg)
@@ -103,6 +131,8 @@ data class DailyReport(
     companion object {
         fun fromJson(json: org.json.JSONObject): DailyReport {
             val manualBurn = if (json.isNull("manualBurnCalories")) null else json.optDouble("manualBurnCalories")
+            val extrasJson = json.optJSONObject("localExtras")
+            val extras = if (extrasJson == null) emptyMap() else extrasJson.keys().asSequence().associateWith { extrasJson.optString(it) }
             return DailyReport(
                 date = LocalDate.parse(json.getString("date"), DATE_FORMAT),
                 health = HealthSummary(
@@ -117,6 +147,18 @@ data class DailyReport(
                     nutritionSodiumMg = json.optDouble("nutritionSodiumMg", 0.0),
                     nutritionRecords = json.optInt("nutritionRecords", 0),
                     healthConnectStatus = json.optString("healthConnectStatus", "Loaded from local storage")
+                ),
+                localNutrition = LocalNutritionSummary(
+                    calories = json.optDouble("localCalories", 0.0),
+                    proteinG = json.optDouble("localProteinG", 0.0),
+                    sodiumMg = json.optDouble("localSodiumMg", 0.0),
+                    carbsG = json.optDouble("localCarbsG", 0.0),
+                    fatG = json.optDouble("localFatG", 0.0),
+                    sugarG = json.optDouble("localSugarG", 0.0),
+                    fiberG = json.optDouble("localFiberG", 0.0),
+                    saturatedFatG = json.optDouble("localSaturatedFatG", 0.0),
+                    entries = json.optInt("localEntries", 0),
+                    extras = extras
                 ),
                 manual = ManualEntry(
                     foodCalories = json.optDouble("foodCalories", 0.0),
