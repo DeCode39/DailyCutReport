@@ -46,3 +46,7 @@ dependencies {
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
 }
+
+apply(from = "camera" + "x.gradle.kts")
+apply(from = "ml" + "kit.gradle.kts")
+apply(from = "con" + "current.gradle.kts")
