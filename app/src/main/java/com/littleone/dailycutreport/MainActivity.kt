@@ -1,5 +1,7 @@
 package com.littleone.dailycutreport
 
+import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -15,6 +17,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -71,6 +74,23 @@ class MainActivity : ComponentActivity() {
         PermissionController.createRequestPermissionResultContract()
     ) { _ ->
         lifecycleScope.launch { refreshFromHealthConnect() }
+    }
+
+    private val barcodeScannerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        val barcode = result.data?.getStringExtra(ScannerActivity.RESULT_BARCODE).orEmpty()
+        if (barcode.isBlank()) return@registerForActivityResult
+        currentTab = Tab.FOODS
+        render()
+        barcodeInput?.setText(barcode)
+        loadProductFromBarcode()
+    }
+
+    private val ocrScannerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        currentTab = Tab.FOODS
+        render()
+        applyOcrResult(result.data)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -265,14 +285,16 @@ class MainActivity : ComponentActivity() {
 
     private fun foodEntryCard(): View = card {
         addView(sectionTitle("Add product / barcode"))
-        addView(body("Manual barcode entry for now. Camera scan and OCR can be layered on this Room database later."))
+        addView(body("Scan a barcode to load a saved product. For new products, use OCR to prefill nutrition, verify once, then save locally."))
         barcodeInput = input("Barcode / product code", text = true).also { addView(label("Barcode")); addView(it) }
         quantityInput = input("Quantity", text = false).also { it.setText("1"); addView(label("Quantity")); addView(it) }
+        addView(primaryButton("Scan barcode with camera") { openBarcodeScanner() })
         addView(secondaryButton("Load saved product") { loadProductFromBarcode() })
 
         productNameInput = input("Product name", text = true).also { addView(label("Product name")); addView(it) }
         brandInput = input("Brand / store", text = true).also { addView(label("Brand / store")); addView(it) }
         servingInput = input("Serving label, e.g. 1 pack or 100 g", text = true).also { addView(label("Serving label")); addView(it) }
+        addView(secondaryButton("OCR nutrition label") { openOcrScanner() })
         productCaloriesInput = input("Calories per serving").also { addView(label("Calories")); addView(it) }
         productProteinInput = input("Protein g per serving").also { addView(label("Protein")); addView(it) }
         productSodiumInput = input("Sodium mg per serving").also { addView(label("Sodium")); addView(it) }
@@ -281,7 +303,7 @@ class MainActivity : ComponentActivity() {
         productSugarInput = input("Sugar g per serving").also { addView(label("Sugar")); addView(it) }
         productFiberInput = input("Fiber g per serving").also { addView(label("Fiber")); addView(it) }
         productSatFatInput = input("Saturated fat g per serving").also { addView(label("Saturated fat")); addView(it) }
-        productExtrasInput = input("Extra nutrients: one per line, e.g. Potassium=240 mg", multiline = true, text = true).also { addView(label("Optional extra fields")); addView(it) }
+        productExtrasInput = input("Extra nutrients: one per line, e.g. Potassium=240 mg", multiline = true, text = true).also { addView(label("Optional extra fields / OCR raw text")); addView(it) }
 
         addView(primaryButton("Save product") { saveProductOnly() })
         addView(primaryButton("Save product and add to today") { saveProductAndAddToToday() })
@@ -327,6 +349,7 @@ class MainActivity : ComponentActivity() {
         addView(sectionTitle("Settings status"))
         addView(body("Health Connect: ${currentReport.health.healthConnectStatus}"))
         addView(body("Offline database: ${currentReport.localNutrition.entries} food logs today"))
+        addView(body("Camera scanning: barcode + OCR prefill, all on device."))
         addView(body("FatSecret is phased out. Current food source is the local Room database."))
     }
 
@@ -342,7 +365,7 @@ class MainActivity : ComponentActivity() {
     private fun legacyFatSecretCard(): View = card {
         addView(sectionTitle("Legacy FatSecret"))
         addView(body("FatSecret import is no longer part of the active workflow. Existing app-local FatSecret credentials are not used by this version."))
-        addView(body("Next cleanup can remove FatSecretClient.kt and the internet permission entirely after this offline workflow is verified."))
+        addView(body("Next cleanup can remove FatSecretClient.kt after this offline workflow is verified."))
     }
 
     private fun loadDate(date: LocalDate) {
@@ -391,6 +414,36 @@ class MainActivity : ComponentActivity() {
         )
         currentReport = store.mergeLocalNutrition(selectedDate, summary, currentReport.health)
         if (renderAfter) render()
+    }
+
+    private fun openBarcodeScanner() {
+        barcodeScannerLauncher.launch(Intent(this, ScannerActivity::class.java).putExtra(ScannerActivity.EXTRA_MODE, ScannerActivity.MODE_BARCODE))
+    }
+
+    private fun openOcrScanner() {
+        ocrScannerLauncher.launch(Intent(this, ScannerActivity::class.java).putExtra(ScannerActivity.EXTRA_MODE, ScannerActivity.MODE_OCR))
+    }
+
+    private fun applyOcrResult(data: Intent?) {
+        if (data == null) return
+        setIfPresent(productCaloriesInput, data, ScannerActivity.RESULT_CALORIES)
+        setIfPresent(productProteinInput, data, ScannerActivity.RESULT_PROTEIN)
+        setIfPresent(productSodiumInput, data, ScannerActivity.RESULT_SODIUM)
+        setIfPresent(productCarbsInput, data, ScannerActivity.RESULT_CARBS)
+        setIfPresent(productFatInput, data, ScannerActivity.RESULT_FAT)
+        setIfPresent(productSugarInput, data, ScannerActivity.RESULT_SUGAR)
+        setIfPresent(productFiberInput, data, ScannerActivity.RESULT_FIBER)
+        setIfPresent(productSatFatInput, data, ScannerActivity.RESULT_SAT_FAT)
+        val raw = data.getStringExtra(ScannerActivity.RESULT_OCR_RAW).orEmpty()
+        if (raw.isNotBlank()) {
+            val existing = productExtrasInput?.text?.toString().orEmpty()
+            productExtrasInput?.setText(listOf(existing, "OCR raw text:", raw).filter { it.isNotBlank() }.joinToString("\n"))
+        }
+        Toast.makeText(this, "OCR prefilled what it could. Please verify before saving.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun setIfPresent(target: EditText?, data: Intent, key: String) {
+        if (data.hasExtra(key)) target?.setText(numberFmt.format(data.getDoubleExtra(key, 0.0).roundToInt()))
     }
 
     private fun loadProductFromBarcode() {
@@ -467,7 +520,7 @@ class MainActivity : ComponentActivity() {
         val raw = productExtrasInput?.text?.toString().orEmpty()
         return raw.lineSequence().mapNotNull { line ->
             val trimmed = line.trim()
-            if (trimmed.isBlank()) return@mapNotNull null
+            if (trimmed.isBlank() || trimmed.startsWith("OCR raw text", ignoreCase = true)) return@mapNotNull null
             val split = trimmed.split("=", limit = 2)
             if (split.size != 2) return@mapNotNull null
             val name = split[0].trim()
@@ -663,6 +716,6 @@ class MainActivity : ComponentActivity() {
         if (stroke != null) setStroke(dp(1), stroke)
     }
 
-    private fun EditText.toDoubleValue(): Double = text.toString().trim().toDoubleOrNull() ?: 0.0
+    private fun EditText.toDoubleValue(): Double = text.toString().trim().replace(',', '.').toDoubleOrNull() ?: 0.0
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 }
