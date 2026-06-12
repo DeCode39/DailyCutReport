@@ -1,10 +1,8 @@
 package com.littleone.dailycutreport
 
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -27,18 +25,19 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
-    private enum class Tab { TODAY, SETTINGS }
+    private enum class Tab { TODAY, FOODS, SETTINGS }
 
     private lateinit var healthConnectManager: HealthConnectManager
-    private lateinit var fatSecretClient: FatSecretClient
     private lateinit var store: LocalStore
     private lateinit var exporter: ReportImageExporter
+    private lateinit var nutritionDao: NutritionDao
 
     private var selectedDate: LocalDate = LocalDate.now()
     private var currentReport: DailyReport = DailyReport(selectedDate)
     private var currentTab: Tab = Tab.TODAY
     private var autoImportSessionDone = false
     private var autoImportInProgress = false
+    private var currentLogs: List<DailyFoodLogEntity> = emptyList()
 
     private lateinit var scroll: ScrollView
     private lateinit var root: LinearLayout
@@ -48,9 +47,21 @@ class MainActivity : ComponentActivity() {
     private var sodiumInput: EditText? = null
     private var manualBurnInput: EditText? = null
     private var notesInput: EditText? = null
-    private var consumerKeyInput: EditText? = null
-    private var consumerSecretInput: EditText? = null
-    private var verifierInput: EditText? = null
+
+    private var barcodeInput: EditText? = null
+    private var quantityInput: EditText? = null
+    private var productNameInput: EditText? = null
+    private var brandInput: EditText? = null
+    private var servingInput: EditText? = null
+    private var productCaloriesInput: EditText? = null
+    private var productProteinInput: EditText? = null
+    private var productSodiumInput: EditText? = null
+    private var productCarbsInput: EditText? = null
+    private var productFatInput: EditText? = null
+    private var productSugarInput: EditText? = null
+    private var productFiberInput: EditText? = null
+    private var productSatFatInput: EditText? = null
+    private var productExtrasInput: EditText? = null
 
     private val numberFmt = DecimalFormat("#,##0")
     private val oneFmt = DecimalFormat("#,##0.0")
@@ -65,9 +76,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         healthConnectManager = HealthConnectManager(this)
-        fatSecretClient = FatSecretClient(this)
         store = LocalStore(this)
         exporter = ReportImageExporter(this)
+        nutritionDao = NutritionDatabase.get(this).nutritionDao()
         scroll = ScrollView(this)
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -95,8 +106,6 @@ class MainActivity : ComponentActivity() {
         autoImportInProgress = true
         lifecycleScope.launch {
             var changed = false
-            var fatSecretImported = false
-
             val healthSummary = runCatching {
                 if (healthConnectManager.isAvailable() && healthConnectManager.hasAllPermissions()) {
                     healthConnectManager.readDailySummary(selectedDate)
@@ -106,21 +115,12 @@ class MainActivity : ComponentActivity() {
                 currentReport = store.mergeHealth(selectedDate, healthSummary)
                 changed = true
             }
-
-            if (fatSecretClient.hasAccessToken()) {
-                val diary = runCatching { fatSecretClient.importFoodDiary(selectedDate) }.getOrNull()
-                if (diary != null) {
-                    applyFatSecretDiary(diary)
-                    changed = true
-                    fatSecretImported = true
-                }
-            }
-
+            refreshLocalNutrition(renderAfter = false)
+            changed = true
             autoImportInProgress = false
             if (changed) {
                 render()
-                val message = if (fatSecretImported) "Auto import complete." else "Health Connect auto refreshed."
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Offline data refreshed.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
         renderHeader()
         when (currentTab) {
             Tab.TODAY -> renderTodayTab()
+            Tab.FOODS -> renderFoodsTab()
             Tab.SETTINGS -> renderSettingsTab()
         }
     }
@@ -153,7 +154,7 @@ class MainActivity : ComponentActivity() {
             setTextColor(Color.rgb(22, 28, 32))
         })
         titleBox.addView(TextView(this).apply {
-            text = "Fitness + FatSecret daily image exporter"
+            text = "Offline nutrition + daily image exporter"
             textSize = 13f
             setTextColor(Color.rgb(92, 99, 105))
         })
@@ -165,6 +166,7 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(4), 0, dp(14))
         }
         tabs.addView(tabButton("Today", currentTab == Tab.TODAY) { currentTab = Tab.TODAY; render() }, weight = 1f)
+        tabs.addView(tabButton("Foods", currentTab == Tab.FOODS) { currentTab = Tab.FOODS; render() }, weight = 1f)
         tabs.addView(tabButton("Settings", currentTab == Tab.SETTINGS) { currentTab = Tab.SETTINGS; render() }, weight = 1f)
         root.addView(tabs)
     }
@@ -177,10 +179,16 @@ class MainActivity : ComponentActivity() {
         root.addView(exportCard())
     }
 
+    private fun renderFoodsTab() {
+        root.addView(foodEntryCard())
+        root.addView(foodTotalsCard())
+        root.addView(foodLogCard())
+    }
+
     private fun renderSettingsTab() {
         root.addView(settingsStatusCard())
         root.addView(healthConnectSettingsCard())
-        root.addView(fatSecretSettingsCard())
+        root.addView(legacyFatSecretCard())
     }
 
     private fun dateCard(): View = card {
@@ -221,7 +229,7 @@ class MainActivity : ComponentActivity() {
     private fun importCard(): View = card {
         addView(sectionTitle("Daily imports"))
         val h = currentReport.health
-        addView(body("Auto import runs once whenever the app is opened. It does not run in the background."))
+        addView(body("Auto refresh runs once whenever the app is opened. It does not run in the background."))
         addView(body("Health Connect: ${h.healthConnectStatus}"))
         addView(twoColumnMetrics(
             "Steps" to numberFmt.format(h.steps),
@@ -230,15 +238,15 @@ class MainActivity : ComponentActivity() {
             "Total" to "${numberFmt.format(h.totalCalories.roundToInt())} kcal"
         ))
         addView(body("Exercises: ${h.exerciseSessions} sessions, ${h.exerciseMinutes} min"))
-        addView(body("Health nutrition records: ${h.nutritionRecords}"))
+        addView(body("Offline food logs: ${currentReport.localNutrition.entries}"))
         addView(spacer(8))
         addView(primaryButton("Refresh Health Connect") { lifecycleScope.launch { refreshFromHealthConnect() } })
-        addView(primaryButton("Import FatSecret diary") { importFatSecretDiary() })
+        addView(primaryButton("Refresh offline food totals") { lifecycleScope.launch { refreshLocalNutrition(renderAfter = true) } })
     }
 
     private fun manualCard(): View = card {
         addView(sectionTitle("Manual overrides"))
-        addView(body("Leave blank to keep imported FatSecret/Health Connect values."))
+        addView(body("Use only for corrections. Blank nutrition fields use offline barcode totals first."))
         foodInput = input("Food calories, kcal").also { addView(label("Food calories")); addView(it) }
         proteinInput = input("Protein, g").also { addView(label("Protein")); addView(it) }
         sodiumInput = input("Sodium, mg").also { addView(label("Sodium")); addView(it) }
@@ -250,43 +258,98 @@ class MainActivity : ComponentActivity() {
 
     private fun exportCard(): View = card {
         addView(sectionTitle("Export"))
-        addView(body("Creates a local PNG in Pictures/DailyCutReport."))
+        addView(body("Creates a local PNG in Pictures/DailyCutReport. Export now includes default nutrition fields and extra nutrient totals."))
         addView(primaryButton("Save PNG") { exportImage(share = false) })
         addView(secondaryButton("Save and share PNG") { exportImage(share = true) })
+    }
+
+    private fun foodEntryCard(): View = card {
+        addView(sectionTitle("Add product / barcode"))
+        addView(body("Manual barcode entry for now. Camera scan and OCR can be layered on this Room database later."))
+        barcodeInput = input("Barcode / product code", text = true).also { addView(label("Barcode")); addView(it) }
+        quantityInput = input("Quantity", text = false).also { it.setText("1"); addView(label("Quantity")); addView(it) }
+        addView(secondaryButton("Load saved product") { loadProductFromBarcode() })
+
+        productNameInput = input("Product name", text = true).also { addView(label("Product name")); addView(it) }
+        brandInput = input("Brand / store", text = true).also { addView(label("Brand / store")); addView(it) }
+        servingInput = input("Serving label, e.g. 1 pack or 100 g", text = true).also { addView(label("Serving label")); addView(it) }
+        productCaloriesInput = input("Calories per serving").also { addView(label("Calories")); addView(it) }
+        productProteinInput = input("Protein g per serving").also { addView(label("Protein")); addView(it) }
+        productSodiumInput = input("Sodium mg per serving").also { addView(label("Sodium")); addView(it) }
+        productCarbsInput = input("Carbs g per serving").also { addView(label("Carbs")); addView(it) }
+        productFatInput = input("Fat g per serving").also { addView(label("Fat")); addView(it) }
+        productSugarInput = input("Sugar g per serving").also { addView(label("Sugar")); addView(it) }
+        productFiberInput = input("Fiber g per serving").also { addView(label("Fiber")); addView(it) }
+        productSatFatInput = input("Saturated fat g per serving").also { addView(label("Saturated fat")); addView(it) }
+        productExtrasInput = input("Extra nutrients: one per line, e.g. Potassium=240 mg", multiline = true, text = true).also { addView(label("Optional extra fields")); addView(it) }
+
+        addView(primaryButton("Save product") { saveProductOnly() })
+        addView(primaryButton("Save product and add to today") { saveProductAndAddToToday() })
+    }
+
+    private fun foodTotalsCard(): View = card {
+        val n = currentReport.localNutrition
+        addView(sectionTitle("Offline nutrition totals"))
+        addView(twoColumnMetrics(
+            "Entries" to n.entries.toString(),
+            "Calories" to "${numberFmt.format(n.calories.roundToInt())} kcal",
+            "Protein" to "${numberFmt.format(n.proteinG.roundToInt())} g",
+            "Sodium" to "${numberFmt.format(n.sodiumMg.roundToInt())} mg",
+            "Carbs" to "${numberFmt.format(n.carbsG.roundToInt())} g",
+            "Fat" to "${numberFmt.format(n.fatG.roundToInt())} g",
+            "Sugar" to "${numberFmt.format(n.sugarG.roundToInt())} g",
+            "Fiber" to "${numberFmt.format(n.fiberG.roundToInt())} g",
+            "Sat. fat" to "${numberFmt.format(n.saturatedFatG.roundToInt())} g"
+        ))
+        if (n.extras.isNotEmpty()) {
+            addView(body("Extra totals:"))
+            n.extras.forEach { (name, value) -> addView(body("$name: $value")) }
+        }
+    }
+
+    private fun foodLogCard(): View = card {
+        addView(sectionTitle("Today's food log"))
+        if (currentLogs.isEmpty()) {
+            addView(body("No offline food entries for this date yet."))
+        } else {
+            currentLogs.forEach { log ->
+                val row = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+                row.addView(body("${log.quantity} × ${log.productName} ${if (log.brand.isBlank()) "" else "(${log.brand})"}"))
+                row.addView(body("${numberFmt.format(log.calories.roundToInt())} kcal | ${numberFmt.format(log.proteinG.roundToInt())} g protein | ${numberFmt.format(log.sodiumMg.roundToInt())} mg sodium"))
+                row.addView(secondaryButton("Delete this entry") { deleteFoodLog(log.id) })
+                addView(row)
+                addView(spacer(8))
+            }
+        }
     }
 
     private fun settingsStatusCard(): View = card {
         addView(sectionTitle("Settings status"))
         addView(body("Health Connect: ${currentReport.health.healthConnectStatus}"))
-        addView(body("FatSecret: ${fatSecretClient.status()}"))
-        addView(body("Network access is used for FatSecret API calls only."))
+        addView(body("Offline database: ${currentReport.localNutrition.entries} food logs today"))
+        addView(body("FatSecret is phased out. Current food source is the local Room database."))
     }
 
     private fun healthConnectSettingsCard(): View = card {
         addView(sectionTitle("Health Connect"))
-        addView(body("Grant read permissions for steps, distance, calories, exercises, and nutrition. Nutrition is optional because FatSecret API is the primary food source."))
+        addView(body("Grant read permissions for steps, distance, calories, exercises, and optional nutrition."))
         addView(primaryButton("Grant / update Health Connect permissions") {
             requestHealthPermissions.launch(HealthConnectManager.PERMISSIONS)
         })
         addView(secondaryButton("Refresh Health Connect") { lifecycleScope.launch { refreshFromHealthConnect() } })
     }
 
-    private fun fatSecretSettingsCard(): View = card {
-        addView(sectionTitle("FatSecret authorization"))
-        addView(body("Your Consumer Secret and access token are stored only in this app's local private storage."))
-        consumerKeyInput = input("Consumer Key", text = true).also { addView(label("Consumer Key")); addView(it) }
-        consumerSecretInput = input("Consumer Secret", text = true).also { addView(label("Consumer Secret")); addView(it) }
-        addView(primaryButton("Save credentials locally") { saveFatSecretCredentials() })
-        addView(secondaryButton("Start browser authorization") { startFatSecretAuthorization() })
-        verifierInput = input("Verifier code", text = true).also { addView(label("Verifier code")); addView(it) }
-        addView(primaryButton("Complete authorization") { completeFatSecretAuthorization() })
-        addView(body("After authorization, return to Today and tap Import FatSecret diary."))
+    private fun legacyFatSecretCard(): View = card {
+        addView(sectionTitle("Legacy FatSecret"))
+        addView(body("FatSecret import is no longer part of the active workflow. Existing app-local FatSecret credentials are not used by this version."))
+        addView(body("Next cleanup can remove FatSecretClient.kt and the internet permission entirely after this offline workflow is verified."))
     }
 
     private fun loadDate(date: LocalDate) {
         selectedDate = date
         currentReport = store.load(date) ?: DailyReport(date = date)
         render()
+        lifecycleScope.launch { refreshLocalNutrition(renderAfter = true) }
     }
 
     private suspend fun refreshFromHealthConnect() {
@@ -310,71 +373,124 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "Health Connect refreshed.", Toast.LENGTH_SHORT).show()
     }
 
-    private fun saveFatSecretCredentials() {
-        val key = consumerKeyInput?.text?.toString()?.trim().orEmpty()
-        val secret = consumerSecretInput?.text?.toString()?.trim().orEmpty()
-        if (key.isBlank() || secret.isBlank()) {
-            Toast.makeText(this, "Enter both Consumer Key and Consumer Secret.", Toast.LENGTH_LONG).show()
-            return
-        }
-        fatSecretClient.saveConsumerCredentials(key, secret)
-        consumerSecretInput?.setText("")
-        render()
-        Toast.makeText(this, "FatSecret credentials saved locally.", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun startFatSecretAuthorization() {
-        lifecycleScope.launch {
-            val result = runCatching { fatSecretClient.startAuthorization() }
-            result.onSuccess { url ->
-                render()
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            }.onFailure {
-                Toast.makeText(this@MainActivity, "FatSecret auth failed: ${it.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun completeFatSecretAuthorization() {
-        val verifier = verifierInput?.text?.toString()?.trim().orEmpty()
-        if (verifier.isBlank()) {
-            Toast.makeText(this, "Enter the verifier code shown by FatSecret.", Toast.LENGTH_LONG).show()
-            return
-        }
-        lifecycleScope.launch {
-            val result = runCatching { fatSecretClient.completeAuthorization(verifier) }
-            result.onSuccess {
-                verifierInput?.setText("")
-                render()
-                Toast.makeText(this@MainActivity, "FatSecret authorized.", Toast.LENGTH_SHORT).show()
-            }.onFailure {
-                Toast.makeText(this@MainActivity, "FatSecret verifier failed: ${it.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun importFatSecretDiary() {
-        lifecycleScope.launch {
-            val result = runCatching { fatSecretClient.importFoodDiary(selectedDate) }
-            result.onSuccess { diary ->
-                applyFatSecretDiary(diary)
-                render()
-                Toast.makeText(this@MainActivity, "FatSecret imported ${diary.entries} entries.", Toast.LENGTH_SHORT).show()
-            }.onFailure {
-                Toast.makeText(this@MainActivity, "FatSecret import failed: ${it.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun applyFatSecretDiary(diary: FatSecretClient.DiaryImport) {
-        val existing = currentReport.manual
-        val manual = existing.copy(
-            foodCalories = diary.calories,
-            proteinG = diary.proteinG,
-            sodiumMg = diary.sodiumMg,
-            notes = mergeNote(existing.notes, "FatSecret API import: ${diary.entries} entries")
+    private suspend fun refreshLocalNutrition(renderAfter: Boolean) {
+        val totals = nutritionDao.totalsForDate(selectedDate.toString())
+        val extras = nutritionDao.extraTotalsForDate(selectedDate.toString())
+        currentLogs = nutritionDao.logsForDate(selectedDate.toString())
+        val summary = LocalNutritionSummary(
+            calories = totals.calories,
+            proteinG = totals.proteinG,
+            sodiumMg = totals.sodiumMg,
+            carbsG = totals.carbsG,
+            fatG = totals.fatG,
+            sugarG = totals.sugarG,
+            fiberG = totals.fiberG,
+            saturatedFatG = totals.saturatedFatG,
+            entries = totals.entries,
+            extras = extras.associate { it.name to "${oneFmt.format(it.value)} ${it.unit}" }
         )
-        currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
+        currentReport = store.mergeLocalNutrition(selectedDate, summary, currentReport.health)
+        if (renderAfter) render()
+    }
+
+    private fun loadProductFromBarcode() {
+        val barcode = barcodeInput?.text?.toString()?.trim().orEmpty()
+        if (barcode.isBlank()) {
+            Toast.makeText(this, "Enter a barcode first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        lifecycleScope.launch {
+            val product = nutritionDao.productByBarcode(barcode)
+            if (product == null) {
+                Toast.makeText(this@MainActivity, "Unknown barcode. Create it once, then future adds are automatic.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            fillProductInputs(product, nutritionDao.extrasForProduct(barcode))
+            Toast.makeText(this@MainActivity, "Loaded ${product.name}.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun saveProductOnly() {
+        lifecycleScope.launch {
+            val product = productFromInputs() ?: return@launch
+            val extras = extrasFromInput(product.barcode)
+            nutritionDao.saveProductWithExtras(product, extras)
+            Toast.makeText(this@MainActivity, "Product saved locally.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun saveProductAndAddToToday() {
+        lifecycleScope.launch {
+            val product = productFromInputs() ?: return@launch
+            val extras = extrasFromInput(product.barcode)
+            nutritionDao.saveProductWithExtras(product, extras)
+            val quantity = quantityInput?.toDoubleValue()?.takeIf { it > 0.0 } ?: 1.0
+            nutritionDao.addProductToDate(selectedDate.toString(), product, quantity, extras)
+            refreshLocalNutrition(renderAfter = true)
+            Toast.makeText(this@MainActivity, "Added ${product.name} to today.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun deleteFoodLog(id: Long) {
+        lifecycleScope.launch {
+            nutritionDao.deleteLog(id)
+            refreshLocalNutrition(renderAfter = true)
+            Toast.makeText(this@MainActivity, "Deleted food entry.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun productFromInputs(): ProductEntity? {
+        val barcode = barcodeInput?.text?.toString()?.trim().orEmpty()
+        val name = productNameInput?.text?.toString()?.trim().orEmpty()
+        if (barcode.isBlank() || name.isBlank()) {
+            Toast.makeText(this, "Barcode and product name are required.", Toast.LENGTH_LONG).show()
+            return null
+        }
+        return ProductEntity(
+            barcode = barcode,
+            name = name,
+            brand = brandInput?.text?.toString()?.trim().orEmpty(),
+            servingLabel = servingInput?.text?.toString()?.trim()?.takeIf { it.isNotBlank() } ?: "1 serving",
+            calories = productCaloriesInput?.toDoubleValue() ?: 0.0,
+            proteinG = productProteinInput?.toDoubleValue() ?: 0.0,
+            sodiumMg = productSodiumInput?.toDoubleValue() ?: 0.0,
+            carbsG = productCarbsInput?.toDoubleValue() ?: 0.0,
+            fatG = productFatInput?.toDoubleValue() ?: 0.0,
+            sugarG = productSugarInput?.toDoubleValue() ?: 0.0,
+            fiberG = productFiberInput?.toDoubleValue() ?: 0.0,
+            saturatedFatG = productSatFatInput?.toDoubleValue() ?: 0.0,
+            notes = ""
+        )
+    }
+
+    private fun extrasFromInput(barcode: String): List<ProductExtraNutrientEntity> {
+        val raw = productExtrasInput?.text?.toString().orEmpty()
+        return raw.lineSequence().mapNotNull { line ->
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) return@mapNotNull null
+            val split = trimmed.split("=", limit = 2)
+            if (split.size != 2) return@mapNotNull null
+            val name = split[0].trim()
+            val valueUnit = split[1].trim().split(Regex("\\s+"), limit = 2)
+            val value = valueUnit.firstOrNull()?.toDoubleOrNull() ?: return@mapNotNull null
+            val unit = valueUnit.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() } ?: ""
+            if (name.isBlank()) null else ProductExtraNutrientEntity(barcode, name, value, unit)
+        }.toList()
+    }
+
+    private fun fillProductInputs(product: ProductEntity, extras: List<ProductExtraNutrientEntity>) {
+        productNameInput?.setText(product.name)
+        brandInput?.setText(product.brand)
+        servingInput?.setText(product.servingLabel)
+        productCaloriesInput?.setText(if (product.calories == 0.0) "" else product.calories.roundToInt().toString())
+        productProteinInput?.setText(if (product.proteinG == 0.0) "" else product.proteinG.roundToInt().toString())
+        productSodiumInput?.setText(if (product.sodiumMg == 0.0) "" else product.sodiumMg.roundToInt().toString())
+        productCarbsInput?.setText(if (product.carbsG == 0.0) "" else product.carbsG.roundToInt().toString())
+        productFatInput?.setText(if (product.fatG == 0.0) "" else product.fatG.roundToInt().toString())
+        productSugarInput?.setText(if (product.sugarG == 0.0) "" else product.sugarG.roundToInt().toString())
+        productFiberInput?.setText(if (product.fiberG == 0.0) "" else product.fiberG.roundToInt().toString())
+        productSatFatInput?.setText(if (product.saturatedFatG == 0.0) "" else product.saturatedFatG.roundToInt().toString())
+        productExtrasInput?.setText(extras.joinToString("\n") { "${it.name}=${oneFmt.format(it.value)} ${it.unit}" })
     }
 
     private fun saveManualEntries() {
@@ -415,15 +531,20 @@ class MainActivity : ComponentActivity() {
         sodiumInput = null
         manualBurnInput = null
         notesInput = null
-        consumerKeyInput = null
-        consumerSecretInput = null
-        verifierInput = null
-    }
-
-    private fun mergeNote(old: String, addition: String): String = when {
-        old.isBlank() -> addition
-        old.contains(addition) -> old
-        else -> "$old\n$addition"
+        barcodeInput = null
+        quantityInput = null
+        productNameInput = null
+        brandInput = null
+        servingInput = null
+        productCaloriesInput = null
+        productProteinInput = null
+        productSodiumInput = null
+        productCarbsInput = null
+        productFatInput = null
+        productSugarInput = null
+        productFiberInput = null
+        productSatFatInput = null
+        productExtrasInput = null
     }
 
     private fun card(build: LinearLayout.() -> Unit): View = LinearLayout(this).apply {
@@ -502,7 +623,8 @@ class MainActivity : ComponentActivity() {
         setSingleLine(!multiline)
         minLines = if (multiline) 2 else 1
         inputType = when {
-            multiline || text -> InputType.TYPE_CLASS_TEXT or if (multiline) InputType.TYPE_TEXT_FLAG_MULTI_LINE else 0
+            multiline -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            text -> InputType.TYPE_CLASS_TEXT
             else -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
         setPadding(dp(12), dp(9), dp(12), dp(9))
