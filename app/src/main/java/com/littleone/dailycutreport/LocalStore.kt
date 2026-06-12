@@ -24,6 +24,15 @@ class LocalStore(context: Context) {
         }.also { save(it) }
     }
 
+    fun mergeLocalNutrition(date: LocalDate, nutrition: LocalNutritionSummary, currentHealth: HealthSummary): DailyReport {
+        val existing = load(date)
+        return if (existing == null) {
+            DailyReport(date = date, health = currentHealth, localNutrition = nutrition)
+        } else {
+            existing.copy(localNutrition = nutrition, health = currentHealth, savedAtEpochMs = System.currentTimeMillis())
+        }.also { save(it) }
+    }
+
     fun mergeManual(date: LocalDate, manual: ManualEntry, currentHealth: HealthSummary): DailyReport {
         val existing = load(date)
         return if (existing == null) {
