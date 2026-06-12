@@ -12,8 +12,8 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.5.1"
+        versionCode = 9
+        versionName = "0.5.2-local"
     }
 
     signingConfigs {
