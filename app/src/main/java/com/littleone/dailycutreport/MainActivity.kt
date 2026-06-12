@@ -1,7 +1,5 @@
 package com.littleone.dailycutreport
 
-import android.app.Activity
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -17,7 +15,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -38,9 +35,9 @@ class MainActivity : ComponentActivity() {
     private var selectedDate: LocalDate = LocalDate.now()
     private var currentReport: DailyReport = DailyReport(selectedDate)
     private var currentTab: Tab = Tab.TODAY
+    private var currentLogs: List<DailyFoodLogEntity> = emptyList()
     private var autoImportSessionDone = false
     private var autoImportInProgress = false
-    private var currentLogs: List<DailyFoodLogEntity> = emptyList()
 
     private lateinit var scroll: ScrollView
     private lateinit var root: LinearLayout
@@ -76,29 +73,13 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { refreshFromHealthConnect() }
     }
 
-    private val barcodeScannerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
-        val barcode = result.data?.getStringExtra(ScannerActivity.RESULT_BARCODE).orEmpty()
-        if (barcode.isBlank()) return@registerForActivityResult
-        currentTab = Tab.FOODS
-        render()
-        barcodeInput?.setText(barcode)
-        loadProductFromBarcode()
-    }
-
-    private val ocrScannerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
-        currentTab = Tab.FOODS
-        render()
-        applyOcrResult(result.data)
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         healthConnectManager = HealthConnectManager(this)
         store = LocalStore(this)
         exporter = ReportImageExporter(this)
         nutritionDao = NutritionDatabase.get(this).nutritionDao()
+
         scroll = ScrollView(this)
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -125,29 +106,28 @@ class MainActivity : ComponentActivity() {
         autoImportSessionDone = true
         autoImportInProgress = true
         lifecycleScope.launch {
-            var changed = false
-            val healthSummary = runCatching {
+            val health = runCatching {
                 if (healthConnectManager.isAvailable() && healthConnectManager.hasAllPermissions()) {
                     healthConnectManager.readDailySummary(selectedDate)
                 } else null
             }.getOrNull()
-            if (healthSummary != null) {
-                currentReport = store.mergeHealth(selectedDate, healthSummary)
-                changed = true
-            }
+            if (health != null) currentReport = store.mergeHealth(selectedDate, health)
             refreshLocalNutrition(renderAfter = false)
-            changed = true
             autoImportInProgress = false
-            if (changed) {
-                render()
-                Toast.makeText(this@MainActivity, "Offline data refreshed.", Toast.LENGTH_SHORT).show()
-            }
+            render()
         }
+    }
+
+    private fun loadDate(date: LocalDate) {
+        selectedDate = date
+        currentReport = store.load(date) ?: DailyReport(date = date)
+        render()
+        lifecycleScope.launch { refreshLocalNutrition(renderAfter = true) }
     }
 
     private fun render() {
         root.removeAllViews()
-        clearScreenInputs()
+        clearInputs()
         renderHeader()
         when (currentTab) {
             Tab.TODAY -> renderTodayTab()
@@ -165,30 +145,29 @@ class MainActivity : ComponentActivity() {
         header.addView(ImageView(this).apply {
             setImageResource(resources.getIdentifier("ic_dailycut_logo", "drawable", packageName))
         }, LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(12) })
-
-        val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        titleBox.addView(TextView(this).apply {
-            text = "Daily Cut Report"
-            textSize = 26f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(22, 28, 32))
-        })
-        titleBox.addView(TextView(this).apply {
-            text = "Offline nutrition + daily image exporter"
-            textSize = 13f
-            setTextColor(Color.rgb(92, 99, 105))
-        })
-        header.addView(titleBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(context).apply {
+                text = "Daily Cut Report"
+                textSize = 26f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.rgb(22, 28, 32))
+            })
+            addView(TextView(context).apply {
+                text = "Stable offline nutrition database"
+                textSize = 13f
+                setTextColor(Color.rgb(92, 99, 105))
+            })
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(header)
 
-        val tabs = LinearLayout(this).apply {
+        root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(4), 0, dp(14))
-        }
-        tabs.addView(tabButton("Today", currentTab == Tab.TODAY) { currentTab = Tab.TODAY; render() }, weight = 1f)
-        tabs.addView(tabButton("Foods", currentTab == Tab.FOODS) { currentTab = Tab.FOODS; render() }, weight = 1f)
-        tabs.addView(tabButton("Settings", currentTab == Tab.SETTINGS) { currentTab = Tab.SETTINGS; render() }, weight = 1f)
-        root.addView(tabs)
+            addView(tabButton("Today", currentTab == Tab.TODAY) { currentTab = Tab.TODAY; render() }, weight = 1f)
+            addView(tabButton("Foods", currentTab == Tab.FOODS) { currentTab = Tab.FOODS; render() }, weight = 1f)
+            addView(tabButton("Settings", currentTab == Tab.SETTINGS) { currentTab = Tab.SETTINGS; render() }, weight = 1f)
+        })
     }
 
     private fun renderTodayTab() {
@@ -208,23 +187,25 @@ class MainActivity : ComponentActivity() {
     private fun renderSettingsTab() {
         root.addView(settingsStatusCard())
         root.addView(healthConnectSettingsCard())
-        root.addView(legacyFatSecretCard())
+        root.addView(legacyCard())
     }
 
     private fun dateCard(): View = card {
         addView(sectionTitle("Report date"))
-        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        row.addView(smallButton("◀") { loadDate(selectedDate.minusDays(1)) }, weight = 0.8f)
-        row.addView(TextView(context).apply {
-            text = selectedDate.format(dateFmt)
-            textSize = 16f
-            gravity = Gravity.CENTER
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(35, 35, 35))
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2.6f))
-        row.addView(smallButton("Today") { loadDate(LocalDate.now()) }, weight = 1.2f)
-        row.addView(smallButton("▶") { loadDate(selectedDate.plusDays(1)) }, weight = 0.8f)
-        addView(row)
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(smallButton("◀") { loadDate(selectedDate.minusDays(1)) }, weight = 0.7f)
+            addView(TextView(context).apply {
+                text = selectedDate.format(dateFmt)
+                textSize = 16f
+                gravity = Gravity.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.rgb(35, 35, 35))
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2.6f))
+            addView(smallButton("Today") { loadDate(LocalDate.now()) }, weight = 1f)
+            addView(smallButton("▶") { loadDate(selectedDate.plusDays(1)) }, weight = 0.7f)
+        })
     }
 
     private fun summaryCard(): View = card {
@@ -247,54 +228,50 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importCard(): View = card {
-        addView(sectionTitle("Daily imports"))
         val h = currentReport.health
-        addView(body("Auto refresh runs once whenever the app is opened. It does not run in the background."))
-        addView(body("Health Connect: ${h.healthConnectStatus}"))
+        addView(sectionTitle("Daily imports"))
+        addView(body("Auto refresh runs only while opening the app. No background sync."))
         addView(twoColumnMetrics(
             "Steps" to numberFmt.format(h.steps),
             "Distance" to "${oneFmt.format(h.distanceKm)} km",
             "Active" to "${numberFmt.format(h.activeCalories.roundToInt())} kcal",
-            "Total" to "${numberFmt.format(h.totalCalories.roundToInt())} kcal"
+            "Total" to "${numberFmt.format(h.totalCalories.roundToInt())} kcal",
+            "Food logs" to currentReport.localNutrition.entries.toString()
         ))
-        addView(body("Exercises: ${h.exerciseSessions} sessions, ${h.exerciseMinutes} min"))
-        addView(body("Offline food logs: ${currentReport.localNutrition.entries}"))
-        addView(spacer(8))
+        addView(body("Health Connect: ${h.healthConnectStatus}"))
         addView(primaryButton("Refresh Health Connect") { lifecycleScope.launch { refreshFromHealthConnect() } })
         addView(primaryButton("Refresh offline food totals") { lifecycleScope.launch { refreshLocalNutrition(renderAfter = true) } })
     }
 
     private fun manualCard(): View = card {
         addView(sectionTitle("Manual overrides"))
-        addView(body("Use only for corrections. Blank nutrition fields use offline barcode totals first."))
+        addView(body("Use only for corrections. Blank fields use offline database totals."))
         foodInput = input("Food calories, kcal").also { addView(label("Food calories")); addView(it) }
         proteinInput = input("Protein, g").also { addView(label("Protein")); addView(it) }
         sodiumInput = input("Sodium, mg").also { addView(label("Sodium")); addView(it) }
         manualBurnInput = input("Final burn override, kcal").also { addView(label("Final burn override")); addView(it) }
         notesInput = input("Notes", multiline = true, text = true).also { addView(label("Notes")); addView(it) }
-        fillInputs(currentReport.manual)
+        fillManualInputs(currentReport.manual)
         addView(primaryButton("Save overrides") { saveManualEntries() })
     }
 
     private fun exportCard(): View = card {
         addView(sectionTitle("Export"))
-        addView(body("Creates a local PNG in Pictures/DailyCutReport. Export now includes default nutrition fields and extra nutrient totals."))
+        addView(body("PNG export includes default nutrition fields and extra nutrient totals."))
         addView(primaryButton("Save PNG") { exportImage(share = false) })
         addView(secondaryButton("Save and share PNG") { exportImage(share = true) })
     }
 
     private fun foodEntryCard(): View = card {
         addView(sectionTitle("Add product / barcode"))
-        addView(body("Scan a barcode to load a saved product. For new products, use OCR to prefill nutrition, verify once, then save locally."))
+        addView(body("Stable rollback: manual barcode/product entry. Camera/OCR will be reintroduced later in smaller steps."))
         barcodeInput = input("Barcode / product code", text = true).also { addView(label("Barcode")); addView(it) }
-        quantityInput = input("Quantity", text = false).also { it.setText("1"); addView(label("Quantity")); addView(it) }
-        addView(primaryButton("Scan barcode with camera") { openBarcodeScanner() })
+        quantityInput = input("Quantity").also { it.setText("1"); addView(label("Quantity")); addView(it) }
         addView(secondaryButton("Load saved product") { loadProductFromBarcode() })
 
         productNameInput = input("Product name", text = true).also { addView(label("Product name")); addView(it) }
         brandInput = input("Brand / store", text = true).also { addView(label("Brand / store")); addView(it) }
         servingInput = input("Serving label, e.g. 1 pack or 100 g", text = true).also { addView(label("Serving label")); addView(it) }
-        addView(secondaryButton("OCR nutrition label") { openOcrScanner() })
         productCaloriesInput = input("Calories per serving").also { addView(label("Calories")); addView(it) }
         productProteinInput = input("Protein g per serving").also { addView(label("Protein")); addView(it) }
         productSodiumInput = input("Sodium mg per serving").also { addView(label("Sodium")); addView(it) }
@@ -303,7 +280,7 @@ class MainActivity : ComponentActivity() {
         productSugarInput = input("Sugar g per serving").also { addView(label("Sugar")); addView(it) }
         productFiberInput = input("Fiber g per serving").also { addView(label("Fiber")); addView(it) }
         productSatFatInput = input("Saturated fat g per serving").also { addView(label("Saturated fat")); addView(it) }
-        productExtrasInput = input("Extra nutrients: one per line, e.g. Potassium=240 mg", multiline = true, text = true).also { addView(label("Optional extra fields / OCR raw text")); addView(it) }
+        productExtrasInput = input("Extra nutrients: one per line, e.g. Potassium=240 mg", multiline = true, text = true).also { addView(label("Optional extra fields")); addView(it) }
 
         addView(primaryButton("Save product") { saveProductOnly() })
         addView(primaryButton("Save product and add to today") { saveProductAndAddToToday() })
@@ -335,11 +312,9 @@ class MainActivity : ComponentActivity() {
             addView(body("No offline food entries for this date yet."))
         } else {
             currentLogs.forEach { log ->
-                val row = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-                row.addView(body("${log.quantity} × ${log.productName} ${if (log.brand.isBlank()) "" else "(${log.brand})"}"))
-                row.addView(body("${numberFmt.format(log.calories.roundToInt())} kcal | ${numberFmt.format(log.proteinG.roundToInt())} g protein | ${numberFmt.format(log.sodiumMg.roundToInt())} mg sodium"))
-                row.addView(secondaryButton("Delete this entry") { deleteFoodLog(log.id) })
-                addView(row)
+                addView(body("${log.quantity} × ${log.productName} ${if (log.brand.isBlank()) "" else "(${log.brand})"}"))
+                addView(body("${numberFmt.format(log.calories.roundToInt())} kcal | ${numberFmt.format(log.proteinG.roundToInt())} g protein | ${numberFmt.format(log.sodiumMg.roundToInt())} mg sodium"))
+                addView(secondaryButton("Delete this entry") { deleteFoodLog(log.id) })
                 addView(spacer(8))
             }
         }
@@ -349,7 +324,6 @@ class MainActivity : ComponentActivity() {
         addView(sectionTitle("Settings status"))
         addView(body("Health Connect: ${currentReport.health.healthConnectStatus}"))
         addView(body("Offline database: ${currentReport.localNutrition.entries} food logs today"))
-        addView(body("Camera scanning: barcode + OCR prefill, all on device."))
         addView(body("FatSecret is phased out. Current food source is the local Room database."))
     }
 
@@ -362,25 +336,14 @@ class MainActivity : ComponentActivity() {
         addView(secondaryButton("Refresh Health Connect") { lifecycleScope.launch { refreshFromHealthConnect() } })
     }
 
-    private fun legacyFatSecretCard(): View = card {
-        addView(sectionTitle("Legacy FatSecret"))
-        addView(body("FatSecret import is no longer part of the active workflow. Existing app-local FatSecret credentials are not used by this version."))
-        addView(body("Next cleanup can remove FatSecretClient.kt after this offline workflow is verified."))
-    }
-
-    private fun loadDate(date: LocalDate) {
-        selectedDate = date
-        currentReport = store.load(date) ?: DailyReport(date = date)
-        render()
-        lifecycleScope.launch { refreshLocalNutrition(renderAfter = true) }
+    private fun legacyCard(): View = card {
+        addView(sectionTitle("Camera/OCR status"))
+        addView(body("Camera barcode and OCR have been rolled back to keep the build stable. The next attempt should add barcode-only first, then OCR separately."))
     }
 
     private suspend fun refreshFromHealthConnect() {
         if (!healthConnectManager.isAvailable()) {
-            Toast.makeText(this, healthConnectManager.availabilityMessage(), Toast.LENGTH_LONG).show()
-            currentReport = currentReport.copy(
-                health = currentReport.health.copy(healthConnectStatus = healthConnectManager.availabilityMessage())
-            )
+            currentReport = currentReport.copy(health = currentReport.health.copy(healthConnectStatus = healthConnectManager.availabilityMessage()))
             render()
             return
         }
@@ -414,36 +377,6 @@ class MainActivity : ComponentActivity() {
         )
         currentReport = store.mergeLocalNutrition(selectedDate, summary, currentReport.health)
         if (renderAfter) render()
-    }
-
-    private fun openBarcodeScanner() {
-        barcodeScannerLauncher.launch(Intent(this, ScannerActivity::class.java).putExtra(ScannerActivity.EXTRA_MODE, ScannerActivity.MODE_BARCODE))
-    }
-
-    private fun openOcrScanner() {
-        ocrScannerLauncher.launch(Intent(this, ScannerActivity::class.java).putExtra(ScannerActivity.EXTRA_MODE, ScannerActivity.MODE_OCR))
-    }
-
-    private fun applyOcrResult(data: Intent?) {
-        if (data == null) return
-        setIfPresent(productCaloriesInput, data, ScannerActivity.RESULT_CALORIES)
-        setIfPresent(productProteinInput, data, ScannerActivity.RESULT_PROTEIN)
-        setIfPresent(productSodiumInput, data, ScannerActivity.RESULT_SODIUM)
-        setIfPresent(productCarbsInput, data, ScannerActivity.RESULT_CARBS)
-        setIfPresent(productFatInput, data, ScannerActivity.RESULT_FAT)
-        setIfPresent(productSugarInput, data, ScannerActivity.RESULT_SUGAR)
-        setIfPresent(productFiberInput, data, ScannerActivity.RESULT_FIBER)
-        setIfPresent(productSatFatInput, data, ScannerActivity.RESULT_SAT_FAT)
-        val raw = data.getStringExtra(ScannerActivity.RESULT_OCR_RAW).orEmpty()
-        if (raw.isNotBlank()) {
-            val existing = productExtrasInput?.text?.toString().orEmpty()
-            productExtrasInput?.setText(listOf(existing, "OCR raw text:", raw).filter { it.isNotBlank() }.joinToString("\n"))
-        }
-        Toast.makeText(this, "OCR prefilled what it could. Please verify before saving.", Toast.LENGTH_LONG).show()
-    }
-
-    private fun setIfPresent(target: EditText?, data: Intent, key: String) {
-        if (data.hasExtra(key)) target?.setText(numberFmt.format(data.getDoubleExtra(key, 0.0).roundToInt()))
     }
 
     private fun loadProductFromBarcode() {
@@ -511,22 +444,20 @@ class MainActivity : ComponentActivity() {
             fatG = productFatInput?.toDoubleValue() ?: 0.0,
             sugarG = productSugarInput?.toDoubleValue() ?: 0.0,
             fiberG = productFiberInput?.toDoubleValue() ?: 0.0,
-            saturatedFatG = productSatFatInput?.toDoubleValue() ?: 0.0,
-            notes = ""
+            saturatedFatG = productSatFatInput?.toDoubleValue() ?: 0.0
         )
     }
 
     private fun extrasFromInput(barcode: String): List<ProductExtraNutrientEntity> {
-        val raw = productExtrasInput?.text?.toString().orEmpty()
-        return raw.lineSequence().mapNotNull { line ->
+        return productExtrasInput?.text?.toString().orEmpty().lineSequence().mapNotNull { line ->
             val trimmed = line.trim()
-            if (trimmed.isBlank() || trimmed.startsWith("OCR raw text", ignoreCase = true)) return@mapNotNull null
+            if (trimmed.isBlank()) return@mapNotNull null
             val split = trimmed.split("=", limit = 2)
             if (split.size != 2) return@mapNotNull null
             val name = split[0].trim()
             val valueUnit = split[1].trim().split(Regex("\\s+"), limit = 2)
-            val value = valueUnit.firstOrNull()?.toDoubleOrNull() ?: return@mapNotNull null
-            val unit = valueUnit.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() } ?: ""
+            val value = valueUnit.firstOrNull()?.replace(',', '.')?.toDoubleOrNull() ?: return@mapNotNull null
+            val unit = valueUnit.getOrNull(1)?.trim().orEmpty()
             if (name.isBlank()) null else ProductExtraNutrientEntity(barcode, name, value, unit)
         }.toList()
     }
@@ -551,7 +482,7 @@ class MainActivity : ComponentActivity() {
             foodCalories = foodInput?.toDoubleValue() ?: currentReport.manual.foodCalories,
             proteinG = proteinInput?.toDoubleValue() ?: currentReport.manual.proteinG,
             sodiumMg = sodiumInput?.toDoubleValue() ?: currentReport.manual.sodiumMg,
-            manualBurnCalories = manualBurnInput?.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.toDoubleOrNull(),
+            manualBurnCalories = manualBurnInput?.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.replace(',', '.')?.toDoubleOrNull(),
             notes = notesInput?.text?.toString()?.trim().orEmpty()
         )
         currentReport = store.mergeManual(selectedDate, manual, currentReport.health)
@@ -570,7 +501,7 @@ class MainActivity : ComponentActivity() {
         if (share) exporter.shareImage(uri)
     }
 
-    private fun fillInputs(manual: ManualEntry) {
+    private fun fillManualInputs(manual: ManualEntry) {
         foodInput?.setText(if (manual.foodCalories == 0.0) "" else manual.foodCalories.roundToInt().toString())
         proteinInput?.setText(if (manual.proteinG == 0.0) "" else manual.proteinG.roundToInt().toString())
         sodiumInput?.setText(if (manual.sodiumMg == 0.0) "" else manual.sodiumMg.roundToInt().toString())
@@ -578,7 +509,7 @@ class MainActivity : ComponentActivity() {
         notesInput?.setText(manual.notes)
     }
 
-    private fun clearScreenInputs() {
+    private fun clearInputs() {
         foodInput = null
         proteinInput = null
         sodiumInput = null
@@ -606,9 +537,7 @@ class MainActivity : ComponentActivity() {
         background = rounded(Color.WHITE, dp(18))
         elevation = dp(2).toFloat()
         build()
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(14)
-        }
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
     }
 
     private fun sectionTitle(text: String) = TextView(this).apply {
@@ -641,10 +570,11 @@ class MainActivity : ComponentActivity() {
     private fun twoColumnMetrics(vararg items: Pair<String, String>) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         for (chunk in items.toList().chunked(2)) {
-            val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-            for (item in chunk) row.addView(metricTile(item.first, item.second), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6); bottomMargin = dp(8) })
-            if (chunk.size == 1) row.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(row)
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                chunk.forEach { item -> addView(metricTile(item.first, item.second), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6); bottomMargin = dp(8) }) }
+                if (chunk.size == 1) addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            })
         }
     }
 
@@ -696,14 +626,10 @@ class MainActivity : ComponentActivity() {
         setTextColor(fg)
         background = rounded(bg, dp(14))
         setOnClickListener { onClick() }
-        setPadding(dp(8), dp(8), dp(8), dp(8))
     }
 
     private fun LinearLayout.addView(view: View, weight: Float) {
-        addView(view, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight).apply {
-            marginStart = dp(3)
-            marginEnd = dp(3)
-        })
+        addView(view, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight).apply { marginStart = dp(3); marginEnd = dp(3) })
     }
 
     private fun spacer(heightDp: Int) = View(this).apply {
