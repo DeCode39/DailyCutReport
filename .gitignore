@@ -1,5 +1,6 @@
 local.properties
 .gradle/
+.kotlin/
 build/
 app/build/
 app/signing/dailycut-debug.jks

@@ -1,114 +1,78 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Daily Cut Report Manual Preview</title>
-  <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    body { margin: 0; background: #f4f4f5; color: #18181b; }
-    main { max-width: 680px; margin: 0 auto; padding: 18px; }
-    h1 { font-size: 24px; margin: 8px 0 4px; }
-    p { color: #52525b; line-height: 1.45; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    label { display: block; font-weight: 650; font-size: 14px; margin: 10px 0 4px; }
-    input, textarea { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #d4d4d8; border-radius: 12px; font-size: 16px; background: white; }
-    textarea { min-height: 76px; resize: vertical; }
-    button { width: 100%; margin-top: 14px; border: 0; border-radius: 14px; padding: 14px; font-weight: 750; font-size: 16px; background: #18181b; color: white; }
-    .card { margin-top: 18px; background: white; border-radius: 22px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.08); }
-    .report-title { font-size: 21px; font-weight: 850; }
-    .muted { color: #71717a; }
-    .metric { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e4e4e7; }
-    .metric:last-child { border-bottom: 0; }
-    .value { font-weight: 800; }
-    .verdict { margin-top: 12px; padding: 12px; border-radius: 14px; background: #f4f4f5; font-weight: 750; }
-    canvas { display: none; }
-    @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'">
+  <title>Daily Cut Report</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main>
-  <h1>Daily Cut Report — Manual Preview</h1>
-  <p>This works offline in your browser and exports a PNG. It does not read Health Connect; the native Android APK is needed for that.</p>
+  <header><div><strong>Daily Cut Report</strong><small>Manual offline preview</small></div></header>
+  <main>
+    <section class="datebar">
+      <button id="previousDate" aria-label="Previous date">‹</button>
+      <input id="selectedDate" type="date">
+      <button id="nextDate" aria-label="Next date">›</button>
+    </section>
 
-  <div class="grid">
-    <div><label>Date</label><input id="date" type="date"></div>
-    <div><label>Steps</label><input id="steps" inputmode="numeric" value="0"></div>
-    <div><label>Final burn kcal</label><input id="burn" inputmode="decimal" value="2000"></div>
-    <div><label>Food kcal</label><input id="food" inputmode="decimal" value="0"></div>
-    <div><label>Protein g</label><input id="protein" inputmode="decimal" value="0"></div>
-    <div><label>Sodium mg</label><input id="sodium" inputmode="decimal" value="0"></div>
-  </div>
-  <label>Notes</label><textarea id="notes" placeholder="Example: good protein, sodium acceptable"></textarea>
+    <section id="todayTab" class="tab-panel">
+      <article id="resultCard" class="card hero"></article>
+      <article class="card">
+        <h2>Manual activity and overrides</h2>
+        <div class="grid">
+          <label>Steps<input id="steps" inputmode="numeric"></label>
+          <label>Distance km<input id="distance" inputmode="decimal"></label>
+          <label>Final burn kcal<input id="burn" inputmode="decimal"></label>
+          <label>Food override kcal<input id="foodOverride" inputmode="decimal" placeholder="Use food log"></label>
+          <label>Protein override g<input id="proteinOverride" inputmode="decimal" placeholder="Use food log"></label>
+          <label>Sodium override mg<input id="sodiumOverride" inputmode="decimal" placeholder="Use food log"></label>
+        </div>
+        <label>Notes<textarea id="notes"></textarea></label>
+        <button id="saveReport">Save report</button>
+      </article>
+      <div class="actions"><button id="exportPng">Export PNG</button></div>
+    </section>
 
-  <button onclick="render()">Update report</button>
-  <button onclick="downloadPng()">Export PNG</button>
+    <section id="foodsTab" class="tab-panel hidden">
+      <article id="nutritionCard" class="card"></article>
+      <article class="card">
+        <h2>Add by barcode</h2>
+        <p class="muted">Camera scanning is available in the Android app. Enter the code here for the same saved-product workflow.</p>
+        <div class="inline"><input id="barcodeLookup" placeholder="Barcode / product code"><button id="useBarcode">Use</button></div>
+      </article>
+      <article class="card">
+        <h2 id="productFormTitle">Product editor</h2>
+        <div class="grid">
+          <label>Barcode<input id="productBarcode"></label>
+          <label>Name<input id="productName"></label>
+          <label>Brand<input id="productBrand"></label>
+          <label>Serving label<input id="productServing" value="1 serving"></label>
+          <label>Quantity<input id="productQuantity" inputmode="decimal" value="1"></label>
+          <label>Calories<input id="productCalories" inputmode="decimal"></label>
+          <label>Protein g<input id="productProtein" inputmode="decimal"></label>
+          <label>Sodium mg<input id="productSodium" inputmode="decimal"></label>
+          <label>Carbs g<input id="productCarbs" inputmode="decimal"></label>
+          <label>Fat g<input id="productFat" inputmode="decimal"></label>
+          <label>Sugar g<input id="productSugar" inputmode="decimal"></label>
+          <label>Fiber g<input id="productFiber" inputmode="decimal"></label>
+          <label>Saturated fat g<input id="productSaturated" inputmode="decimal"></label>
+        </div>
+        <div class="actions"><button id="saveProduct">Save product</button><button id="saveAndAddProduct">Save and add</button></div>
+      </article>
+      <article class="card"><h2>Saved products</h2><input id="productSearch" placeholder="Search products"><div id="productList"></div></article>
+      <article class="card"><h2>Food log</h2><div id="foodLog"></div></article>
+    </section>
 
-  <section class="card" id="report"></section>
-  <canvas id="canvas" width="1080" height="1350"></canvas>
-</main>
-<script>
-  const ids = ["date","steps","burn","food","protein","sodium","notes"];
-  const today = new Date();
-  document.getElementById("date").value = today.toISOString().slice(0,10);
-  for (const id of ids) {
-    const el = document.getElementById(id);
-    const saved = localStorage.getItem("dcr_" + id);
-    if (saved !== null) el.value = saved;
-    el.addEventListener("input", () => { localStorage.setItem("dcr_" + id, el.value); render(); });
-  }
-  const n = id => Number(String(document.getElementById(id).value).replace(/,/g,"")) || 0;
-  const fmt = x => Math.round(x).toLocaleString();
-  function calc() {
-    const burn = n("burn"), food = n("food"), deficit = burn - food;
-    let verdict = "Maintenance-ish";
-    if (deficit >= 300) verdict = "Cutting day";
-    if (deficit <= -150) verdict = "Surplus day";
-    return { date: document.getElementById("date").value, steps: n("steps"), burn, food, protein: n("protein"), sodium: n("sodium"), notes: document.getElementById("notes").value.trim(), deficit, verdict };
-  }
-  function render() {
-    const d = calc();
-    document.getElementById("report").innerHTML = `
-      <div class="report-title">${d.date} — Daily Fitness Report</div>
-      <div class="muted">Manual offline preview</div>
-      <div class="metric"><span>Steps</span><span class="value">${fmt(d.steps)}</span></div>
-      <div class="metric"><span>Final burn</span><span class="value">${fmt(d.burn)} kcal</span></div>
-      <div class="metric"><span>Food</span><span class="value">${fmt(d.food)} kcal</span></div>
-      <div class="metric"><span>Protein</span><span class="value">${fmt(d.protein)} g</span></div>
-      <div class="metric"><span>Sodium</span><span class="value">${fmt(d.sodium)} mg</span></div>
-      <div class="metric"><span>Estimated deficit</span><span class="value">${fmt(d.deficit)} kcal</span></div>
-      <div class="verdict">${d.verdict}${d.notes ? " — " + d.notes : ""}</div>`;
-  }
-  function roundedRect(ctx, x, y, w, h, r) {
-    ctx.beginPath(); ctx.moveTo(x+r, y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
-  }
-  function drawLine(ctx, label, value, y) {
-    ctx.fillStyle = "#18181b"; ctx.font = "42px system-ui, sans-serif"; ctx.fillText(label, 95, y);
-    ctx.font = "700 42px system-ui, sans-serif"; ctx.textAlign = "right"; ctx.fillText(value, 985, y); ctx.textAlign = "left";
-    ctx.strokeStyle = "#e4e4e7"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(95, y+30); ctx.lineTo(985, y+30); ctx.stroke();
-  }
-  function downloadPng() {
-    const d = calc(), c = document.getElementById("canvas"), ctx = c.getContext("2d");
-    ctx.fillStyle = "#f4f4f5"; ctx.fillRect(0,0,c.width,c.height);
-    ctx.fillStyle = "#ffffff"; roundedRect(ctx, 55, 70, 970, 1120, 42); ctx.fill();
-    ctx.fillStyle = "#18181b"; ctx.font = "800 58px system-ui, sans-serif"; ctx.fillText("Daily Fitness Report", 95, 160);
-    ctx.fillStyle = "#71717a"; ctx.font = "36px system-ui, sans-serif"; ctx.fillText(d.date + " • offline export", 95, 220);
-    drawLine(ctx, "Steps", fmt(d.steps), 330);
-    drawLine(ctx, "Final burn", fmt(d.burn) + " kcal", 440);
-    drawLine(ctx, "Food", fmt(d.food) + " kcal", 550);
-    drawLine(ctx, "Protein", fmt(d.protein) + " g", 660);
-    drawLine(ctx, "Sodium", fmt(d.sodium) + " mg", 770);
-    drawLine(ctx, "Estimated deficit", fmt(d.deficit) + " kcal", 880);
-    ctx.fillStyle = "#f4f4f5"; roundedRect(ctx, 95, 960, 890, 140, 28); ctx.fill();
-    ctx.fillStyle = "#18181b"; ctx.font = "700 40px system-ui, sans-serif"; ctx.fillText(d.verdict, 125, 1020);
-    ctx.font = "32px system-ui, sans-serif"; ctx.fillStyle = "#52525b";
-    const note = d.notes || "No notes."; ctx.fillText(note.slice(0, 46), 125, 1075);
-    const a = document.createElement("a");
-    a.download = `DailyCutReport_${d.date || "today"}.png`;
-    a.href = c.toDataURL("image/png");
-    a.click();
-  }
-  render();
-</script>
+    <section id="settingsTab" class="tab-panel hidden">
+      <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
+      <article class="card"><h2>Native capabilities</h2><p>Health Connect and camera barcode scanning require the Android APK. All manual report, product, log, date, and export workflows are available here.</p></article>
+      <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v2</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
+    </section>
+  </main>
+  <nav><button data-tab="today" class="active">Today</button><button data-tab="foods">Foods</button><button data-tab="settings">Settings</button></nav>
+  <canvas id="reportCanvas"></canvas>
+  <script src="model.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

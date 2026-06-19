@@ -1,9 +1,6 @@
 package com.littleone.dailycutreport
 
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-
-private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
 
 data class HealthSummary(
     val steps: Long = 0L,
@@ -19,7 +16,7 @@ data class HealthSummary(
     val healthConnectStatus: String = "Not loaded"
 )
 
-data class LocalNutritionSummary(
+data class NutritionSummary(
     val calories: Double = 0.0,
     val proteinG: Double = 0.0,
     val sodiumMg: Double = 0.0,
@@ -29,146 +26,132 @@ data class LocalNutritionSummary(
     val fiberG: Double = 0.0,
     val saturatedFatG: Double = 0.0,
     val entries: Int = 0,
-    val extras: Map<String, String> = emptyMap()
+    val extras: Map<String, NutrientAmount> = emptyMap()
 )
 
-data class ManualEntry(
-    val foodCalories: Double = 0.0,
-    val proteinG: Double = 0.0,
-    val sodiumMg: Double = 0.0,
-    val manualBurnCalories: Double? = null,
+data class NutrientAmount(val value: Double, val unit: String)
+
+data class ManualOverrides(
+    val foodCalories: Double? = null,
+    val proteinG: Double? = null,
+    val sodiumMg: Double? = null,
+    val burnCalories: Double? = null,
     val notes: String = ""
 )
+
+enum class DayVerdict(val label: String) {
+    CUT("Cut day"),
+    SURPLUS("Surplus day"),
+    MAINTENANCE("Maintenance-ish")
+}
 
 data class DailyReport(
     val date: LocalDate,
     val health: HealthSummary = HealthSummary(),
-    val localNutrition: LocalNutritionSummary = LocalNutritionSummary(),
-    val manual: ManualEntry = ManualEntry(),
+    val nutrition: NutritionSummary = NutritionSummary(),
+    val manual: ManualOverrides = ManualOverrides(),
     val savedAtEpochMs: Long = System.currentTimeMillis()
 ) {
     val finalBurnCalories: Double
-        get() = manual.manualBurnCalories ?: when {
-            health.totalCalories > 0.0 -> health.totalCalories
-            health.activeCalories > 0.0 -> health.activeCalories
-            else -> 0.0
-        }
+        get() = manual.burnCalories ?: health.totalCalories.takeIf { it > 0.0 }
+            ?: health.activeCalories.takeIf { it > 0.0 }
+            ?: 0.0
 
     val finalFoodCalories: Double
-        get() = when {
-            manual.foodCalories > 0.0 -> manual.foodCalories
-            localNutrition.calories > 0.0 -> localNutrition.calories
-            health.nutritionCalories > 0.0 -> health.nutritionCalories
-            else -> 0.0
-        }
+        get() = manual.foodCalories
+            ?: nutrition.calories.takeIf { nutrition.entries > 0 }
+            ?: health.nutritionCalories.takeIf { health.nutritionRecords > 0 }
+            ?: 0.0
 
     val finalProteinG: Double
-        get() = when {
-            manual.proteinG > 0.0 -> manual.proteinG
-            localNutrition.proteinG > 0.0 -> localNutrition.proteinG
-            health.nutritionProteinG > 0.0 -> health.nutritionProteinG
-            else -> 0.0
-        }
+        get() = manual.proteinG
+            ?: nutrition.proteinG.takeIf { nutrition.entries > 0 }
+            ?: health.nutritionProteinG.takeIf { health.nutritionRecords > 0 }
+            ?: 0.0
 
     val finalSodiumMg: Double
+        get() = manual.sodiumMg
+            ?: nutrition.sodiumMg.takeIf { nutrition.entries > 0 }
+            ?: health.nutritionSodiumMg.takeIf { health.nutritionRecords > 0 }
+            ?: 0.0
+
+    val deficitCalories: Double get() = finalBurnCalories - finalFoodCalories
+
+    val verdict: DayVerdict
         get() = when {
-            manual.sodiumMg > 0.0 -> manual.sodiumMg
-            localNutrition.sodiumMg > 0.0 -> localNutrition.sodiumMg
-            health.nutritionSodiumMg > 0.0 -> health.nutritionSodiumMg
-            else -> 0.0
+            deficitCalories >= 300.0 -> DayVerdict.CUT
+            deficitCalories <= -200.0 -> DayVerdict.SURPLUS
+            else -> DayVerdict.MAINTENANCE
+        }
+
+    val burnSource: String
+        get() = when {
+            manual.burnCalories != null -> "Manual override"
+            health.totalCalories > 0.0 -> "Health Connect total calories"
+            health.activeCalories > 0.0 -> "Health Connect active calories"
+            else -> "Missing"
         }
 
     val nutritionSource: String
         get() = when {
-            manual.foodCalories > 0.0 || manual.proteinG > 0.0 || manual.sodiumMg > 0.0 -> "Manual override"
-            localNutrition.entries > 0 -> "Offline barcode database"
+            manual.foodCalories != null || manual.proteinG != null || manual.sodiumMg != null -> "Manual override"
+            nutrition.entries > 0 -> "Offline food log"
             health.nutritionRecords > 0 -> "Health Connect nutrition"
             else -> "Missing"
         }
+}
 
-    val deficitCalories: Double
-        get() = finalBurnCalories - finalFoodCalories
+data class FoodLogSnapshot(
+    val id: Long = 0,
+    val date: LocalDate,
+    val barcode: String,
+    val productName: String,
+    val brand: String = "",
+    val servingLabel: String = "1 serving",
+    val quantity: Double = 1.0,
+    val caloriesPerServing: Double = 0.0,
+    val proteinGPerServing: Double = 0.0,
+    val sodiumMgPerServing: Double = 0.0,
+    val carbsGPerServing: Double = 0.0,
+    val fatGPerServing: Double = 0.0,
+    val sugarGPerServing: Double = 0.0,
+    val fiberGPerServing: Double = 0.0,
+    val saturatedFatGPerServing: Double = 0.0,
+    val loggedAt: Long = System.currentTimeMillis()
+) {
+    val calories: Double get() = caloriesPerServing * quantity
+    val proteinG: Double get() = proteinGPerServing * quantity
+    val sodiumMg: Double get() = sodiumMgPerServing * quantity
+}
 
-    val burnSource: String
-        get() = when {
-            manual.manualBurnCalories != null -> "Manual override"
-            health.totalCalories > 0.0 -> "Health Connect total calories"
-            health.activeCalories > 0.0 -> "Health Connect active calories only"
-            else -> "Missing"
-        }
+data class ProductWithExtras(
+    val product: ProductEntity,
+    val extras: List<ProductExtraNutrientEntity> = emptyList()
+)
 
-    fun toJson(): org.json.JSONObject = org.json.JSONObject().apply {
-        put("date", DATE_FORMAT.format(date))
-        put("steps", health.steps)
-        put("distanceKm", health.distanceKm)
-        put("activeCalories", health.activeCalories)
-        put("totalCalories", health.totalCalories)
-        put("exerciseSessions", health.exerciseSessions)
-        put("exerciseMinutes", health.exerciseMinutes)
-        put("nutritionCalories", health.nutritionCalories)
-        put("nutritionProteinG", health.nutritionProteinG)
-        put("nutritionSodiumMg", health.nutritionSodiumMg)
-        put("nutritionRecords", health.nutritionRecords)
-        put("healthConnectStatus", health.healthConnectStatus)
-        put("localCalories", localNutrition.calories)
-        put("localProteinG", localNutrition.proteinG)
-        put("localSodiumMg", localNutrition.sodiumMg)
-        put("localCarbsG", localNutrition.carbsG)
-        put("localFatG", localNutrition.fatG)
-        put("localSugarG", localNutrition.sugarG)
-        put("localFiberG", localNutrition.fiberG)
-        put("localSaturatedFatG", localNutrition.saturatedFatG)
-        put("localEntries", localNutrition.entries)
-        put("localExtras", org.json.JSONObject(localNutrition.extras))
-        put("foodCalories", manual.foodCalories)
-        put("proteinG", manual.proteinG)
-        put("sodiumMg", manual.sodiumMg)
-        put("manualBurnCalories", manual.manualBurnCalories ?: org.json.JSONObject.NULL)
-        put("notes", manual.notes)
-        put("savedAtEpochMs", savedAtEpochMs)
-    }
+data class FoodLogEdit(
+    val id: Long,
+    val quantity: Double,
+    val servingLabel: String,
+    val caloriesPerServing: Double,
+    val proteinGPerServing: Double,
+    val sodiumMgPerServing: Double,
+    val carbsGPerServing: Double,
+    val fatGPerServing: Double,
+    val sugarGPerServing: Double,
+    val fiberGPerServing: Double,
+    val saturatedFatGPerServing: Double
+)
 
-    companion object {
-        fun fromJson(json: org.json.JSONObject): DailyReport {
-            val manualBurn = if (json.isNull("manualBurnCalories")) null else json.optDouble("manualBurnCalories")
-            val extrasJson = json.optJSONObject("localExtras")
-            val extras = if (extrasJson == null) emptyMap() else extrasJson.keys().asSequence().associateWith { extrasJson.optString(it) }
-            return DailyReport(
-                date = LocalDate.parse(json.getString("date"), DATE_FORMAT),
-                health = HealthSummary(
-                    steps = json.optLong("steps", 0L),
-                    distanceKm = json.optDouble("distanceKm", 0.0),
-                    activeCalories = json.optDouble("activeCalories", 0.0),
-                    totalCalories = json.optDouble("totalCalories", 0.0),
-                    exerciseSessions = json.optInt("exerciseSessions", 0),
-                    exerciseMinutes = json.optLong("exerciseMinutes", 0L),
-                    nutritionCalories = json.optDouble("nutritionCalories", 0.0),
-                    nutritionProteinG = json.optDouble("nutritionProteinG", 0.0),
-                    nutritionSodiumMg = json.optDouble("nutritionSodiumMg", 0.0),
-                    nutritionRecords = json.optInt("nutritionRecords", 0),
-                    healthConnectStatus = json.optString("healthConnectStatus", "Loaded from local storage")
-                ),
-                localNutrition = LocalNutritionSummary(
-                    calories = json.optDouble("localCalories", 0.0),
-                    proteinG = json.optDouble("localProteinG", 0.0),
-                    sodiumMg = json.optDouble("localSodiumMg", 0.0),
-                    carbsG = json.optDouble("localCarbsG", 0.0),
-                    fatG = json.optDouble("localFatG", 0.0),
-                    sugarG = json.optDouble("localSugarG", 0.0),
-                    fiberG = json.optDouble("localFiberG", 0.0),
-                    saturatedFatG = json.optDouble("localSaturatedFatG", 0.0),
-                    entries = json.optInt("localEntries", 0),
-                    extras = extras
-                ),
-                manual = ManualEntry(
-                    foodCalories = json.optDouble("foodCalories", 0.0),
-                    proteinG = json.optDouble("proteinG", 0.0),
-                    sodiumMg = json.optDouble("sodiumMg", 0.0),
-                    manualBurnCalories = manualBurn,
-                    notes = json.optString("notes", "")
-                ),
-                savedAtEpochMs = json.optLong("savedAtEpochMs", System.currentTimeMillis())
-            )
-        }
-    }
+sealed interface ScannerResult {
+    data class Found(val barcode: String) : ScannerResult
+    data object Cancelled : ScannerResult
+    data class Failed(val reason: ScannerFailure) : ScannerResult
+}
+
+enum class ScannerFailure {
+    PERMISSION_DENIED,
+    CAMERA_UNAVAILABLE,
+    CAMERA_START_FAILED,
+    DECODER_FAILED
 }

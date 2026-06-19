@@ -1,58 +1,49 @@
-# Daily Cut Report — offline Android MVP
+# Daily Cut Report 0.7
 
-First prototype for a local daily fitness report generator.
+Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
-## What it does
+## Features
 
-- Reads daily steps, distance, active calories, total calories, and exercise-session count/minutes from Health Connect.
-- Lets you manually enter food calories, protein, sodium, notes, and an optional final-burn override.
-- Calculates final burn and estimated deficit/surplus.
-- Saves daily entries locally using app-private SharedPreferences.
-- Exports a PNG into `Pictures/DailyCutReport` and can share that PNG through Android's standard share sheet.
+- Material 3 Jetpack Compose UI with Today, Foods, and Settings destinations.
+- Shared historical date navigation with a calendar capped at today.
+- Foreground-only Health Connect refresh for steps, distance, calories, exercise, and optional nutrition.
+- On-device CameraX + bundled ML Kit barcode recognition.
+- Room product catalog, nutrient snapshots, editable food logs, and non-destructive schema migration.
+- Nullable manual overrides, including an explicit zero value.
+- PNG save through MediaStore on Android 10+, the system document picker on Android 9, and secure cache-backed sharing.
+- Browser-based tablet preview with matching manual workflows and versioned localStorage.
 
-## Offline guarantee
+## Offline contract
 
-The runtime Android manifest intentionally does **not** request:
+The final APK must not request either of these permissions:
 
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
+```text
+android.permission.INTERNET
+android.permission.ACCESS_NETWORK_STATE
 ```
 
-So the installed app cannot use normal Android internet sockets. It only talks to the local Health Connect provider on-device and writes a local image.
+ML Kit dependencies declare them transitively, so the app manifest explicitly removes them during manifest merging. The `verifyOfflineDebugApk` Gradle task inspects the assembled APK and fails if either permission returns. There is no cloud sync, remote telemetry, or background network work.
 
-## Current limitations
+## Build and verify
 
-- No FatSecret/FatHealth API integration, because that would require internet access.
-- Food data is manual in this MVP.
-- Per-source reconciliation is not implemented yet; Health Connect aggregates are used for cumulative data to reduce double counting.
-- On Android 9/10 devices, saving directly into shared Pictures may need additional storage handling. On modern Android versions it uses MediaStore.
-
-## Build
-
-1. Open this folder in Android Studio.
-2. Let Android Studio sync Gradle dependencies.
-3. Run on an Android device with Health Connect available.
-4. Connect your source apps to Health Connect first, for example Casio Watches → Health Connect, Google Fit → Health Connect.
-5. In the app, grant Health Connect permissions, refresh, enter food values, and export PNG.
-
-## Build command
-
-If you have Gradle and Android SDK configured:
+Use Java 17 and Android SDK/build tools 35:
 
 ```bash
-gradle :app:assembleDebug
+gradle --no-daemon testDebugUnitTest lintDebug verifyOfflineDebugApk
+node --test tablet-preview/model.test.js
 ```
 
-or add a Gradle wrapper from Android Studio and run:
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk` and uses the existing stable debug signing identity.
 
-```bash
-./gradlew :app:assembleDebug
-```
+## Data upgrades
 
-## Main files
+Database version 2 migrates existing product and food-log data without deleting history. Legacy `daily_reports` SharedPreferences are imported once into Room and retained as rollback data. Historical food entries are immutable product snapshots, so later product edits cannot alter or delete previous days.
 
-- `MainActivity.kt`: UI and workflow.
-- `HealthConnectManager.kt`: Health Connect permission and read logic.
-- `LocalStore.kt`: local per-day storage.
-- `ReportImageExporter.kt`: local PNG rendering and MediaStore export.
-- `PermissionsRationaleActivity.kt`: Health Connect permission rationale screen.
+## Main components
+
+- `DailyCutApp.kt`: Compose navigation and workflows.
+- `ViewModels.kt`: shared date and screen state.
+- `DailyCutRepository.kt`: application data boundary.
+- `NutritionDatabase.kt`: Room schema, DAO, and v1→v2 migration.
+- `BarcodeScanner.kt`: lifecycle-safe on-device scanner.
+- `ReportImageExporter.kt`: dynamic local PNG rendering and storage.

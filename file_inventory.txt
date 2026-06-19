@@ -1,17 +1,32 @@
-/mnt/data/DailyCutReport/README.md
-/mnt/data/DailyCutReport/app/build.gradle.kts
-/mnt/data/DailyCutReport/app/src/main/AndroidManifest.xml
-/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/HealthConnectManager.kt
-/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/LocalStore.kt
-/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/MainActivity.kt
-/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/Models.kt
-/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/PermissionsRationaleActivity.kt
-/mnt/data/DailyCutReport/app/src/main/java/com/littleone/dailycutreport/ReportImageExporter.kt
-/mnt/data/DailyCutReport/app/src/main/res/values/colors.xml
-/mnt/data/DailyCutReport/app/src/main/res/values/strings.xml
-/mnt/data/DailyCutReport/app/src/main/res/values/styles.xml
-/mnt/data/DailyCutReport/app/src/main/res/xml/file_paths.xml
-/mnt/data/DailyCutReport/build.gradle.kts
-/mnt/data/DailyCutReport/file_inventory.txt
-/mnt/data/DailyCutReport/gradle.properties
-/mnt/data/DailyCutReport/settings.gradle.kts
+DailyCutReport 0.7 inventory
+
+Android application
+- app/src/main/AndroidManifest.xml
+- app/src/main/java/com/littleone/dailycutreport/AppContainer.kt
+- app/src/main/java/com/littleone/dailycutreport/MainActivity.kt
+- app/src/main/java/com/littleone/dailycutreport/DailyCutApp.kt
+- app/src/main/java/com/littleone/dailycutreport/ViewModels.kt
+- app/src/main/java/com/littleone/dailycutreport/DailyCutRepository.kt
+- app/src/main/java/com/littleone/dailycutreport/Models.kt
+- app/src/main/java/com/littleone/dailycutreport/NutritionDatabase.kt
+- app/src/main/java/com/littleone/dailycutreport/LegacyReportImporter.kt
+- app/src/main/java/com/littleone/dailycutreport/HealthConnectManager.kt
+- app/src/main/java/com/littleone/dailycutreport/BarcodeScanner.kt
+- app/src/main/java/com/littleone/dailycutreport/ReportImageExporter.kt
+- app/src/main/java/com/littleone/dailycutreport/PermissionsRationaleActivity.kt
+
+Browser preview
+- tablet-preview/index.html
+- tablet-preview/styles.css
+- tablet-preview/model.js
+- tablet-preview/app.js
+- tablet-preview/model.test.js
+
+Build and delivery
+- build.gradle.kts
+- app/build.gradle.kts
+- gradle.properties
+- settings.gradle.kts
+- .github/workflows/build-debug-apk.yml
+- README.md
+- TABLET_BUILD.md

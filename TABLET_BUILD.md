@@ -1,42 +1,20 @@
-# Tablet-only build route
+# Tablet build and preview
 
-This project is Android source code. Since you are on a tablet and do not have Android Studio, use GitHub Actions to compile the APK.
+## Build the Android APK with GitHub Actions
 
-The installed app still has **no internet permission**. The build server uses internet only to download Android/Gradle dependencies and produce the APK.
+1. Upload the repository with `app/`, `tablet-preview/`, Gradle files, and `.github/workflows/` at the root.
+2. Open **Actions → Build debug APK → Run workflow**.
+3. The workflow runs Android unit/migration tests, lint, browser tests, and packaged-permission verification.
+4. Download `DailyCutReport-debug-apk` from the completed run and install `app-debug.apk`.
 
-## Steps from a tablet
+Android may request permission to install unknown apps. Enable it only for the installer used, then turn it off again.
 
-1. Download and unzip `DailyCutReport_tablet_build.zip`.
-2. On GitHub, create a new private repository, for example `DailyCutReport`.
-3. Upload the project files to the repository root. Make sure these files/folders are at the top level:
-   - `app/`
-   - `.github/workflows/build-debug-apk.yml`
-   - `build.gradle.kts`
-   - `settings.gradle.kts`
-   - `gradle.properties`
-4. Open the repository on GitHub.
-5. Go to **Actions**.
-6. Open **Build debug APK**.
-7. Tap **Run workflow**.
-8. After it finishes, open the completed workflow run.
-9. Download the artifact named `DailyCutReport-debug-apk`.
-10. Unzip the artifact on your tablet.
-11. Install the `app-debug.apk` file.
+## Use the browser preview
 
-## Android install note
+Open `tablet-preview/index.html` directly in a modern browser. It provides the redesigned Today, Foods, Settings, product catalog, per-date food logs, editing, and PNG export without a server.
 
-Android may ask you to allow installing unknown apps from your browser or file manager. Allow it only for this install, then disable it again afterward.
+The preview cannot access Health Connect or the native camera scanner. Those controls clearly direct users to the Android APK. Preview data stays in versioned `dcr_v2` localStorage, and its Content Security Policy blocks network connections.
 
-## App network policy
+## Offline verification
 
-The Android manifest intentionally does not include:
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
-
-So the installed APK should not have network socket access.
-
-## If GitHub upload from mobile is annoying
-
-Use the included `tablet-preview/index.html` for a manual-only preview. It runs in the browser without internet and can export the daily report as a PNG, but it cannot access Health Connect. Health Connect requires the native Android APK.
+The source manifest removes dependency-added `INTERNET` and `ACCESS_NETWORK_STATE` permissions. The workflow does not publish an APK unless `verifyOfflineDebugApk` confirms that both permissions are absent from the packaged artifact.

@@ -1,8 +1,11 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
-<uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
     <uses-permission android:name="android.permission.health.READ_DISTANCE" />
     <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
     <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
@@ -15,6 +18,7 @@
     </queries>
 
     <application
+        android:name=".DailyCutApplication"
         android:allowBackup="true"
         android:usesCleartextTraffic="false"
         android:theme="@style/AppTheme"
@@ -51,12 +55,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-        <activity
-            android:name=".BarcodeScannerActivity"
-            android:screenOrientation="portrait"
-            android:exported="false" />
-
-
         <activity
             android:name=".MainActivity"
             android:screenOrientation="portrait"

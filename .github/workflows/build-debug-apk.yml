@@ -3,7 +3,8 @@ name: Build debug APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
+  pull_request:
 
 permissions:
   contents: read
@@ -12,9 +13,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
@@ -24,6 +24,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -43,8 +48,17 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      - name: Test browser preview model
+        run: node tablet-preview/model.test.js
+
+      - name: Test Android logic and migrations
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Run Android lint
+        run: gradle --no-daemon lintDebug
+
+      - name: Build and verify strict offline APK
+        run: gradle --no-daemon verifyOfflineDebugApk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
