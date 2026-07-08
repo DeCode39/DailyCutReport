@@ -13,7 +13,9 @@ Android may request permission to install unknown apps. Enable it only for the i
 
 Open `tablet-preview/index.html` directly in a modern browser. It provides the redesigned Today, Foods, Settings, product catalog, per-date food logs, editing, and PNG export without a server.
 
-The preview cannot access Health Connect or the native camera scanner. Those controls clearly direct users to the Android APK. Preview data stays in versioned `dcr_v2` localStorage, and its Content Security Policy blocks network connections.
+The preview cannot access Health Connect, native camera scanning, or nutrition-label OCR. Those controls direct users to the Android APK. Preview data stays in versioned `dcr_v3` localStorage, and its Content Security Policy blocks network connections.
+
+The preview imports the same 17 additive catalog products and supports optional barcodes. Settings can export or restore password-encrypted `.dcrbackup` files compatible with Android. Restore validates and authenticates the file before replacing current preview data.
 
 ## Offline verification
 

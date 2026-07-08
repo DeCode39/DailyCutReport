@@ -1,7 +1,6 @@
 package com.littleone.dailycutreport
 
 import android.content.Context
-import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -20,9 +19,10 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "products")
+@Entity(tableName = "products", indices = [Index(value = ["barcode"], unique = true)])
 data class ProductEntity(
-    @PrimaryKey val barcode: String,
+    @PrimaryKey val productId: String,
+    val barcode: String? = null,
     val name: String,
     val brand: String = "",
     val servingLabel: String = "1 serving",
@@ -41,17 +41,17 @@ data class ProductEntity(
 
 @Entity(
     tableName = "product_extra_nutrients",
-    primaryKeys = ["barcode", "name"],
+    primaryKeys = ["productId", "name"],
     foreignKeys = [ForeignKey(
         entity = ProductEntity::class,
-        parentColumns = ["barcode"],
-        childColumns = ["barcode"],
+        parentColumns = ["productId"],
+        childColumns = ["productId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("barcode")]
+    indices = [Index("productId")]
 )
 data class ProductExtraNutrientEntity(
-    val barcode: String,
+    val productId: String,
     val name: String,
     val value: Double,
     val unit: String
@@ -79,11 +79,15 @@ data class DailyReportEntity(
     val savedAtEpochMs: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "daily_food_logs", indices = [Index("date"), Index("barcode")])
+@Entity(
+    tableName = "daily_food_logs",
+    indices = [Index("date"), Index("productId"), Index("barcode")]
+)
 data class DailyFoodLogEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val date: String,
-    val barcode: String,
+    val productId: String? = null,
+    val barcode: String? = null,
     val productName: String,
     val brand: String = "",
     val servingLabel: String = "1 serving",
@@ -137,43 +141,63 @@ data class ExtraNutrientTotal(val name: String, val unit: String, val value: Dou
 @Dao
 interface NutritionDao {
     @Upsert suspend fun upsertProduct(product: ProductEntity)
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertExtraNutrients(nutrients: List<ProductExtraNutrientEntity>)
-    @Query("DELETE FROM product_extra_nutrients WHERE barcode = :barcode")
-    suspend fun clearExtraNutrients(barcode: String)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertProductIfMissing(product: ProductEntity): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertExtraNutrients(nutrients: List<ProductExtraNutrientEntity>)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertExtraNutrientsIfMissing(nutrients: List<ProductExtraNutrientEntity>)
+    @Query("DELETE FROM product_extra_nutrients WHERE productId = :productId")
+    suspend fun clearExtraNutrients(productId: String)
+    @Query("SELECT * FROM products WHERE productId = :productId LIMIT 1")
+    suspend fun productById(productId: String): ProductEntity?
     @Query("SELECT * FROM products WHERE barcode = :barcode LIMIT 1")
     suspend fun productByBarcode(barcode: String): ProductEntity?
-    @Query("SELECT * FROM product_extra_nutrients WHERE barcode = :barcode ORDER BY name")
-    suspend fun extrasForProduct(barcode: String): List<ProductExtraNutrientEntity>
-    @Query("SELECT * FROM products WHERE name LIKE '%' || :query || '%' OR brand LIKE '%' || :query || '%' OR barcode LIKE '%' || :query || '%' ORDER BY name LIMIT 100")
+    @Query("SELECT * FROM product_extra_nutrients WHERE productId = :productId ORDER BY name")
+    suspend fun extrasForProduct(productId: String): List<ProductExtraNutrientEntity>
+    @Query("SELECT * FROM products WHERE name LIKE '%' || :query || '%' OR brand LIKE '%' || :query || '%' OR COALESCE(barcode, '') LIKE '%' || :query || '%' ORDER BY name LIMIT 100")
     fun observeProducts(query: String): Flow<List<ProductEntity>>
+
+    @Query("SELECT * FROM products ORDER BY productId") suspend fun allProducts(): List<ProductEntity>
+    @Query("SELECT * FROM product_extra_nutrients ORDER BY productId, name") suspend fun allProductExtras(): List<ProductExtraNutrientEntity>
+    @Query("SELECT * FROM daily_reports ORDER BY date") suspend fun allDailyReports(): List<DailyReportEntity>
+    @Query("SELECT * FROM daily_food_logs ORDER BY id") suspend fun allFoodLogs(): List<DailyFoodLogEntity>
+    @Query("SELECT * FROM daily_extra_nutrient_logs ORDER BY id") suspend fun allDailyExtras(): List<DailyExtraNutrientLogEntity>
 
     @Transaction
     suspend fun saveProductWithExtras(product: ProductEntity, extras: List<ProductExtraNutrientEntity>) {
-        val existing = productByBarcode(product.barcode)
+        val existing = productById(product.productId)
         upsertProduct(product.copy(
             createdAt = existing?.createdAt ?: product.createdAt,
             updatedAt = System.currentTimeMillis()
         ))
-        clearExtraNutrients(product.barcode)
+        clearExtraNutrients(product.productId)
         if (extras.isNotEmpty()) upsertExtraNutrients(extras)
     }
 
+    @Transaction
+    suspend fun importSeedProducts(products: List<ProductWithExtras>, markerKey: String) {
+        if (metadata(markerKey) == "complete") return
+        products.forEach { item ->
+            if (insertProductIfMissing(item.product) != -1L && item.extras.isNotEmpty()) {
+                insertExtraNutrientsIfMissing(item.extras)
+            }
+        }
+        upsertMetadata(AppMetadataEntity(markerKey, "complete"))
+    }
+
     @Insert suspend fun insertFoodLog(log: DailyFoodLogEntity): Long
+    @Insert suspend fun insertFoodLogs(logs: List<DailyFoodLogEntity>)
     @Insert suspend fun insertDailyExtraLogs(logs: List<DailyExtraNutrientLogEntity>)
     @Update suspend fun updateFoodLog(log: DailyFoodLogEntity)
-    @Query("SELECT * FROM daily_food_logs WHERE id = :id LIMIT 1")
-    suspend fun foodLogById(id: Long): DailyFoodLogEntity?
-    @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC")
-    fun observeLogsForDate(date: String): Flow<List<DailyFoodLogEntity>>
-    @Query("DELETE FROM daily_food_logs WHERE id = :id")
-    suspend fun deleteLog(id: Long)
+    @Query("SELECT * FROM daily_food_logs WHERE id = :id LIMIT 1") suspend fun foodLogById(id: Long): DailyFoodLogEntity?
+    @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC") suspend fun foodLogsForDate(date: String): List<DailyFoodLogEntity>
+    @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC") fun observeLogsForDate(date: String): Flow<List<DailyFoodLogEntity>>
+    @Query("DELETE FROM daily_food_logs WHERE id = :id") suspend fun deleteLog(id: Long)
 
     @Transaction
     suspend fun addProductToDate(date: String, product: ProductEntity, quantity: Double, extras: List<ProductExtraNutrientEntity>) {
         val logId = insertFoodLog(
             DailyFoodLogEntity(
                 date = date,
+                productId = product.productId,
                 barcode = product.barcode,
                 productName = product.name,
                 brand = product.brand,
@@ -189,16 +213,13 @@ interface NutritionDao {
                 saturatedFatGPerServing = product.saturatedFatG
             )
         )
-        if (extras.isNotEmpty()) {
-            insertDailyExtraLogs(extras.map {
-                DailyExtraNutrientLogEntity(logId = logId, name = it.name, valuePerServing = it.value, unit = it.unit)
-            })
-        }
+        if (extras.isNotEmpty()) insertDailyExtraLogs(extras.map {
+            DailyExtraNutrientLogEntity(logId = logId, name = it.name, valuePerServing = it.value, unit = it.unit)
+        })
     }
 
     @Query("""
-        SELECT
-            COALESCE(SUM(caloriesPerServing * quantity), 0.0) AS calories,
+        SELECT COALESCE(SUM(caloriesPerServing * quantity), 0.0) AS calories,
             COALESCE(SUM(proteinGPerServing * quantity), 0.0) AS proteinG,
             COALESCE(SUM(sodiumMgPerServing * quantity), 0.0) AS sodiumMg,
             COALESCE(SUM(carbsGPerServing * quantity), 0.0) AS carbsG,
@@ -206,47 +227,82 @@ interface NutritionDao {
             COALESCE(SUM(sugarGPerServing * quantity), 0.0) AS sugarG,
             COALESCE(SUM(fiberGPerServing * quantity), 0.0) AS fiberG,
             COALESCE(SUM(saturatedFatGPerServing * quantity), 0.0) AS saturatedFatG,
-            COUNT(*) AS entries
-        FROM daily_food_logs WHERE date = :date
-    """)
-    fun observeTotalsForDate(date: String): Flow<DailyNutritionTotals>
+            COUNT(*) AS entries FROM daily_food_logs WHERE date = :date
+    """) fun observeTotalsForDate(date: String): Flow<DailyNutritionTotals>
+
+    @Query("""
+        SELECT COALESCE(SUM(caloriesPerServing * quantity), 0.0) AS calories,
+            COALESCE(SUM(proteinGPerServing * quantity), 0.0) AS proteinG,
+            COALESCE(SUM(sodiumMgPerServing * quantity), 0.0) AS sodiumMg,
+            COALESCE(SUM(carbsGPerServing * quantity), 0.0) AS carbsG,
+            COALESCE(SUM(fatGPerServing * quantity), 0.0) AS fatG,
+            COALESCE(SUM(sugarGPerServing * quantity), 0.0) AS sugarG,
+            COALESCE(SUM(fiberGPerServing * quantity), 0.0) AS fiberG,
+            COALESCE(SUM(saturatedFatGPerServing * quantity), 0.0) AS saturatedFatG,
+            COUNT(*) AS entries FROM daily_food_logs WHERE date = :date
+    """) suspend fun totalsForDate(date: String): DailyNutritionTotals
 
     @Query("""
         SELECT e.name, e.unit, COALESCE(SUM(e.valuePerServing * f.quantity), 0.0) AS value
-        FROM daily_extra_nutrient_logs e
-        JOIN daily_food_logs f ON f.id = e.logId
-        WHERE f.date = :date
-        GROUP BY e.name, e.unit ORDER BY e.name
-    """)
-    fun observeExtraTotalsForDate(date: String): Flow<List<ExtraNutrientTotal>>
+        FROM daily_extra_nutrient_logs e JOIN daily_food_logs f ON f.id = e.logId
+        WHERE f.date = :date GROUP BY e.name, e.unit ORDER BY e.name
+    """) fun observeExtraTotalsForDate(date: String): Flow<List<ExtraNutrientTotal>>
 
-    @Query("SELECT * FROM daily_reports WHERE date = :date LIMIT 1")
-    fun observeDailyReport(date: String): Flow<DailyReportEntity?>
-    @Query("SELECT * FROM daily_reports WHERE date = :date LIMIT 1")
-    suspend fun dailyReport(date: String): DailyReportEntity?
+    @Query("SELECT * FROM daily_reports WHERE date = :date LIMIT 1") fun observeDailyReport(date: String): Flow<DailyReportEntity?>
+    @Query("SELECT * FROM daily_reports WHERE date = :date LIMIT 1") suspend fun dailyReport(date: String): DailyReportEntity?
     @Upsert suspend fun upsertDailyReport(report: DailyReportEntity)
+    @Insert suspend fun insertDailyReports(reports: List<DailyReportEntity>)
 
-    @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1")
-    suspend fun metadata(key: String): String?
+    @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1") suspend fun metadata(key: String): String?
     @Upsert suspend fun upsertMetadata(metadata: AppMetadataEntity)
+    @Query("""
+        UPDATE daily_reports
+        SET manualFoodCalories = NULL,
+            manualProteinG = NULL,
+            manualSodiumMg = NULL,
+            manualBurnCalories = NULL,
+            notes = '',
+            savedAtEpochMs = :updatedAt
+        WHERE manualFoodCalories IS NOT NULL
+            OR manualProteinG IS NOT NULL
+            OR manualSodiumMg IS NOT NULL
+            OR manualBurnCalories IS NOT NULL
+            OR notes != ''
+    """) suspend fun clearManualOverrides(updatedAt: Long = System.currentTimeMillis())
 
     @Transaction
     suspend fun importLegacyReports(reports: List<DailyReportEntity>) {
         reports.forEach { upsertDailyReport(it) }
         upsertMetadata(AppMetadataEntity(LegacyReportImporter.IMPORT_KEY, "complete"))
     }
+
+    @Query("DELETE FROM daily_extra_nutrient_logs") suspend fun clearDailyExtras()
+    @Query("DELETE FROM daily_food_logs") suspend fun clearFoodLogs()
+    @Query("DELETE FROM daily_reports") suspend fun clearDailyReports()
+    @Query("DELETE FROM product_extra_nutrients") suspend fun clearProductExtras()
+    @Query("DELETE FROM products") suspend fun clearProducts()
+
+    @Transaction
+    suspend fun replaceUserData(
+        products: List<ProductEntity>,
+        productExtras: List<ProductExtraNutrientEntity>,
+        reports: List<DailyReportEntity>,
+        foodLogs: List<DailyFoodLogEntity>,
+        dailyExtras: List<DailyExtraNutrientLogEntity>
+    ) {
+        clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts()
+        products.forEach { upsertProduct(it) }
+        if (productExtras.isNotEmpty()) upsertExtraNutrients(productExtras)
+        if (reports.isNotEmpty()) insertDailyReports(reports)
+        if (foodLogs.isNotEmpty()) insertFoodLogs(foodLogs)
+        if (dailyExtras.isNotEmpty()) insertDailyExtraLogs(dailyExtras)
+    }
 }
 
 @Database(
-    entities = [
-        ProductEntity::class,
-        ProductExtraNutrientEntity::class,
-        DailyReportEntity::class,
-        DailyFoodLogEntity::class,
-        DailyExtraNutrientLogEntity::class,
-        AppMetadataEntity::class
-    ],
-    version = 2,
+    entities = [ProductEntity::class, ProductExtraNutrientEntity::class, DailyReportEntity::class,
+        DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class],
+    version = 3,
     exportSchema = false
 )
 abstract class NutritionDatabase : RoomDatabase() {
@@ -257,74 +313,49 @@ abstract class NutritionDatabase : RoomDatabase() {
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("""
-                    CREATE TABLE IF NOT EXISTS `daily_reports` (
-                        `date` TEXT NOT NULL, `steps` INTEGER NOT NULL, `distanceKm` REAL NOT NULL,
-                        `activeCalories` REAL NOT NULL, `totalCalories` REAL NOT NULL,
-                        `exerciseSessions` INTEGER NOT NULL, `exerciseMinutes` INTEGER NOT NULL,
-                        `nutritionCalories` REAL NOT NULL, `nutritionProteinG` REAL NOT NULL,
-                        `nutritionSodiumMg` REAL NOT NULL, `nutritionRecords` INTEGER NOT NULL,
-                        `healthConnectStatus` TEXT NOT NULL, `manualFoodCalories` REAL,
-                        `manualProteinG` REAL, `manualSodiumMg` REAL, `manualBurnCalories` REAL,
-                        `notes` TEXT NOT NULL, `savedAtEpochMs` INTEGER NOT NULL,
-                        PRIMARY KEY(`date`)
-                    )
-                """.trimIndent())
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `daily_reports` (`date` TEXT NOT NULL, `steps` INTEGER NOT NULL, `distanceKm` REAL NOT NULL, `activeCalories` REAL NOT NULL, `totalCalories` REAL NOT NULL, `exerciseSessions` INTEGER NOT NULL, `exerciseMinutes` INTEGER NOT NULL, `nutritionCalories` REAL NOT NULL, `nutritionProteinG` REAL NOT NULL, `nutritionSodiumMg` REAL NOT NULL, `nutritionRecords` INTEGER NOT NULL, `healthConnectStatus` TEXT NOT NULL, `manualFoodCalories` REAL, `manualProteinG` REAL, `manualSodiumMg` REAL, `manualBurnCalories` REAL, `notes` TEXT NOT NULL, `savedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`date`))""")
                 db.execSQL("CREATE TABLE IF NOT EXISTS `app_metadata` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
-                db.execSQL("""
-                    CREATE TABLE `daily_food_logs_new` (
-                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `date` TEXT NOT NULL,
-                        `barcode` TEXT NOT NULL, `productName` TEXT NOT NULL, `brand` TEXT NOT NULL,
-                        `servingLabel` TEXT NOT NULL, `quantity` REAL NOT NULL,
-                        `caloriesPerServing` REAL NOT NULL, `proteinGPerServing` REAL NOT NULL,
-                        `sodiumMgPerServing` REAL NOT NULL, `carbsGPerServing` REAL NOT NULL,
-                        `fatGPerServing` REAL NOT NULL, `sugarGPerServing` REAL NOT NULL,
-                        `fiberGPerServing` REAL NOT NULL, `saturatedFatGPerServing` REAL NOT NULL,
-                        `loggedAt` INTEGER NOT NULL
-                    )
-                """.trimIndent())
-                db.execSQL("""
-                    INSERT INTO daily_food_logs_new
-                    SELECT id, date, barcode, productName, brand, servingLabel, quantity,
-                        CASE WHEN quantity > 0 THEN calories / quantity ELSE calories END,
-                        CASE WHEN quantity > 0 THEN proteinG / quantity ELSE proteinG END,
-                        CASE WHEN quantity > 0 THEN sodiumMg / quantity ELSE sodiumMg END,
-                        CASE WHEN quantity > 0 THEN carbsG / quantity ELSE carbsG END,
-                        CASE WHEN quantity > 0 THEN fatG / quantity ELSE fatG END,
-                        CASE WHEN quantity > 0 THEN sugarG / quantity ELSE sugarG END,
-                        CASE WHEN quantity > 0 THEN fiberG / quantity ELSE fiberG END,
-                        CASE WHEN quantity > 0 THEN saturatedFatG / quantity ELSE saturatedFatG END,
-                        loggedAt FROM daily_food_logs
-                """.trimIndent())
-                db.execSQL("""
-                    CREATE TABLE `daily_extra_nutrient_logs_new` (
-                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `logId` INTEGER NOT NULL,
-                        `name` TEXT NOT NULL, `valuePerServing` REAL NOT NULL, `unit` TEXT NOT NULL,
-                        FOREIGN KEY(`logId`) REFERENCES `daily_food_logs_new`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-                    )
-                """.trimIndent())
-                db.execSQL("""
-                    INSERT INTO daily_extra_nutrient_logs_new
-                    SELECT e.id, e.logId, e.name,
-                        CASE WHEN f.quantity > 0 THEN e.value / f.quantity ELSE e.value END,
-                        e.unit
-                    FROM daily_extra_nutrient_logs e JOIN daily_food_logs f ON f.id = e.logId
-                """.trimIndent())
-                db.execSQL("DROP TABLE daily_extra_nutrient_logs")
-                db.execSQL("DROP TABLE daily_food_logs")
-                db.execSQL("ALTER TABLE daily_food_logs_new RENAME TO daily_food_logs")
-                db.execSQL("ALTER TABLE daily_extra_nutrient_logs_new RENAME TO daily_extra_nutrient_logs")
+                db.execSQL("""CREATE TABLE `daily_food_logs_new` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `date` TEXT NOT NULL, `barcode` TEXT NOT NULL, `productName` TEXT NOT NULL, `brand` TEXT NOT NULL, `servingLabel` TEXT NOT NULL, `quantity` REAL NOT NULL, `caloriesPerServing` REAL NOT NULL, `proteinGPerServing` REAL NOT NULL, `sodiumMgPerServing` REAL NOT NULL, `carbsGPerServing` REAL NOT NULL, `fatGPerServing` REAL NOT NULL, `sugarGPerServing` REAL NOT NULL, `fiberGPerServing` REAL NOT NULL, `saturatedFatGPerServing` REAL NOT NULL, `loggedAt` INTEGER NOT NULL)""")
+                db.execSQL("""INSERT INTO daily_food_logs_new SELECT id,date,barcode,productName,brand,servingLabel,quantity,CASE WHEN quantity>0 THEN calories/quantity ELSE calories END,CASE WHEN quantity>0 THEN proteinG/quantity ELSE proteinG END,CASE WHEN quantity>0 THEN sodiumMg/quantity ELSE sodiumMg END,CASE WHEN quantity>0 THEN carbsG/quantity ELSE carbsG END,CASE WHEN quantity>0 THEN fatG/quantity ELSE fatG END,CASE WHEN quantity>0 THEN sugarG/quantity ELSE sugarG END,CASE WHEN quantity>0 THEN fiberG/quantity ELSE fiberG END,CASE WHEN quantity>0 THEN saturatedFatG/quantity ELSE saturatedFatG END,loggedAt FROM daily_food_logs""")
+                db.execSQL("""CREATE TABLE `daily_extra_nutrient_logs_new` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `logId` INTEGER NOT NULL, `name` TEXT NOT NULL, `valuePerServing` REAL NOT NULL, `unit` TEXT NOT NULL, FOREIGN KEY(`logId`) REFERENCES `daily_food_logs_new`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)""")
+                db.execSQL("""INSERT INTO daily_extra_nutrient_logs_new SELECT e.id,e.logId,e.name,CASE WHEN f.quantity>0 THEN e.value/f.quantity ELSE e.value END,e.unit FROM daily_extra_nutrient_logs e JOIN daily_food_logs f ON f.id=e.logId""")
+                db.execSQL("DROP TABLE daily_extra_nutrient_logs"); db.execSQL("DROP TABLE daily_food_logs")
+                db.execSQL("ALTER TABLE daily_food_logs_new RENAME TO daily_food_logs"); db.execSQL("ALTER TABLE daily_extra_nutrient_logs_new RENAME TO daily_extra_nutrient_logs")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_daily_food_logs_date` ON `daily_food_logs` (`date`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_daily_food_logs_barcode` ON `daily_food_logs` (`barcode`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_daily_extra_nutrient_logs_logId` ON `daily_extra_nutrient_logs` (`logId`)")
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE `products_new` (`productId` TEXT NOT NULL, `barcode` TEXT, `name` TEXT NOT NULL, `brand` TEXT NOT NULL, `servingLabel` TEXT NOT NULL, `calories` REAL NOT NULL, `proteinG` REAL NOT NULL, `sodiumMg` REAL NOT NULL, `carbsG` REAL NOT NULL, `fatG` REAL NOT NULL, `sugarG` REAL NOT NULL, `fiberG` REAL NOT NULL, `saturatedFatG` REAL NOT NULL, `notes` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`productId`))""")
+                db.execSQL("""INSERT INTO products_new SELECT barcode,CASE WHEN length(barcode) BETWEEN 8 AND 14 AND barcode NOT GLOB '*[^0-9]*' THEN barcode ELSE NULL END,name,brand,servingLabel,calories,proteinG,sodiumMg,carbsG,fatG,sugarG,fiberG,saturatedFatG,notes,createdAt,updatedAt FROM products""")
+                db.execSQL("""CREATE TABLE `product_extra_nutrients_backup` (`productId` TEXT NOT NULL, `name` TEXT NOT NULL, `value` REAL NOT NULL, `unit` TEXT NOT NULL)""")
+                db.execSQL("INSERT INTO product_extra_nutrients_backup SELECT barcode,name,value,unit FROM product_extra_nutrients")
+                db.execSQL("""CREATE TABLE `daily_food_logs_new` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `date` TEXT NOT NULL, `productId` TEXT, `barcode` TEXT, `productName` TEXT NOT NULL, `brand` TEXT NOT NULL, `servingLabel` TEXT NOT NULL, `quantity` REAL NOT NULL, `caloriesPerServing` REAL NOT NULL, `proteinGPerServing` REAL NOT NULL, `sodiumMgPerServing` REAL NOT NULL, `carbsGPerServing` REAL NOT NULL, `fatGPerServing` REAL NOT NULL, `sugarGPerServing` REAL NOT NULL, `fiberGPerServing` REAL NOT NULL, `saturatedFatGPerServing` REAL NOT NULL, `loggedAt` INTEGER NOT NULL)""")
+                db.execSQL("""INSERT INTO daily_food_logs_new SELECT id,date,barcode,CASE WHEN length(barcode) BETWEEN 8 AND 14 AND barcode NOT GLOB '*[^0-9]*' THEN barcode ELSE NULL END,productName,brand,servingLabel,quantity,caloriesPerServing,proteinGPerServing,sodiumMgPerServing,carbsGPerServing,fatGPerServing,sugarGPerServing,fiberGPerServing,saturatedFatGPerServing,loggedAt FROM daily_food_logs""")
+                db.execSQL("""CREATE TABLE `daily_extra_nutrient_logs_backup` (`id` INTEGER NOT NULL, `logId` INTEGER NOT NULL, `name` TEXT NOT NULL, `valuePerServing` REAL NOT NULL, `unit` TEXT NOT NULL)""")
+                db.execSQL("INSERT INTO daily_extra_nutrient_logs_backup SELECT id,logId,name,valuePerServing,unit FROM daily_extra_nutrient_logs")
+                db.execSQL("DROP TABLE product_extra_nutrients"); db.execSQL("DROP TABLE products"); db.execSQL("DROP TABLE daily_extra_nutrient_logs"); db.execSQL("DROP TABLE daily_food_logs")
+                db.execSQL("ALTER TABLE products_new RENAME TO products"); db.execSQL("ALTER TABLE daily_food_logs_new RENAME TO daily_food_logs")
+                db.execSQL("""CREATE TABLE `product_extra_nutrients` (`productId` TEXT NOT NULL, `name` TEXT NOT NULL, `value` REAL NOT NULL, `unit` TEXT NOT NULL, PRIMARY KEY(`productId`,`name`), FOREIGN KEY(`productId`) REFERENCES `products`(`productId`) ON UPDATE NO ACTION ON DELETE CASCADE)""")
+                db.execSQL("INSERT INTO product_extra_nutrients SELECT productId,name,value,unit FROM product_extra_nutrients_backup")
+                db.execSQL("""CREATE TABLE `daily_extra_nutrient_logs` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `logId` INTEGER NOT NULL, `name` TEXT NOT NULL, `valuePerServing` REAL NOT NULL, `unit` TEXT NOT NULL, FOREIGN KEY(`logId`) REFERENCES `daily_food_logs`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)""")
+                db.execSQL("INSERT INTO daily_extra_nutrient_logs SELECT id,logId,name,valuePerServing,unit FROM daily_extra_nutrient_logs_backup")
+                db.execSQL("DROP TABLE product_extra_nutrients_backup"); db.execSQL("DROP TABLE daily_extra_nutrient_logs_backup")
+                db.execSQL("CREATE UNIQUE INDEX `index_products_barcode` ON `products` (`barcode`)")
+                db.execSQL("CREATE INDEX `index_product_extra_nutrients_productId` ON `product_extra_nutrients` (`productId`)")
+                db.execSQL("CREATE INDEX `index_daily_food_logs_date` ON `daily_food_logs` (`date`)")
+                db.execSQL("CREATE INDEX `index_daily_food_logs_productId` ON `daily_food_logs` (`productId`)")
+                db.execSQL("CREATE INDEX `index_daily_food_logs_barcode` ON `daily_food_logs` (`barcode`)")
+                db.execSQL("CREATE INDEX `index_daily_extra_nutrient_logs_logId` ON `daily_extra_nutrient_logs` (`logId`)")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
-                .addMigrations(MIGRATION_1_2)
-                .build()
-                .also { INSTANCE = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
         }
     }
 }

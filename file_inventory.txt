@@ -1,4 +1,4 @@
-DailyCutReport 0.7 inventory
+DailyCutReport 0.8.4 inventory
 
 Android application
 - app/src/main/AndroidManifest.xml
@@ -9,6 +9,14 @@ Android application
 - app/src/main/java/com/littleone/dailycutreport/DailyCutRepository.kt
 - app/src/main/java/com/littleone/dailycutreport/Models.kt
 - app/src/main/java/com/littleone/dailycutreport/NutritionDatabase.kt
+- app/src/main/java/com/littleone/dailycutreport/ProductCatalogImporter.kt
+- app/src/main/assets/preloaded_products.json
+- app/src/main/java/com/littleone/dailycutreport/OcrModels.kt
+- app/src/main/java/com/littleone/dailycutreport/NutritionImagePreprocessor.kt
+- app/src/main/java/com/littleone/dailycutreport/NutritionLabelOcr.kt
+- app/src/main/java/com/littleone/dailycutreport/NutritionLabelParser.kt
+- app/src/main/java/com/littleone/dailycutreport/QuickScanWidgetProvider.kt
+- app/src/main/java/com/littleone/dailycutreport/AppBackupManager.kt
 - app/src/main/java/com/littleone/dailycutreport/LegacyReportImporter.kt
 - app/src/main/java/com/littleone/dailycutreport/HealthConnectManager.kt
 - app/src/main/java/com/littleone/dailycutreport/BarcodeScanner.kt
@@ -21,6 +29,8 @@ Browser preview
 - tablet-preview/model.js
 - tablet-preview/app.js
 - tablet-preview/model.test.js
+- tablet-preview/catalog.js
+- tablet-preview/backup.js
 
 Build and delivery
 - build.gradle.kts

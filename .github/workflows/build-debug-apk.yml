@@ -3,7 +3,6 @@ name: Build debug APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
   pull_request:
 
 permissions:
@@ -49,7 +48,7 @@ jobs:
           gradle-version: '8.9'
 
       - name: Test browser preview model
-        run: node tablet-preview/model.test.js
+        run: node --test tablet-preview/model.test.js
 
       - name: Test Android logic and migrations
         run: gradle --no-daemon testDebugUnitTest

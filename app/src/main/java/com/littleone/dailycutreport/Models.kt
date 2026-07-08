@@ -31,6 +31,19 @@ data class NutritionSummary(
 
 data class NutrientAmount(val value: Double, val unit: String)
 
+data class DailyNutritionTargets(
+    val calories: Double = 1850.0,
+    val proteinG: Double = 120.0,
+    val sodiumMg: Double = 2000.0,
+    val carbsG: Double = 150.0,
+    val fatG: Double = 60.0,
+    val sugarG: Double = 50.0,
+    val fiberG: Double = 15.0,
+    val saturatedFatG: Double = 15.0
+)
+
+data class HealthWriteSummary(val recordsWritten: Int, val date: LocalDate)
+
 data class ManualOverrides(
     val foodCalories: Double? = null,
     val proteinG: Double? = null,
@@ -104,7 +117,8 @@ data class DailyReport(
 data class FoodLogSnapshot(
     val id: Long = 0,
     val date: LocalDate,
-    val barcode: String,
+    val productId: String? = null,
+    val barcode: String? = null,
     val productName: String,
     val brand: String = "",
     val servingLabel: String = "1 serving",
@@ -122,6 +136,11 @@ data class FoodLogSnapshot(
     val calories: Double get() = caloriesPerServing * quantity
     val proteinG: Double get() = proteinGPerServing * quantity
     val sodiumMg: Double get() = sodiumMgPerServing * quantity
+    val carbsG: Double get() = carbsGPerServing * quantity
+    val fatG: Double get() = fatGPerServing * quantity
+    val sugarG: Double get() = sugarGPerServing * quantity
+    val fiberG: Double get() = fiberGPerServing * quantity
+    val saturatedFatG: Double get() = saturatedFatGPerServing * quantity
 }
 
 data class ProductWithExtras(
@@ -141,6 +160,20 @@ data class FoodLogEdit(
     val sugarGPerServing: Double,
     val fiberGPerServing: Double,
     val saturatedFatGPerServing: Double
+)
+
+fun FoodLogSnapshot.quantityEdit(quantity: Double) = FoodLogEdit(
+    id = id,
+    quantity = quantity,
+    servingLabel = servingLabel,
+    caloriesPerServing = caloriesPerServing,
+    proteinGPerServing = proteinGPerServing,
+    sodiumMgPerServing = sodiumMgPerServing,
+    carbsGPerServing = carbsGPerServing,
+    fatGPerServing = fatGPerServing,
+    sugarGPerServing = sugarGPerServing,
+    fiberGPerServing = fiberGPerServing,
+    saturatedFatGPerServing = saturatedFatGPerServing
 )
 
 sealed interface ScannerResult {

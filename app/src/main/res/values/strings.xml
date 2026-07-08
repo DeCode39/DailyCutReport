@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Daily Cut Report</string>
+    <string name="quick_scan_widget_description">Open Daily Cut Report directly to barcode scanning.</string>
 </resources>

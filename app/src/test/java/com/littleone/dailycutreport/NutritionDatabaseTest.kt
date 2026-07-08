@@ -31,7 +31,7 @@ class NutritionDatabaseTest {
 
     @Test fun editingProductDoesNotDeleteHistoricalFoodLogs() = runBlocking {
         val dao = database.nutritionDao()
-        val original = ProductEntity("123", "Original", calories = 100.0)
+        val original = ProductEntity(productId = "123", barcode = "123", name = "Original", calories = 100.0)
         dao.saveProductWithExtras(original, emptyList())
         dao.addProductToDate("2026-01-02", original, 2.0, emptyList())
         dao.saveProductWithExtras(original.copy(name = "Renamed", calories = 300.0), emptyList())
@@ -44,7 +44,7 @@ class NutritionDatabaseTest {
 
     @Test fun totalsReactToQuantityAndSnapshotEdits() = runBlocking {
         val dao = database.nutritionDao()
-        val product = ProductEntity("123", "Meal", calories = 250.0, proteinG = 12.0)
+        val product = ProductEntity(productId = "123", barcode = "123", name = "Meal", calories = 250.0, proteinG = 12.0)
         dao.saveProductWithExtras(product, emptyList())
         dao.addProductToDate("2026-01-02", product, 2.0, emptyList())
         val log = dao.observeLogsForDate("2026-01-02").first().single()
@@ -52,6 +52,60 @@ class NutritionDatabaseTest {
         val totals = dao.observeTotalsForDate("2026-01-02").first()
         assertEquals(600.0, totals.calories, 0.0)
         assertEquals(36.0, totals.proteinG, 0.0)
+    }
+
+    @Test fun suspendTotalsMatchFoodLogSnapshots() = runBlocking {
+        val dao = database.nutritionDao()
+        val product = ProductEntity(
+            productId = "123",
+            barcode = "123",
+            name = "Meal",
+            calories = 250.0,
+            proteinG = 12.0,
+            sodiumMg = 300.0,
+            carbsG = 30.0,
+            fatG = 8.0,
+            sugarG = 4.0,
+            fiberG = 2.0,
+            saturatedFatG = 1.0
+        )
+        dao.saveProductWithExtras(product, emptyList())
+        dao.addProductToDate("2026-01-02", product, 2.0, emptyList())
+
+        val totals = dao.totalsForDate("2026-01-02")
+
+        assertEquals(500.0, totals.calories, 0.0)
+        assertEquals(24.0, totals.proteinG, 0.0)
+        assertEquals(600.0, totals.sodiumMg, 0.0)
+        assertEquals(60.0, totals.carbsG, 0.0)
+        assertEquals(16.0, totals.fatG, 0.0)
+        assertEquals(8.0, totals.sugarG, 0.0)
+        assertEquals(4.0, totals.fiberG, 0.0)
+        assertEquals(2.0, totals.saturatedFatG, 0.0)
+        assertEquals(1, totals.entries)
+    }
+
+    @Test fun clearManualOverridesRemovesLegacyOverrideValues() = runBlocking {
+        val dao = database.nutritionDao()
+        dao.upsertDailyReport(DailyReportEntity(
+            date = "2026-01-02",
+            manualFoodCalories = 100.0,
+            manualProteinG = 20.0,
+            manualSodiumMg = 300.0,
+            manualBurnCalories = 2_000.0,
+            notes = "legacy"
+        ))
+
+        dao.clearManualOverrides(updatedAt = 123L)
+        val report = dao.dailyReport("2026-01-02")
+
+        assertNotNull(report)
+        assertEquals(null, report?.manualFoodCalories)
+        assertEquals(null, report?.manualProteinG)
+        assertEquals(null, report?.manualSodiumMg)
+        assertEquals(null, report?.manualBurnCalories)
+        assertEquals("", report?.notes)
+        assertEquals(123L, report?.savedAtEpochMs)
     }
 
     @Test fun migrationOneToTwoRetainsAndConvertsFoodSnapshots() = runBlocking {
@@ -67,20 +121,24 @@ class NutritionDatabaseTest {
                 }).build()
         )
         helper.writableDatabase.apply {
-            execSQL("INSERT INTO products VALUES ('123','Meal','','1 serving',100,10,20,0,0,0,0,0,'',1,1)")
-            execSQL("INSERT INTO daily_food_logs VALUES (1,'2026-01-02','123','Meal','','1 serving',2,200,20,40,0,0,0,0,0,1)")
+            execSQL("INSERT INTO products VALUES ('4711089912108','Meal','','1 serving',100,10,20,0,0,0,0,0,'',1,1)")
+            execSQL("INSERT INTO products VALUES ('CUSTOM-MEAL','Custom','','1 serving',50,5,10,0,0,0,0,0,'',1,1)")
+            execSQL("INSERT INTO product_extra_nutrients VALUES ('CUSTOM-MEAL','BCAA',300,'mg')")
+            execSQL("INSERT INTO daily_food_logs VALUES (1,'2026-01-02','4711089912108','Meal','','1 serving',2,200,20,40,0,0,0,0,0,1)")
             execSQL("INSERT INTO daily_extra_nutrient_logs VALUES (1,1,'Potassium',400,'mg')")
         }
         helper.close()
 
         val migrated = Room.databaseBuilder(context, NutritionDatabase::class.java, name)
-            .addMigrations(NutritionDatabase.MIGRATION_1_2)
+            .addMigrations(NutritionDatabase.MIGRATION_1_2, NutritionDatabase.MIGRATION_2_3)
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase
         val log = migrated.nutritionDao().observeLogsForDate("2026-01-02").first().single()
         assertEquals(100.0, log.caloriesPerServing, 0.0)
         assertEquals(2.0, log.quantity, 0.0)
-        assertNotNull(migrated.nutritionDao().productByBarcode("123"))
+        assertEquals("4711089912108", migrated.nutritionDao().productById("4711089912108")?.barcode)
+        assertEquals(null, migrated.nutritionDao().productById("CUSTOM-MEAL")?.barcode)
+        assertEquals(1, migrated.nutritionDao().extrasForProduct("CUSTOM-MEAL").size)
         migrated.close()
         context.deleteDatabase(name)
         database = Room.inMemoryDatabaseBuilder(context, NutritionDatabase::class.java).allowMainThreadQueries().build()
@@ -97,4 +155,3 @@ class NutritionDatabaseTest {
         db.execSQL("CREATE INDEX index_daily_extra_nutrient_logs_logId ON daily_extra_nutrient_logs(logId)")
     }
 }
-

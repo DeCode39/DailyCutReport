@@ -16,8 +16,8 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.7.0"
+        versionCode = 17
+        versionName = "0.8.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -86,6 +86,9 @@ dependencies {
     implementation("com.google.guava:guava:33.3.1-android")
     implementation("com.google.guava:listenablefuture:1.0")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
@@ -129,7 +132,3 @@ val verifyOfflineDebugApk by tasks.registering {
 tasks.named("check").configure {
     dependsOn(verifyOfflineDebugApk)
 }
-
-
-
-

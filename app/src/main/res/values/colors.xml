@@ -1,3 +1,7 @@
 <resources>
+    <color name="dailycut_black">#000000</color>
+    <color name="dailycut_surface">#101010</color>
+    <color name="dailycut_yellow">#FFD84D</color>
+    <color name="dailycut_yellow_soft">#FFE680</color>
     <color name="white">#FFFFFFFF</color>
 </resources>
