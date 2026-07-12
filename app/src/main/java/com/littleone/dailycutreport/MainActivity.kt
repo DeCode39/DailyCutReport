@@ -14,7 +14,6 @@ const val EXTRA_OPEN_SCANNER = "com.littleone.dailycutreport.OPEN_SCANNER"
 
 class MainActivity : ComponentActivity() {
     private val scannerLaunchRequests = mutableStateOf(0)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applySystemBars()
@@ -32,7 +31,6 @@ class MainActivity : ComponentActivity() {
         val foodsViewModel = ViewModelProvider(this, screenFactory)[FoodsViewModel::class.java]
         val settingsViewModel = ViewModelProvider(this, screenFactory)[SettingsViewModel::class.java]
         val ocrViewModel = ViewModelProvider(this, screenFactory)[OcrViewModel::class.java]
-
         setContent {
             DailyCutApp(dateViewModel, todayViewModel, foodsViewModel, settingsViewModel, ocrViewModel, scannerLaunchRequests)
         }

@@ -13,7 +13,6 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.text.DecimalFormat
 import java.time.format.DateTimeFormatter
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class ReportImageExporter(private val context: Context) {
@@ -21,7 +20,7 @@ class ReportImageExporter(private val context: Context) {
     private val one = DecimalFormat("#,##0.0")
     private val dateFmt = DateTimeFormatter.ofPattern("dd MMM yyyy")
 
-    fun saveReportToPictures(report: DailyReport): Uri? {
+    fun saveReportToPictures(report: DailyReport, goals: UserGoals = UserGoals(), spending: DailySpending = DailySpending()): Uri? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName(report))
@@ -31,7 +30,7 @@ class ReportImageExporter(private val context: Context) {
         }
         val resolver = context.contentResolver
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
-        return if (writeReport(uri, report)) {
+        return if (writeReport(uri, report, goals, spending)) {
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
@@ -42,36 +41,36 @@ class ReportImageExporter(private val context: Context) {
         }
     }
 
-    fun writeReport(uri: Uri, report: DailyReport): Boolean = runCatching {
+    fun writeReport(uri: Uri, report: DailyReport, goals: UserGoals = UserGoals(), spending: DailySpending = DailySpending()): Boolean = runCatching {
         context.contentResolver.openOutputStream(uri, "w")?.use { output ->
-            check(drawReportBitmap(report).compress(Bitmap.CompressFormat.PNG, 100, output))
+            check(drawReportBitmap(report, goals, spending).compress(Bitmap.CompressFormat.PNG, 100, output))
         } ?: error("Could not open report destination")
         true
     }.getOrDefault(false)
 
-    fun createShareUri(report: DailyReport): Uri? = runCatching {
+    fun createShareUri(report: DailyReport, goals: UserGoals = UserGoals(), spending: DailySpending = DailySpending()): Uri? = runCatching {
         val directory = File(context.cacheDir, "shared_reports").apply { mkdirs() }
         val file = File(directory, fileName(report))
         file.outputStream().use { output ->
-            check(drawReportBitmap(report).compress(Bitmap.CompressFormat.PNG, 100, output))
+            check(drawReportBitmap(report, goals, spending).compress(Bitmap.CompressFormat.PNG, 100, output))
         }
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }.getOrNull()
 
     private fun fileName(report: DailyReport) = "DailyCutReport_${report.date}.png"
 
-    private fun drawReportBitmap(report: DailyReport): Bitmap {
+    private fun drawReportBitmap(report: DailyReport, goals: UserGoals, spending: DailySpending): Bitmap {
         val notesLines = wrap(report.manual.notes, 58)
         val extraRows = report.nutrition.extras.size.coerceAtMost(12)
         val width = 1080
-        val height = 1680 + extraRows * 42 + if (notesLines.isEmpty()) 0 else 100 + notesLines.size * 38
+        val height = 1990 + extraRows * 42 + if (notesLines.isEmpty()) 0 else 100 + notesLines.size * 38
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(248, 248, 246) }
-        val dark = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(30, 30, 30) }
-        val muted = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(95, 95, 95) }
-        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(35, 95, 130) }
-        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(220, 220, 216); strokeWidth = 3f }
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+        val dark = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(247, 241, 208) }
+        val muted = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(190, 183, 145) }
+        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 216, 77) }
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(55, 55, 48); strokeWidth = 3f }
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), background)
 
         fun text(value: String, x: Float, y: Float, size: Float, paint: Paint = dark, bold: Boolean = false) {
@@ -92,8 +91,7 @@ class ReportImageExporter(private val context: Context) {
         y += 50f; rule(y); y += 68f
         text(report.verdict.label, 72f, y, 43f, accent, true)
         y += 70f
-        val sign = if (report.deficitCalories >= 0) "−" else "+"
-        text("$sign${whole.format(abs(report.deficitCalories).roundToInt())} kcal", 72f, y, 64f, dark, true)
+        text(report.energyBalance.exportLabel(), 72f, y, 64f, dark, true)
         y += 84f
 
         text("Activity", 72f, y, 31f, accent, true); y += 48f
@@ -117,6 +115,18 @@ class ReportImageExporter(private val context: Context) {
         metric("Fiber", "${whole.format(nutrition.fiberG)} g", 570f, y); y += 110f
         metric("Saturated fat", "${whole.format(nutrition.saturatedFatG)} g", 72f, y)
         metric("Source", report.nutritionSource, 570f, y); y += 96f
+
+        rule(y); y += 54f
+        text("Goals and spending", 72f, y, 31f, accent, true); y += 48f
+        metric(
+            if (goals.mode == GoalMode.DEFICIT) "Deficit allowance" else "Calorie target",
+            "${whole.format(goals.effectiveCalorieTarget)} kcal", 72f, y
+        )
+        metric("Known spending", formatMoney(spending.knownTotalMicros, goals.currencyCode), 570f, y); y += 110f
+        metric("Catalog estimate", formatMoney(spending.catalogEstimatedMicros, goals.currencyCode), 72f, y)
+        metric("Actual paid", formatMoney(spending.actualPaidMicros, goals.currencyCode), 570f, y); y += 110f
+        metric("Daily budget", formatMoney(goals.dailyBudgetMicros, goals.currencyCode), 72f, y)
+        metric("Unknown costs", spending.unknownEntries.toString(), 570f, y); y += 96f
 
         if (nutrition.extras.isNotEmpty()) {
             rule(y); y += 54f
@@ -156,5 +166,16 @@ class ReportImageExporter(private val context: Context) {
         }
         if (current.isNotEmpty()) lines += current
         return lines
+    }
+
+    private fun EnergyBalance.exportLabel(): String = when (this) {
+        EnergyBalance.Unavailable -> "Burn data unavailable"
+        is EnergyBalance.Cut -> "−${whole.format(calories.roundToInt())} kcal"
+        is EnergyBalance.Surplus -> "+${whole.format(calories.roundToInt())} kcal"
+        is EnergyBalance.Maintenance -> when {
+            calories > 0 -> "−${whole.format(calories.roundToInt())} kcal"
+            calories < 0 -> "+${whole.format(-calories.roundToInt())} kcal"
+            else -> "0 kcal"
+        }
     }
 }

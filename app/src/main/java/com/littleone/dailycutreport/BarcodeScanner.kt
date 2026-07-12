@@ -45,6 +45,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 interface BarcodeDecoder : AutoCloseable {
     fun process(image: InputImage, onSuccess: (List<Barcode>) -> Unit, onFailure: (Throwable) -> Unit, onComplete: () -> Unit)
@@ -82,19 +83,28 @@ class BarcodeAnalyzer(
             imageProxy.close()
             return
         }
-        val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        decoder.process(
-            input,
-            onSuccess = { results ->
-                val value = results.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue
-                if (value != null && delivered.compareAndSet(false, true)) callbackExecutor.execute { onFound(value) }
-            },
-            onFailure = { error -> callbackExecutor.execute { onFailure(error) } },
-            onComplete = {
+        try {
+            val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            decoder.process(
+                input,
+                onSuccess = { results ->
+                    val value = results.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue
+                    if (value != null && delivered.compareAndSet(false, true)) callbackExecutor.execute { onFound(value) }
+                },
+                onFailure = { error -> callbackExecutor.execute { onFailure(error) } },
+                onComplete = {
+                    imageProxy.close()
+                    processing.set(false)
+                }
+            )
+        } catch (error: Throwable) {
+            try {
                 imageProxy.close()
+            } finally {
                 processing.set(false)
             }
-        )
+            callbackExecutor.execute { onFailure(error) }
+        }
     }
 }
 
@@ -110,6 +120,7 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
     }
     var status by remember { mutableStateOf("Point the camera at a barcode") }
     var retryToken by remember { mutableStateOf(0) }
+    val lastFailureLogMs = remember { AtomicLong(0L) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         permissionGranted = granted
         if (!granted) {
@@ -137,7 +148,11 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
                             mainExecutor,
                             onFound = { onResult(ScannerResult.Found(it)) },
                             onFailure = {
-                                Log.e("DailyCutScanner", "Barcode decoder failed", it)
+                                val now = System.currentTimeMillis()
+                                val previous = lastFailureLogMs.get()
+                                if (now - previous >= FAILURE_LOG_INTERVAL_MS && lastFailureLogMs.compareAndSet(previous, now)) {
+                                    Log.e("DailyCutScanner", "Barcode decoder failed", it)
+                                }
                                 status = "Could not read this frame. Hold the barcode steady."
                             }
                         )
@@ -177,3 +192,5 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
         }
     }
 }
+
+private const val FAILURE_LOG_INTERVAL_MS = 5_000L

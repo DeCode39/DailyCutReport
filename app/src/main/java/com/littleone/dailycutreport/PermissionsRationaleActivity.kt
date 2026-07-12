@@ -24,7 +24,7 @@ class PermissionsRationaleActivity : ComponentActivity() {
             setTextColor(Color.rgb(20, 20, 20))
         })
         root.addView(TextView(this).apply {
-            text = "Daily Cut Report reads steps, distance, active calories, total calories, and exercise sessions from Health Connect to calculate your daily fitness report. Nutrition read access is optional and is used only as a fallback when the local food log is empty. Nutrition write access is optional, user-triggered, and writes your local food-log entries to Health Connect on this device. Data is stored locally in app-private storage, Android cloud backup is disabled, and explicit backup files are password-encrypted. The app does not request internet permission or upload data. You can revoke Health Connect access in Android Settings at any time."
+            text = "Daily Cut Report reads steps, distance, active calories, total calories, and exercise sessions from Health Connect to calculate your daily fitness report. Nutrition read access is optional and is used only as a fallback when the local food log is empty. When optional nutrition write access is granted, local food-log changes are synchronized automatically and silently to Health Connect on this device. Data is stored locally in app-private storage, Android cloud backup is disabled, and explicit backup files are password-encrypted. The app does not request internet permission or upload data. You can revoke Health Connect access in Android Settings at any time."
             textSize = 16f
             setTextColor(Color.rgb(70, 70, 70))
             setPadding(0, dp(16), 0, dp(16))

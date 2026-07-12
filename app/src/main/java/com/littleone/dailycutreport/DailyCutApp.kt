@@ -4,7 +4,6 @@ import android.app.DatePickerDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +33,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -44,6 +48,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -63,6 +69,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardType
@@ -81,153 +88,26 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
+import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private enum class Destination(val route: String, val label: String) {
-    TODAY("today", "Today"), FOODS("foods", "Foods"), SETTINGS("settings", "Settings")
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DailyCutApp(
+internal fun DateHeader(
+    date: LocalDate,
     dateViewModel: ReportDateViewModel,
-    todayViewModel: TodayViewModel,
-    foodsViewModel: FoodsViewModel,
-    settingsViewModel: SettingsViewModel,
-    ocrViewModel: OcrViewModel,
-    scannerLaunchRequests: State<Int>? = null
+    actions: @Composable RowScope.() -> Unit = {}
 ) {
-    DailyCutTheme {
-        val navController = rememberNavController()
-        val backStack by navController.currentBackStackEntryAsState()
-        val route = backStack?.destination?.route ?: Destination.TODAY.route
-        val selectedDate by dateViewModel.selectedDate.collectAsStateWithLifecycle()
-        val snackbarHostState = remember { SnackbarHostState() }
-        val foodsState by foodsViewModel.uiState.collectAsStateWithLifecycle()
-        val externalScannerLaunch = scannerLaunchRequests?.value ?: 0
-        LaunchedEffect(externalScannerLaunch) {
-            if (externalScannerLaunch > 0 && route != "scanner") navController.navigate("scanner")
-        }
-        LaunchedEffect(foodsState.thresholdMessage) {
-            foodsState.thresholdMessage?.let {
-                snackbarHostState.showSnackbar(it)
-                foodsViewModel.clearThresholdMessage()
-            }
-        }
-        LifecycleEventEffect(Lifecycle.Event.ON_START) {
-            todayViewModel.refreshTodayOnAppOpen()
-            settingsViewModel.refresh()
-        }
-        val healthPermissionLauncher = rememberLauncherForActivityResult(
-            PermissionController.createRequestPermissionResultContract()
-        ) {
-            settingsViewModel.refresh()
-        }
-        val nutritionWritePermissionLauncher = rememberLauncherForActivityResult(
-            PermissionController.createRequestPermissionResultContract()
-        ) {
-            settingsViewModel.refresh()
-        }
-
-        Scaffold(
-            topBar = { TopAppBar(title = { Text("Daily Cut Report", fontWeight = FontWeight.Bold) }) },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            bottomBar = {
-                if (route != "scanner" && route != "ocr") {
-                    NavigationBar {
-                        Destination.entries.forEach { destination ->
-                            NavigationBarItem(
-                                selected = route == destination.route,
-                                onClick = {
-                                    navController.navigate(destination.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                icon = { Text(destination.label.take(1)) },
-                                label = { Text(destination.label) }
-                            )
-                        }
-                    }
-                }
-            }
-        ) { padding ->
-            NavHost(
-                navController = navController,
-                startDestination = Destination.TODAY.route,
-                modifier = Modifier.padding(padding)
-            ) {
-                composable(Destination.TODAY.route) {
-                    TodayScreen(
-                        selectedDate,
-                        dateViewModel,
-                        todayViewModel,
-                        onScan = { navController.navigate("scanner") },
-                        onEditLog = foodsViewModel::edit,
-                        onDeleteLog = foodsViewModel::delete
-                    )
-                }
-                composable(Destination.FOODS.route) {
-                    FoodsScreen(
-                        selectedDate,
-                        dateViewModel,
-                        foodsViewModel,
-                        onScan = { navController.navigate("scanner") },
-                        onOcr = { navController.navigate("ocr") }
-                    )
-                }
-                composable(Destination.SETTINGS.route) {
-                    SettingsScreen(
-                        selectedDate = selectedDate,
-                        viewModel = settingsViewModel,
-                        onGrantCorePermissions = { healthPermissionLauncher.launch(HealthConnectManager.CORE_PERMISSIONS) },
-                        onGrantNutritionPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_PERMISSION)) },
-                        onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) }
-                    )
-                }
-                composable("scanner") {
-                    BarcodeScannerScreen(
-                        onResult = { result ->
-                            navController.popBackStack()
-                            if (result is ScannerResult.Found) foodsViewModel.handleBarcode(result.barcode)
-                        }
-                    )
-                }
-                composable("ocr") {
-                    OcrCaptureScreen(
-                        viewModel = ocrViewModel,
-                        onCancel = { navController.popBackStack() },
-                        onUse = { draft ->
-                            foodsViewModel.applyOcr(draft)
-                            navController.popBackStack()
-                        }
-                    )
-                }
-            }
-            if (route != "scanner" && route != "ocr") {
-                FoodWorkflowDialogs(
-                    viewModel = foodsViewModel,
-                    onOcr = { navController.navigate("ocr") }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DateHeader(date: LocalDate, dateViewModel: ReportDateViewModel) {
     val context = LocalContext.current
-    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedButton(onClick = dateViewModel::previous) { Text("‹") }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+            OutlinedButton(modifier = Modifier.size(48.dp), onClick = dateViewModel::previous) { Text("‹") }
             OutlinedButton(
                 modifier = Modifier.weight(1f),
                 onClick = {
@@ -240,32 +120,34 @@ private fun DateHeader(date: LocalDate, dateViewModel: ReportDateViewModel) {
             ) {
                 Text(date.format(DateTimeFormatter.ofPattern("EEE, dd MMM yyyy")))
             }
-            OutlinedButton(onClick = dateViewModel::next, enabled = date < LocalDate.now()) { Text("›") }
-        }
+            OutlinedButton(modifier = Modifier.size(48.dp), onClick = dateViewModel::next, enabled = date < LocalDate.now()) { Text("›") }
+            actions()
     }
 }
 
 @Composable
-private fun TodayScreen(
+internal fun TodayScreen(
     selectedDate: LocalDate,
     dateViewModel: ReportDateViewModel,
     viewModel: TodayViewModel,
     onScan: () -> Unit,
     onEditLog: (FoodLogSnapshot) -> Unit,
-    onDeleteLog: (Long) -> Unit
+    onDeleteLog: (Long) -> Unit,
+    onMessage: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var expandedTargets by remember { mutableStateOf(false) }
     val createDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
         if (uri != null) scope.launch {
             val saved = viewModel.writeReport(uri)
-            Toast.makeText(context, if (saved) "Report saved" else "Could not save report", Toast.LENGTH_LONG).show()
+            onMessage(if (saved) "Report saved" else "Could not save report")
         }
     }
 
     LaunchedEffect(state.message) {
-        state.message?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show(); viewModel.clearMessage() }
+        state.message?.let { onMessage(it); viewModel.clearMessage() }
     }
 
     LazyColumn(
@@ -273,14 +155,9 @@ private fun TodayScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Today", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            DateHeader(selectedDate, dateViewModel) {
                 FilledIconButton(
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier.size(48.dp),
                     onClick = {
                         scope.launch {
                             viewModel.createShareUri()?.let { uri ->
@@ -292,40 +169,70 @@ private fun TodayScreen(
                             }
                         }
                     }
-                ) { Text("↗") }
+                ) { Icon(painterResource(R.drawable.ic_share), contentDescription = "Share report") }
                 FilledIconButton(
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier.size(48.dp),
                     onClick = {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                             createDocumentLauncher.launch("DailyCutReport_${state.report.date}.png")
                         } else scope.launch {
                             val uri = viewModel.saveReport()
-                            Toast.makeText(context, if (uri == null) "Could not save report" else "Report saved", Toast.LENGTH_LONG).show()
+                            onMessage(if (uri == null) "Could not save report" else "Report saved")
                         }
                     }
-                ) { Text("↓") }
+                ) { Icon(painterResource(R.drawable.ic_download), contentDescription = "Save report") }
             }
         }
-        item { DateHeader(selectedDate, dateViewModel) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(state.report.verdict.label, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
-                    val deficit = state.report.deficitCalories
-                    Text(
-                        if (deficit >= 0) "−${abs(deficit).roundToInt()} kcal" else "+${abs(deficit).roundToInt()} kcal",
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(balanceLabel(state.report.energyBalance), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
                     MetricRow("Burn", "${state.report.finalBurnCalories.roundToInt()} kcal")
                     MetricRow("Food", "${state.report.finalFoodCalories.roundToInt()} kcal")
                     MetricRow("Protein", "${state.report.finalProteinG.roundToInt()} g")
                     MetricRow("Sodium", "${state.report.finalSodiumMg.roundToInt()} mg")
+                    Text(
+                        if (state.report.finalBurnCalories > 0.0) {
+                            "Health data updated ${Instant.ofEpochMilli(state.report.savedAtEpochMs).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd MMM, HH:mm"))}"
+                        } else "Health burn data has not been loaded",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan food") }
                 }
             }
         }
-        item { NutritionTargetsCard(state.report.nutrition, state.targets) }
+        item {
+            NutritionTargetsCard(
+                state.report.nutrition, state.targets, expandedTargets,
+                title = if (state.goals.mode == GoalMode.DEFICIT) {
+                    "Deficit goal · ${state.goals.desiredDeficitCalories.roundToInt()} kcal"
+                } else "Nutrition targets"
+            ) { expandedTargets = !expandedTargets }
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Daily spending", style = MaterialTheme.typography.titleLarge)
+                    MetricRow("Known spending", formatMoney(state.spending.knownTotalMicros, state.goals.currencyCode))
+                    MetricRow("Catalog estimate", formatMoney(state.spending.catalogEstimatedMicros, state.goals.currencyCode))
+                    if (state.spending.actualPaidEntries > 0) MetricRow(
+                        "Actual paid overrides",
+                        formatMoney(state.spending.actualPaidMicros, state.goals.currencyCode)
+                    )
+                    MetricRow("Budget", formatMoney(state.goals.dailyBudgetMicros, state.goals.currencyCode))
+                    if (!state.spending.isComplete) Text(
+                        "${state.spending.unknownEntries} entr${if (state.spending.unknownEntries == 1) "y has" else "ies have"} unknown cost.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Button(
+                        onClick = viewModel::planRemainingDay,
+                        enabled = !state.planning && state.goals.dailyBudgetMicros > 0L,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.planning) "Planning…" else "Plan remaining day") }
+                }
+            }
+        }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -341,25 +248,35 @@ private fun TodayScreen(
         item { Text("Food log", style = MaterialTheme.typography.titleLarge) }
         if (state.logs.isEmpty()) item { Text("No food entries for this date.") }
         items(state.logs, key = { it.id }) { log ->
-            FoodLogCard(log, onEdit = { onEditLog(log) }, onDelete = { onDeleteLog(log.id) })
+            FoodLogCard(log, state.goals.currencyCode, onEdit = { onEditLog(log) }, onDelete = { onDeleteLog(log.id) })
         }
         item { Spacer(Modifier.height(16.dp)) }
     }
+    state.recommendations?.let { RecommendationDialog(it, state.goals.currencyCode, viewModel::clearRecommendations) }
 }
 
 @Composable
-private fun NutritionTargetsCard(nutrition: NutritionSummary, targets: DailyNutritionTargets) {
+private fun NutritionTargetsCard(
+    nutrition: NutritionSummary,
+    targets: DailyNutritionTargets,
+    expanded: Boolean,
+    title: String = "Nutrition targets",
+    onToggle: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Nutrition targets", style = MaterialTheme.typography.titleLarge)
+            Text(title, style = MaterialTheme.typography.titleLarge)
             TargetRow("Calories", nutrition.calories, targets.calories, "kcal")
             TargetRow("Protein", nutrition.proteinG, targets.proteinG, "g")
             TargetRow("Sodium", nutrition.sodiumMg, targets.sodiumMg, "mg")
-            TargetRow("Carbs", nutrition.carbsG, targets.carbsG, "g")
-            TargetRow("Fat", nutrition.fatG, targets.fatG, "g")
-            TargetRow("Sugar", nutrition.sugarG, targets.sugarG, "g")
-            TargetRow("Fiber", nutrition.fiberG, targets.fiberG, "g")
-            TargetRow("Saturated fat", nutrition.saturatedFatG, targets.saturatedFatG, "g")
+            if (expanded) {
+                TargetRow("Carbs", nutrition.carbsG, targets.carbsG, "g")
+                TargetRow("Fat", nutrition.fatG, targets.fatG, "g")
+                TargetRow("Sugar", nutrition.sugarG, targets.sugarG, "g")
+                TargetRow("Fiber", nutrition.fiberG, targets.fiberG, "g")
+                TargetRow("Saturated fat", nutrition.saturatedFatG, targets.saturatedFatG, "g")
+            }
+            TextButton(onClick = onToggle) { Text(if (expanded) "Show less" else "Show all nutrients") }
         }
     }
 }
@@ -379,7 +296,7 @@ private fun TargetRow(label: String, value: Double, target: Double, unit: String
 }
 
 @Composable
-private fun FoodsScreen(
+internal fun FoodsScreen(
     selectedDate: LocalDate,
     dateViewModel: ReportDateViewModel,
     viewModel: FoodsViewModel,
@@ -388,6 +305,7 @@ private fun FoodsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var manualCode by remember { mutableStateOf("") }
+    var showManualTools by remember { mutableStateOf(false) }
 
     Scaffold(floatingActionButton = {
         FloatingActionButton(onClick = onScan) { Text("Scan") }
@@ -396,42 +314,36 @@ private fun FoodsScreen(
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { DateHeader(selectedDate, dateViewModel) }
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Daily nutrition", style = MaterialTheme.typography.titleLarge)
-                        MetricRow("Entries", state.nutrition.entries.toString())
-                        MetricRow("Calories", "${state.nutrition.calories.roundToInt()} kcal")
-                        MetricRow("Protein", "${state.nutrition.proteinG.roundToInt()} g")
-                        MetricRow("Sodium", "${state.nutrition.sodiumMg.roundToInt()} mg")
-                    }
-                }
-            }
-            item {
-                OutlinedTextField(
-                    value = manualCode,
-                    onValueChange = { manualCode = it },
-                    label = { Text("Barcode / product code") },
-                    trailingIcon = { TextButton(onClick = { viewModel.handleBarcode(manualCode) }) { Text("Use") } },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text("Foods", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("Adding to ${selectedDate.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}", style = MaterialTheme.typography.bodySmall)
+                DateHeader(selectedDate, dateViewModel)
             }
             item {
                 ProductSearchField(state.query, viewModel::setQuery)
-                TextButton(onClick = viewModel::createProduct) { Text("Create product manually") }
+                TextButton(onClick = { showManualTools = !showManualTools }) {
+                    Text(if (showManualTools) "Hide manual options" else "Manual options")
+                }
+                if (showManualTools) {
+                    OutlinedTextField(
+                        value = manualCode,
+                        onValueChange = { manualCode = it },
+                        label = { Text("Barcode / product code") },
+                        trailingIcon = { TextButton(onClick = { viewModel.handleBarcode(manualCode) }) { Text("Use") } },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    TextButton(onClick = viewModel::createProduct) { Text("Create product manually") }
+                }
+            }
+            if (state.query.isBlank() && state.recentProducts.isNotEmpty()) {
+                item { Text("Recent", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+                items(state.recentProducts, key = { "recent-${it.productId}" }) { product ->
+                    ProductCatalogRow(product, state.goals.currencyCode, viewModel)
+                }
+                item { Text("All products", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
             }
             items(state.products, key = { it.productId }) { product ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(product.name, fontWeight = FontWeight.Bold)
-                            Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.barcode).joinToString(" · "))
-                        }
-                        TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit") }
-                        Button(onClick = { viewModel.selectProduct(product) }) { Text("Add") }
-                    }
-                }
+                ProductCatalogRow(product, state.goals.currencyCode, viewModel)
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
@@ -439,45 +351,140 @@ private fun FoodsScreen(
 }
 
 @Composable
-private fun FoodWorkflowDialogs(
+internal fun FoodWorkflowDialogs(
     viewModel: FoodsViewModel,
     onOcr: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    LaunchedEffect(state.message) {
-        state.message?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show(); viewModel.clearMessage() }
-    }
-    state.pendingProduct?.let { product ->
-        QuantityDialog(product, onDismiss = viewModel::cancelDialogs, onConfirm = viewModel::confirmAdd)
-    }
-    if (state.editorBarcode != null) {
-        ProductEditorDialog(
-            initialBarcode = state.editorBarcode,
-            existing = state.editorProduct,
-            addAfterSave = state.editorAddsAfterSave,
-            ocrDraft = state.ocrDraft,
+    when (val workflow = state.workflow) {
+        FoodWorkflowState.Idle -> Unit
+        is FoodWorkflowState.ConfirmQuantity -> QuantityDialog(
+            workflow.product,
+            state.goals.currencyCode,
+            onDismiss = viewModel::cancelDialogs,
+            onConfirm = viewModel::confirmAdd
+        )
+        is FoodWorkflowState.EditProduct -> ProductEditorDialog(
+            initialBarcode = workflow.barcode,
+            existing = workflow.product,
+            addAfterSave = workflow.addAfterSave,
+            ocrDraft = workflow.ocrDraft,
+            currencyCode = state.goals.currencyCode,
             onScanNutrition = onOcr,
             onDismiss = viewModel::cancelDialogs,
             onSave = viewModel::saveProduct
         )
-    }
-    state.editingLog?.let { log ->
-        FoodLogEditDialog(log, onDismiss = viewModel::cancelDialogs, onSave = viewModel::saveLogEdit)
+        is FoodWorkflowState.EditQuantity -> FoodLogEditDialog(
+            workflow.log,
+            state.goals.currencyCode,
+            onDismiss = viewModel::cancelDialogs,
+            onSave = viewModel::saveLogEdit
+        )
     }
 }
 
 @Composable
-private fun FoodLogCard(log: FoodLogSnapshot, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -> Unit, onDelete: () -> Unit) {
+    var menuExpanded by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("${log.quantity} × ${log.productName}", fontWeight = FontWeight.Bold)
-            Text("${log.calories.roundToInt()} kcal · ${log.proteinG.roundToInt()} g protein · ${log.sodiumMg.roundToInt()} mg sodium")
-            Text("${log.carbsG.roundToInt()} g carbs · ${log.fatG.roundToInt()} g fat · ${log.sugarG.roundToInt()} g sugar", style = MaterialTheme.typography.bodySmall)
-            Row {
-                TextButton(onClick = onEdit) { Text("Edit") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.Bold)
+                Text("${log.calories.roundToInt()} kcal · ${log.proteinG.roundToInt()} g protein", style = MaterialTheme.typography.bodyMedium)
+                Text("${log.sodiumMg.roundToInt()} mg sodium · ${log.carbsG.roundToInt()} g carbs", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    (log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "Cost unknown") +
+                        if (log.excludeCostFromBudget) " · ignored in budget" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(painterResource(R.drawable.ic_more), contentDescription = "Food entry actions")
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Edit servings") }, onClick = { menuExpanded = false; onEdit() })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menuExpanded = false; onDelete() })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendationDialog(result: RecommendationResult, currencyCode: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remaining-day suggestions") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                result.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+                if (result.excludedUnpricedProducts > 0) Text(
+                    "${result.excludedUnpricedProducts} unpriced product(s) were excluded.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (result.excludedFromPlanningProducts > 0) Text(
+                    "${result.excludedFromPlanningProducts} product(s) are disabled for planning.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (result.spendingIncomplete) Text(
+                    "Existing unknown costs mean budget totals are estimates.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                result.plans.forEachIndexed { index, plan ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Option ${index + 1}", fontWeight = FontWeight.Bold)
+                            plan.items.forEach { item ->
+                                Text("${item.purchaseUnits} × ${item.name} · ${item.servings.toDisplay()} servings" +
+                                    if (item.fixed) " · fixed" else "")
+                            }
+                            MetricRow("Additional cost", formatMoney(plan.totalCostMicros, currencyCode))
+                            MetricRow("Projected spending", formatMoney(plan.projectedSpendingMicros, currencyCode))
+                            MetricRow("Projected calories", "${plan.nutrition.calories.roundToInt()} kcal")
+                            MetricRow("Projected protein", "${plan.nutrition.proteinG.roundToInt()} g")
+                            Text(plan.explanation, style = MaterialTheme.typography.bodySmall)
+                            plan.deltas.filterNot { it.withinTolerance }.forEach { delta ->
+                                Text(
+                                    "${delta.label}: ${"%+.1f".format(delta.percentDifference)}% from target",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+                if (result.plans.isEmpty()) Text("No suggestions available for the current catalog and limits.")
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+@Composable
+private fun ProductCatalogRow(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(product.name, fontWeight = FontWeight.Bold)
+                Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.barcode).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                product.purchasePriceMicros?.let {
+                    Text("${formatMoney(it, currencyCode)} / ${product.purchaseUnitServings.toDisplay()} serving(s)", style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    when {
+                        !product.includeInPlanner -> "Not used in planning"
+                        product.alwaysIncludeInPlanner -> "${product.plannerItemType.lowercase()} · fixed in plans"
+                        else -> product.plannerItemType.lowercase().replaceFirstChar(Char::uppercase)
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit") }
+            Button(onClick = { viewModel.selectProduct(product) }) { Text("Add") }
         }
     }
 }
@@ -497,7 +504,7 @@ internal fun ProductSearchField(initialQuery: String, onQueryChange: (String) ->
 }
 
 @Composable
-private fun OcrCaptureScreen(
+internal fun OcrCaptureScreen(
     viewModel: OcrViewModel,
     onCancel: () -> Unit,
     onUse: (OcrNutritionDraft) -> Unit
@@ -781,9 +788,10 @@ private fun CropSlider(label: String, value: Float, range: ClosedFloatingPointRa
 }
 
 @Composable
-private fun SettingsScreen(
+internal fun SettingsScreen(
     selectedDate: LocalDate,
     viewModel: SettingsViewModel,
+    onMessage: (String) -> Unit,
     onGrantCorePermissions: () -> Unit,
     onGrantNutritionPermission: () -> Unit,
     onGrantNutritionWritePermission: () -> Unit
@@ -802,25 +810,39 @@ private fun SettingsScreen(
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.refresh() }
     LaunchedEffect(state.message) {
-        state.message?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show(); viewModel.clearMessage() }
+        state.message?.let { onMessage(it); viewModel.clearMessage() }
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+        item { GoalsSettingsCard(state.goals, viewModel::saveGoals) }
         item {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Health Connect", style = MaterialTheme.typography.titleLarge)
                     Text(if (state.healthAvailable) "Available" else "Unavailable")
                     Text(if (state.corePermissionsGranted) "Activity permissions granted" else "Activity permissions required")
-                    Button(onClick = onGrantCorePermissions, modifier = Modifier.fillMaxWidth()) { Text("Grant activity permissions") }
+                    Button(
+                        onClick = onGrantCorePermissions,
+                        enabled = state.healthAvailable && !state.corePermissionsGranted,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.corePermissionsGranted) "Activity permissions granted" else "Grant activity permissions") }
                     OutlinedButton(
                         onClick = { viewModel.refreshHealth(selectedDate) },
-                        enabled = !state.isRefreshingHealth,
+                        enabled = state.healthAvailable && state.corePermissionsGranted && !state.isRefreshingHealth,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (state.isRefreshingHealth) "Refreshing…" else "Refresh selected date") }
                     Text(if (state.nutritionPermissionGranted) "Optional nutrition read permission granted" else "Optional nutrition read permission not granted")
-                    OutlinedButton(onClick = onGrantNutritionPermission, modifier = Modifier.fillMaxWidth()) { Text("Enable nutrition fallback") }
+                    OutlinedButton(
+                        onClick = onGrantNutritionPermission,
+                        enabled = state.healthAvailable && !state.nutritionPermissionGranted,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.nutritionPermissionGranted) "Nutrition fallback enabled" else "Enable nutrition fallback") }
                     Text(if (state.nutritionWritePermissionGranted) "Optional nutrition write permission granted" else "Optional nutrition write permission not granted")
-                    OutlinedButton(onClick = onGrantNutritionWritePermission, modifier = Modifier.fillMaxWidth()) { Text("Enable nutrition write") }
+                    OutlinedButton(
+                        onClick = onGrantNutritionWritePermission,
+                        enabled = state.healthAvailable && !state.nutritionWritePermissionGranted,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.nutritionWritePermissionGranted) "Automatic nutrition sync enabled" else "Enable automatic nutrition sync") }
                     state.nutritionSyncStatus?.let { Text("Nutrition sync: $it", style = MaterialTheme.typography.bodySmall) }
                 }
             }
@@ -857,7 +879,7 @@ private fun SettingsScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 3 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 4 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -871,6 +893,77 @@ private fun SettingsScreen(
                 pendingBackupAction = null
             }
         )
+    }
+}
+
+@Composable
+private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
+    var mode by remember(goals) { mutableStateOf(goals.mode) }
+    var calories by remember(goals) { mutableStateOf(goals.calories.toInput()) }
+    var expectedBurn by remember(goals) { mutableStateOf(goals.expectedBurnCalories.toInput()) }
+    var deficit by remember(goals) { mutableStateOf(goals.desiredDeficitCalories.toInput()) }
+    var protein by remember(goals) { mutableStateOf(goals.proteinG.toInput()) }
+    var sodium by remember(goals) { mutableStateOf(goals.sodiumMg.toInput()) }
+    var carbs by remember(goals) { mutableStateOf(goals.carbsG.toInput()) }
+    var fat by remember(goals) { mutableStateOf(goals.fatG.toInput()) }
+    var sugar by remember(goals) { mutableStateOf(goals.sugarG.toInput()) }
+    var fiber by remember(goals) { mutableStateOf(goals.fiberG.toInput()) }
+    var saturated by remember(goals) { mutableStateOf(goals.saturatedFatG.toInput()) }
+    var currency by remember(goals) { mutableStateOf(goals.currencyCode) }
+    var budget by remember(goals) { mutableStateOf(goals.dailyBudgetMicros.toMoneyInput()) }
+    val numbers = listOf(calories, expectedBurn, deficit, protein, sodium, carbs, fat, sugar, fiber, saturated)
+    val budgetMicros = runCatching { parseMoneyMicros(budget) }.getOrNull()
+    val candidate = runCatching {
+        UserGoals(
+            mode = mode,
+            calories = calories.numberOrNull() ?: error("Enter calories"),
+            expectedBurnCalories = expectedBurn.numberOrNull() ?: error("Enter expected burn"),
+            desiredDeficitCalories = deficit.numberOrNull() ?: error("Enter deficit"),
+            proteinG = protein.numberOrNull() ?: error("Enter protein"),
+            sodiumMg = sodium.numberOrNull() ?: error("Enter sodium"),
+            carbsG = carbs.numberOrNull() ?: error("Enter carbs"),
+            fatG = fat.numberOrNull() ?: error("Enter fat"),
+            sugarG = sugar.numberOrNull() ?: error("Enter sugar"),
+            fiberG = fiber.numberOrNull() ?: error("Enter fiber"),
+            saturatedFatG = saturated.numberOrNull() ?: error("Enter saturated fat"),
+            currencyCode = currency.trim().uppercase(),
+            dailyBudgetMicros = budgetMicros ?: error("Enter budget")
+        ).requireValid()
+    }.getOrNull()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Goals and daily budget", style = MaterialTheme.typography.titleLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = mode == GoalMode.CALORIE, onClick = { mode = GoalMode.CALORIE })
+                Text("Calorie goal")
+                RadioButton(selected = mode == GoalMode.DEFICIT, onClick = { mode = GoalMode.DEFICIT })
+                Text("Deficit goal")
+            }
+            if (mode == GoalMode.CALORIE) DecimalField("Calories kcal", calories) { calories = it }
+            else {
+                DecimalField("Expected daily burn kcal", expectedBurn) { expectedBurn = it }
+                DecimalField("Desired deficit kcal", deficit) { deficit = it }
+                candidate?.let { Text("Effective allowance: ${it.effectiveCalorieTarget.roundToInt()} kcal", style = MaterialTheme.typography.bodySmall) }
+            }
+            DecimalField("Protein minimum g", protein) { protein = it }
+            DecimalField("Sodium maximum mg", sodium) { sodium = it }
+            DecimalField("Carbs maximum g", carbs) { carbs = it }
+            DecimalField("Fat maximum g", fat) { fat = it }
+            DecimalField("Sugar maximum g", sugar) { sugar = it }
+            DecimalField("Fiber minimum g", fiber) { fiber = it }
+            DecimalField("Saturated fat maximum g", saturated) { saturated = it }
+            OutlinedTextField(
+                value = currency,
+                onValueChange = { currency = it.take(3).uppercase() },
+                label = { Text("Currency code") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            DecimalField("Daily budget", budget) { budget = it }
+            Text("Targets allow 10% planning tolerance; plans up to 10% over budget rank lower.", style = MaterialTheme.typography.bodySmall)
+            Button(enabled = candidate != null && numbers.all { it.isNotBlank() }, onClick = { candidate?.let(onSave) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Save goals")
+            }
+        }
     }
 }
 
@@ -915,13 +1008,35 @@ private fun BackupPasswordDialog(exporting: Boolean, onDismiss: () -> Unit, onCo
 }
 
 @Composable
-private fun QuantityDialog(product: ProductWithExtras, onDismiss: () -> Unit, onConfirm: (Double) -> Unit) {
+private fun QuantityDialog(
+    product: ProductWithExtras,
+    currencyCode: String,
+    onDismiss: () -> Unit,
+    onConfirm: (Double, Long?, Boolean) -> Unit
+) {
     var quantity by remember { mutableStateOf("1") }
+    var actualPaid by remember { mutableStateOf("") }
+    var excludeCostFromBudget by remember { mutableStateOf(false) }
+    val parsedQuantity = quantity.numberOrNull()?.takeIf { it > 0.0 }
+    val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
+    val priceValid = actualPaid.isBlank() || parsedPaid != null
+    val estimated = product.product.purchasePriceMicros?.let { price ->
+        parsedQuantity?.let { (price / product.product.purchaseUnitServings * it).toLong() }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(product.product.name) },
-        text = { Column { Text(product.product.servingLabel); DecimalField("Quantity", quantity) { quantity = it } } },
-        confirmButton = { Button(onClick = { onConfirm(quantity.numberOrNull()?.takeIf { it > 0 } ?: 1.0) }) { Text("Add") } },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(product.product.servingLabel)
+                DecimalField("Quantity", quantity) { quantity = it }
+                estimated?.let { Text("Catalog estimate: ${formatMoney(it, currencyCode)}", style = MaterialTheme.typography.bodySmall) }
+                DecimalField("Actual paid total (optional)", actualPaid) { actualPaid = it }
+                Text("Leave blank for the catalog estimate. Enter 0 for a free item.", style = MaterialTheme.typography.bodySmall)
+                ToggleRow("Ignore this price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
+            }
+        },
+        confirmButton = { Button(enabled = parsedQuantity != null && priceValid, onClick = { parsedQuantity?.let { onConfirm(it, parsedPaid, excludeCostFromBudget) } }) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -932,6 +1047,7 @@ private fun ProductEditorDialog(
     existing: ProductWithExtras?,
     addAfterSave: Boolean,
     ocrDraft: OcrNutritionDraft?,
+    currencyCode: String,
     onScanNutrition: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (ProductEntity, List<ProductExtraNutrientEntity>, Double) -> Unit
@@ -949,8 +1065,19 @@ private fun ProductEditorDialog(
     var sugar by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.SUGAR)?.toInput() ?: product?.sugarG?.toInput().orEmpty()) }
     var fiber by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.FIBER)?.toInput() ?: product?.fiberG?.toInput().orEmpty()) }
     var saturated by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.SATURATED_FAT)?.toInput() ?: product?.saturatedFatG?.toInput().orEmpty()) }
+    var purchasePrice by remember(existing) { mutableStateOf(product?.purchasePriceMicros?.toMoneyInput().orEmpty()) }
+    var purchaseServings by remember(existing) { mutableStateOf(product?.purchaseUnitServings?.toInput() ?: "1") }
+    var includeInPlanner by remember(existing) { mutableStateOf(product?.includeInPlanner ?: true) }
+    var plannerItemType by remember(existing) {
+        mutableStateOf(PlannerItemType.entries.firstOrNull { it.name == product?.plannerItemType } ?: PlannerItemType.FOOD)
+    }
+    var alwaysIncludeInPlanner by remember(existing) { mutableStateOf(product?.alwaysIncludeInPlanner ?: false) }
     var extras by remember(existing) { mutableStateOf(existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()) }
-    val valid = name.isNotBlank()
+    val nutrientInputs = listOf(calories, protein, sodium, carbs, fat, sugar, fiber, saturated)
+    val parsedPrice = runCatching { parseMoneyMicros(purchasePrice) }.getOrNull()
+    val parsedPurchaseServings = purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
+    val valid = name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
+        (purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -971,6 +1098,22 @@ private fun ProductEditorDialog(
                 DecimalField("Sugar g", sugar) { sugar = it }
                 DecimalField("Fiber g", fiber) { fiber = it }
                 DecimalField("Saturated fat g", saturated) { saturated = it }
+                DecimalField("Purchase price ($currencyCode, optional)", purchasePrice) { purchasePrice = it }
+                DecimalField("Minimum purchase servings", purchaseServings) { purchaseServings = it }
+                ToggleRow("Include in daily planning", includeInPlanner) {
+                    includeInPlanner = it
+                    if (!it) alwaysIncludeInPlanner = false
+                }
+                Text("Planner item type", style = MaterialTheme.typography.labelLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = plannerItemType == PlannerItemType.FOOD, onClick = { plannerItemType = PlannerItemType.FOOD })
+                    Text("Solid food", Modifier.weight(1f))
+                    RadioButton(selected = plannerItemType == PlannerItemType.DRINK, onClick = { plannerItemType = PlannerItemType.DRINK })
+                    Text("Drink")
+                }
+                ToggleRow("Always include one purchase unit in plans", alwaysIncludeInPlanner, enabled = includeInPlanner) {
+                    alwaysIncludeInPlanner = it
+                }
                 OutlinedTextField(extras, { extras = it }, label = { Text("Extra nutrients: Name=12 unit") })
             }
         },
@@ -991,6 +1134,11 @@ private fun ProductEditorDialog(
                     sugarG = sugar.number(),
                     fiberG = fiber.number(),
                     saturatedFatG = saturated.number(),
+                    purchasePriceMicros = parsedPrice,
+                    purchaseUnitServings = parsedPurchaseServings ?: 1.0,
+                    includeInPlanner = includeInPlanner,
+                    plannerItemType = plannerItemType.name,
+                    alwaysIncludeInPlanner = alwaysIncludeInPlanner,
                     notes = product?.notes.orEmpty(),
                     createdAt = product?.createdAt ?: System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
@@ -1003,8 +1151,14 @@ private fun ProductEditorDialog(
 }
 
 @Composable
-private fun FoodLogEditDialog(log: FoodLogSnapshot, onDismiss: () -> Unit, onSave: (FoodLogEdit) -> Unit) {
+private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDismiss: () -> Unit, onSave: (FoodQuantityEdit) -> Unit) {
     var quantity by remember { mutableStateOf(log.quantity.toInput()) }
+    var actualPaid by remember { mutableStateOf(log.actualPaidTotalMicros?.toMoneyInput().orEmpty()) }
+    var excludeCostFromBudget by remember { mutableStateOf(log.excludeCostFromBudget) }
+    val parsedQuantity = quantity.numberOrNull()?.takeIf { it > 0.0 }
+    val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
+    val priceValid = actualPaid.isBlank() || parsedPaid != null
+    val estimate = log.catalogCostPerServingMicros?.let { cost -> parsedQuantity?.let { (cost * it).toLong() } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit servings") },
@@ -1013,15 +1167,27 @@ private fun FoodLogEditDialog(log: FoodLogSnapshot, onDismiss: () -> Unit, onSav
                 Text(log.productName, fontWeight = FontWeight.Bold)
                 Text(log.servingLabel, style = MaterialTheme.typography.bodySmall)
                 DecimalField("Quantity", quantity) { quantity = it }
+                estimate?.let { Text("Catalog estimate: ${formatMoney(it, currencyCode)}", style = MaterialTheme.typography.bodySmall) }
+                DecimalField("Actual paid total (optional)", actualPaid) { actualPaid = it }
+                Text("Blank uses the catalog estimate; 0 records a free item.", style = MaterialTheme.typography.bodySmall)
+                ToggleRow("Ignore this price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
             }
         },
         confirmButton = {
-            Button(onClick = {
-                onSave(log.quantityEdit(quantity.number().coerceAtLeast(0.01)))
+            Button(enabled = parsedQuantity != null && priceValid, onClick = {
+                parsedQuantity?.let { onSave(log.quantityEdit(it, parsedPaid, excludeCostFromBudget)) }
             }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+@Composable
+private fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Composable
@@ -1039,6 +1205,17 @@ private fun String.numberOrNull(): Double? = trim().replace(',', '.').takeIf { i
 private fun String.number(): Double = numberOrNull() ?: 0.0
 private fun Double.toInput(): String = if (this == 0.0) "" else toString()
 private fun Double.toReviewInput(): String = if (this == 0.0) "0" else toString()
+private fun Double.toDisplay(): String = if (this == toLong().toDouble()) toLong().toString() else toString()
+private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
+    EnergyBalance.Unavailable -> "Add Health Connect burn data"
+    is EnergyBalance.Cut -> "−${balance.calories.roundToInt()} kcal"
+    is EnergyBalance.Surplus -> "+${balance.calories.roundToInt()} kcal"
+    is EnergyBalance.Maintenance -> when {
+        balance.calories > 0 -> "−${balance.calories.roundToInt()} kcal"
+        balance.calories < 0 -> "+${-balance.calories.roundToInt()} kcal"
+        else -> "0 kcal"
+    }
+}
 private fun parseExtras(productId: String, value: String): List<ProductExtraNutrientEntity> = value.lineSequence().mapNotNull { line ->
     val parts = line.split('=', limit = 2)
     if (parts.size != 2) return@mapNotNull null

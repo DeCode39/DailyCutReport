@@ -39,7 +39,8 @@ class ModelsTest {
             fatGPerServing = 10.0,
             sugarGPerServing = 4.0,
             fiberGPerServing = 2.0,
-            saturatedFatGPerServing = 1.0
+            saturatedFatGPerServing = 1.0,
+            actualPaidTotalMicros = 15_000_000L
         )
         assertEquals(1_000.0, log.calories, 0.0)
         assertEquals(50.0, log.proteinG, 0.0)
@@ -65,22 +66,46 @@ class ModelsTest {
             fatGPerServing = 8.0,
             sugarGPerServing = 4.0,
             fiberGPerServing = 2.0,
-            saturatedFatGPerServing = 1.0
+            saturatedFatGPerServing = 1.0,
+            actualPaidTotalMicros = 15_000_000L
         )
 
         val edit = log.quantityEdit(2.5)
 
         assertEquals(42, edit.id)
         assertEquals(2.5, edit.quantity, 0.0)
-        assertEquals("300 ml", edit.servingLabel)
-        assertEquals(250.0, edit.caloriesPerServing, 0.0)
-        assertEquals(12.0, edit.proteinGPerServing, 0.0)
-        assertEquals(300.0, edit.sodiumMgPerServing, 0.0)
-        assertEquals(30.0, edit.carbsGPerServing, 0.0)
-        assertEquals(8.0, edit.fatGPerServing, 0.0)
-        assertEquals(4.0, edit.sugarGPerServing, 0.0)
-        assertEquals(2.0, edit.fiberGPerServing, 0.0)
-        assertEquals(1.0, edit.saturatedFatGPerServing, 0.0)
+        assertEquals(15_000_000L, edit.actualPaidTotalMicros)
+        assertEquals("300 ml", log.servingLabel)
+        assertEquals(250.0, log.caloriesPerServing, 0.0)
+        assertEquals(12.0, log.proteinGPerServing, 0.0)
+        assertEquals(300.0, log.sodiumMgPerServing, 0.0)
+        assertEquals(30.0, log.carbsGPerServing, 0.0)
+        assertEquals(8.0, log.fatGPerServing, 0.0)
+        assertEquals(4.0, log.sugarGPerServing, 0.0)
+        assertEquals(2.0, log.fiberGPerServing, 0.0)
+        assertEquals(1.0, log.saturatedFatGPerServing, 0.0)
+    }
+
+    @Test fun ignoredLoggedPriceIsRetainedButExcludedFromEffectiveCost() {
+        val log = FoodLogSnapshot(
+            date = LocalDate.of(2026, 1, 2), productName = "Discounted meal", quantity = 2.0,
+            catalogCostPerServingMicros = 10_000_000L, actualPaidTotalMicros = 15_000_000L,
+            excludeCostFromBudget = true
+        )
+
+        assertEquals(15_000_000L, log.recordedCostMicros)
+        assertEquals(0L, log.effectiveCostMicros)
+        assertEquals(true, log.quantityEdit(3.0).excludeCostFromBudget)
+    }
+
+    @Test fun missingBurnProducesUnavailableBalance() {
+        val report = DailyReport(
+            date = LocalDate.of(2026, 1, 2),
+            nutrition = NutritionSummary(calories = 2_000.0)
+        )
+
+        assertEquals(EnergyBalance.Unavailable, report.energyBalance)
+        assertEquals(DayVerdict.UNAVAILABLE, report.verdict)
     }
 
     @Test fun defaultNutritionTargetsMatchDailyPlan() {

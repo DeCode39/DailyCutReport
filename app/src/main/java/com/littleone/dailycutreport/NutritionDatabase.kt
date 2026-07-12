@@ -34,6 +34,11 @@ data class ProductEntity(
     val sugarG: Double = 0.0,
     val fiberG: Double = 0.0,
     val saturatedFatG: Double = 0.0,
+    val purchasePriceMicros: Long? = null,
+    val purchaseUnitServings: Double = 1.0,
+    val includeInPlanner: Boolean = true,
+    val plannerItemType: String = PlannerItemType.FOOD.name,
+    val alwaysIncludeInPlanner: Boolean = false,
     val notes: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -79,6 +84,24 @@ data class DailyReportEntity(
     val savedAtEpochMs: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "user_goals")
+data class UserGoalsEntity(
+    @PrimaryKey val id: Int = 1,
+    val mode: String = GoalMode.CALORIE.name,
+    val calories: Double = 1850.0,
+    val expectedBurnCalories: Double = 2300.0,
+    val desiredDeficitCalories: Double = 450.0,
+    val proteinG: Double = 120.0,
+    val sodiumMg: Double = 2000.0,
+    val carbsG: Double = 150.0,
+    val fatG: Double = 60.0,
+    val sugarG: Double = 50.0,
+    val fiberG: Double = 15.0,
+    val saturatedFatG: Double = 15.0,
+    val currencyCode: String = "TWD",
+    val dailyBudgetMicros: Long = 0L
+)
+
 @Entity(
     tableName = "daily_food_logs",
     indices = [Index("date"), Index("productId"), Index("barcode")]
@@ -100,6 +123,9 @@ data class DailyFoodLogEntity(
     val sugarGPerServing: Double = 0.0,
     val fiberGPerServing: Double = 0.0,
     val saturatedFatGPerServing: Double = 0.0,
+    val catalogCostPerServingMicros: Long? = null,
+    val actualPaidTotalMicros: Long? = null,
+    val excludeCostFromBudget: Boolean = false,
     val loggedAt: Long = System.currentTimeMillis()
 )
 
@@ -136,10 +162,61 @@ data class DailyNutritionTotals(
     val entries: Int = 0
 )
 
+data class DailySpendingTotals(
+    val knownTotalMicros: Long = 0L,
+    val unknownEntries: Int = 0,
+    val catalogEstimatedMicros: Long = 0L,
+    val actualPaidMicros: Long = 0L,
+    val actualPaidEntries: Int = 0
+)
+
 data class ExtraNutrientTotal(val name: String, val unit: String, val value: Double)
+
+data class DeletedFoodLogEntity(
+    val log: DailyFoodLogEntity,
+    val extras: List<DailyExtraNutrientLogEntity>
+)
+
+data class DailyNutritionMutation(
+    val date: String,
+    val before: DailyNutritionTotals,
+    val after: DailyNutritionTotals,
+    val deleted: DeletedFoodLogEntity? = null
+)
+
+data class ProductSaveMutation(
+    val affectedDates: Set<String>,
+    val linkedEntriesUpdated: Int
+)
+
+fun DailyFoodLogEntity.toDomainSnapshot() = FoodLogSnapshot(
+    id = id,
+    date = java.time.LocalDate.parse(date),
+    productId = productId,
+    barcode = barcode,
+    productName = productName,
+    brand = brand,
+    servingLabel = servingLabel,
+    quantity = quantity,
+    caloriesPerServing = caloriesPerServing,
+    proteinGPerServing = proteinGPerServing,
+    sodiumMgPerServing = sodiumMgPerServing,
+    carbsGPerServing = carbsGPerServing,
+    fatGPerServing = fatGPerServing,
+    sugarGPerServing = sugarGPerServing,
+    fiberGPerServing = fiberGPerServing,
+    saturatedFatGPerServing = saturatedFatGPerServing,
+    catalogCostPerServingMicros = catalogCostPerServingMicros,
+    actualPaidTotalMicros = actualPaidTotalMicros,
+    excludeCostFromBudget = excludeCostFromBudget,
+    loggedAt = loggedAt
+)
 
 @Dao
 interface NutritionDao {
+    @Query("SELECT * FROM user_goals WHERE id = 1") fun observeUserGoals(): Flow<UserGoalsEntity?>
+    @Query("SELECT * FROM user_goals WHERE id = 1") suspend fun userGoals(): UserGoalsEntity?
+    @Upsert suspend fun upsertUserGoals(goals: UserGoalsEntity)
     @Upsert suspend fun upsertProduct(product: ProductEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertProductIfMissing(product: ProductEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertExtraNutrients(nutrients: List<ProductExtraNutrientEntity>)
@@ -152,8 +229,16 @@ interface NutritionDao {
     suspend fun productByBarcode(barcode: String): ProductEntity?
     @Query("SELECT * FROM product_extra_nutrients WHERE productId = :productId ORDER BY name")
     suspend fun extrasForProduct(productId: String): List<ProductExtraNutrientEntity>
-    @Query("SELECT * FROM products WHERE name LIKE '%' || :query || '%' OR brand LIKE '%' || :query || '%' OR COALESCE(barcode, '') LIKE '%' || :query || '%' ORDER BY name LIMIT 100")
+    @Query("SELECT * FROM products WHERE name LIKE '%' || :query || '%' ESCAPE '\\' OR brand LIKE '%' || :query || '%' ESCAPE '\\' OR COALESCE(barcode, '') LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY name LIMIT 100")
     fun observeProducts(query: String): Flow<List<ProductEntity>>
+    @Query("""
+        SELECT p.* FROM products p
+        JOIN daily_food_logs f ON f.productId = p.productId
+        GROUP BY p.productId
+        ORDER BY MAX(f.loggedAt) DESC
+        LIMIT 8
+    """)
+    fun observeRecentProducts(): Flow<List<ProductEntity>>
 
     @Query("SELECT * FROM products ORDER BY productId") suspend fun allProducts(): List<ProductEntity>
     @Query("SELECT * FROM product_extra_nutrients ORDER BY productId, name") suspend fun allProductExtras(): List<ProductExtraNutrientEntity>
@@ -172,6 +257,49 @@ interface NutritionDao {
         if (extras.isNotEmpty()) upsertExtraNutrients(extras)
     }
 
+    @Query("SELECT DISTINCT date FROM daily_food_logs WHERE productId = :productId")
+    suspend fun linkedDates(productId: String): List<String>
+    @Query("SELECT id FROM daily_food_logs WHERE productId = :productId")
+    suspend fun linkedLogIds(productId: String): List<Long>
+    @Query("""
+        UPDATE daily_food_logs SET barcode = :barcode, productName = :name, brand = :brand,
+            servingLabel = :servingLabel, caloriesPerServing = :calories,
+            proteinGPerServing = :proteinG, sodiumMgPerServing = :sodiumMg,
+            carbsGPerServing = :carbsG, fatGPerServing = :fatG,
+            sugarGPerServing = :sugarG, fiberGPerServing = :fiberG,
+            saturatedFatGPerServing = :saturatedFatG
+        WHERE productId = :productId
+    """)
+    suspend fun updateLinkedLogSnapshots(
+        productId: String, barcode: String?, name: String, brand: String, servingLabel: String,
+        calories: Double, proteinG: Double, sodiumMg: Double, carbsG: Double, fatG: Double,
+        sugarG: Double, fiberG: Double, saturatedFatG: Double
+    ): Int
+    @Query("DELETE FROM daily_extra_nutrient_logs WHERE logId = :logId")
+    suspend fun clearDailyExtrasForLog(logId: Long)
+
+    @Transaction
+    suspend fun saveProductAndUpdateLinkedLogs(
+        product: ProductEntity,
+        extras: List<ProductExtraNutrientEntity>
+    ): ProductSaveMutation {
+        val dates = linkedDates(product.productId).toSet()
+        val logIds = linkedLogIds(product.productId)
+        saveProductWithExtras(product, extras)
+        val updated = updateLinkedLogSnapshots(
+            product.productId, product.barcode, product.name, product.brand, product.servingLabel,
+            product.calories, product.proteinG, product.sodiumMg, product.carbsG, product.fatG,
+            product.sugarG, product.fiberG, product.saturatedFatG
+        )
+        logIds.forEach { logId ->
+            clearDailyExtrasForLog(logId)
+            if (extras.isNotEmpty()) insertDailyExtraLogs(extras.map {
+                DailyExtraNutrientLogEntity(logId = logId, name = it.name, valuePerServing = it.value, unit = it.unit)
+            })
+        }
+        return ProductSaveMutation(dates, updated)
+    }
+
     @Transaction
     suspend fun importSeedProducts(products: List<ProductWithExtras>, markerKey: String) {
         if (metadata(markerKey) == "complete") return
@@ -187,13 +315,25 @@ interface NutritionDao {
     @Insert suspend fun insertFoodLogs(logs: List<DailyFoodLogEntity>)
     @Insert suspend fun insertDailyExtraLogs(logs: List<DailyExtraNutrientLogEntity>)
     @Update suspend fun updateFoodLog(log: DailyFoodLogEntity)
+    @Query("UPDATE daily_food_logs SET quantity = :quantity, actualPaidTotalMicros = :actualPaidTotalMicros, excludeCostFromBudget = :excludeCostFromBudget WHERE id = :id")
+    suspend fun updateFoodLogQuantity(id: Long, quantity: Double, actualPaidTotalMicros: Long?, excludeCostFromBudget: Boolean): Int
     @Query("SELECT * FROM daily_food_logs WHERE id = :id LIMIT 1") suspend fun foodLogById(id: Long): DailyFoodLogEntity?
+    @Query("SELECT * FROM daily_extra_nutrient_logs WHERE logId = :logId ORDER BY id")
+    suspend fun dailyExtrasForLog(logId: Long): List<DailyExtraNutrientLogEntity>
     @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC") suspend fun foodLogsForDate(date: String): List<DailyFoodLogEntity>
     @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC") fun observeLogsForDate(date: String): Flow<List<DailyFoodLogEntity>>
-    @Query("DELETE FROM daily_food_logs WHERE id = :id") suspend fun deleteLog(id: Long)
+    @Query("DELETE FROM daily_food_logs WHERE id = :id") suspend fun deleteLog(id: Long): Int
 
     @Transaction
-    suspend fun addProductToDate(date: String, product: ProductEntity, quantity: Double, extras: List<ProductExtraNutrientEntity>) {
+    suspend fun addProductToDate(
+        date: String,
+        product: ProductEntity,
+        quantity: Double,
+        extras: List<ProductExtraNutrientEntity>,
+        actualPaidTotalMicros: Long? = null,
+        excludeCostFromBudget: Boolean = false
+    ): DailyNutritionMutation {
+        val before = totalsForDate(date)
         val logId = insertFoodLog(
             DailyFoodLogEntity(
                 date = date,
@@ -210,12 +350,49 @@ interface NutritionDao {
                 fatGPerServing = product.fatG,
                 sugarGPerServing = product.sugarG,
                 fiberGPerServing = product.fiberG,
-                saturatedFatGPerServing = product.saturatedFatG
+                saturatedFatGPerServing = product.saturatedFatG,
+                catalogCostPerServingMicros = product.purchasePriceMicros?.let {
+                    (it / product.purchaseUnitServings).toLong()
+                },
+                actualPaidTotalMicros = actualPaidTotalMicros,
+                excludeCostFromBudget = excludeCostFromBudget
             )
         )
         if (extras.isNotEmpty()) insertDailyExtraLogs(extras.map {
             DailyExtraNutrientLogEntity(logId = logId, name = it.name, valuePerServing = it.value, unit = it.unit)
         })
+        return DailyNutritionMutation(date, before, totalsForDate(date))
+    }
+
+    @Transaction
+    suspend fun updateFoodLogQuantitySnapshot(
+        id: Long,
+        quantity: Double,
+        actualPaidTotalMicros: Long? = null,
+        excludeCostFromBudget: Boolean = false
+    ): DailyNutritionMutation? {
+        val existing = foodLogById(id) ?: return null
+        val before = totalsForDate(existing.date)
+        check(updateFoodLogQuantity(id, quantity, actualPaidTotalMicros, excludeCostFromBudget) == 1) { "Food entry no longer exists." }
+        return DailyNutritionMutation(existing.date, before, totalsForDate(existing.date))
+    }
+
+    @Transaction
+    suspend fun deleteFoodLogSnapshot(id: Long): DailyNutritionMutation? {
+        val existing = foodLogById(id) ?: return null
+        val before = totalsForDate(existing.date)
+        val deleted = DeletedFoodLogEntity(existing, dailyExtrasForLog(id))
+        check(deleteLog(id) == 1) { "Food entry no longer exists." }
+        return DailyNutritionMutation(existing.date, before, totalsForDate(existing.date), deleted)
+    }
+
+    @Transaction
+    suspend fun restoreFoodLogSnapshot(deleted: DeletedFoodLogEntity): DailyNutritionMutation {
+        val date = deleted.log.date
+        val before = totalsForDate(date)
+        insertFoodLog(deleted.log)
+        if (deleted.extras.isNotEmpty()) insertDailyExtraLogs(deleted.extras)
+        return DailyNutritionMutation(date, before, totalsForDate(date))
     }
 
     @Query("""
@@ -241,6 +418,32 @@ interface NutritionDao {
             COALESCE(SUM(saturatedFatGPerServing * quantity), 0.0) AS saturatedFatG,
             COUNT(*) AS entries FROM daily_food_logs WHERE date = :date
     """) suspend fun totalsForDate(date: String): DailyNutritionTotals
+
+    @Query("""
+        SELECT COALESCE(SUM(CASE
+            WHEN excludeCostFromBudget = 1 THEN 0
+            WHEN actualPaidTotalMicros IS NOT NULL THEN actualPaidTotalMicros
+            WHEN catalogCostPerServingMicros IS NOT NULL THEN CAST(catalogCostPerServingMicros * quantity AS INTEGER)
+            ELSE 0 END), 0) AS knownTotalMicros,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND actualPaidTotalMicros IS NULL AND catalogCostPerServingMicros IS NULL THEN 1 ELSE 0 END), 0) AS unknownEntries,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND catalogCostPerServingMicros IS NOT NULL THEN CAST(catalogCostPerServingMicros * quantity AS INTEGER) ELSE 0 END), 0) AS catalogEstimatedMicros,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND actualPaidTotalMicros IS NOT NULL THEN actualPaidTotalMicros ELSE 0 END), 0) AS actualPaidMicros,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND actualPaidTotalMicros IS NOT NULL THEN 1 ELSE 0 END), 0) AS actualPaidEntries
+        FROM daily_food_logs WHERE date = :date
+    """) fun observeSpendingForDate(date: String): Flow<DailySpendingTotals>
+
+    @Query("""
+        SELECT COALESCE(SUM(CASE
+            WHEN excludeCostFromBudget = 1 THEN 0
+            WHEN actualPaidTotalMicros IS NOT NULL THEN actualPaidTotalMicros
+            WHEN catalogCostPerServingMicros IS NOT NULL THEN CAST(catalogCostPerServingMicros * quantity AS INTEGER)
+            ELSE 0 END), 0) AS knownTotalMicros,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND actualPaidTotalMicros IS NULL AND catalogCostPerServingMicros IS NULL THEN 1 ELSE 0 END), 0) AS unknownEntries,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND catalogCostPerServingMicros IS NOT NULL THEN CAST(catalogCostPerServingMicros * quantity AS INTEGER) ELSE 0 END), 0) AS catalogEstimatedMicros,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND actualPaidTotalMicros IS NOT NULL THEN actualPaidTotalMicros ELSE 0 END), 0) AS actualPaidMicros,
+            COALESCE(SUM(CASE WHEN excludeCostFromBudget = 0 AND actualPaidTotalMicros IS NOT NULL THEN 1 ELSE 0 END), 0) AS actualPaidEntries
+        FROM daily_food_logs WHERE date = :date
+    """) suspend fun spendingForDate(date: String): DailySpendingTotals
 
     @Query("""
         SELECT e.name, e.unit, COALESCE(SUM(e.valuePerServing * f.quantity), 0.0) AS value
@@ -281,6 +484,7 @@ interface NutritionDao {
     @Query("DELETE FROM daily_reports") suspend fun clearDailyReports()
     @Query("DELETE FROM product_extra_nutrients") suspend fun clearProductExtras()
     @Query("DELETE FROM products") suspend fun clearProducts()
+    @Query("DELETE FROM user_goals") suspend fun clearUserGoals()
 
     @Transaction
     suspend fun replaceUserData(
@@ -288,22 +492,25 @@ interface NutritionDao {
         productExtras: List<ProductExtraNutrientEntity>,
         reports: List<DailyReportEntity>,
         foodLogs: List<DailyFoodLogEntity>,
-        dailyExtras: List<DailyExtraNutrientLogEntity>
+        dailyExtras: List<DailyExtraNutrientLogEntity>,
+        goals: UserGoalsEntity
     ) {
-        clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts()
+        clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts(); clearUserGoals()
         products.forEach { upsertProduct(it) }
         if (productExtras.isNotEmpty()) upsertExtraNutrients(productExtras)
         if (reports.isNotEmpty()) insertDailyReports(reports)
         if (foodLogs.isNotEmpty()) insertFoodLogs(foodLogs)
         if (dailyExtras.isNotEmpty()) insertDailyExtraLogs(dailyExtras)
+        upsertUserGoals(goals)
     }
 }
 
 @Database(
     entities = [ProductEntity::class, ProductExtraNutrientEntity::class, DailyReportEntity::class,
-        DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class],
-    version = 3,
-    exportSchema = false
+        DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class,
+        UserGoalsEntity::class],
+    version = 4,
+    exportSchema = true
 )
 abstract class NutritionDatabase : RoomDatabase() {
     abstract fun nutritionDao(): NutritionDao
@@ -353,9 +560,24 @@ abstract class NutritionDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `purchasePriceMicros` INTEGER")
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `purchaseUnitServings` REAL NOT NULL DEFAULT 1.0")
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `includeInPlanner` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `plannerItemType` TEXT NOT NULL DEFAULT 'FOOD'")
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `alwaysIncludeInPlanner` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `daily_food_logs` ADD COLUMN `catalogCostPerServingMicros` INTEGER")
+                db.execSQL("ALTER TABLE `daily_food_logs` ADD COLUMN `actualPaidTotalMicros` INTEGER")
+                db.execSQL("ALTER TABLE `daily_food_logs` ADD COLUMN `excludeCostFromBudget` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `user_goals` (`id` INTEGER NOT NULL, `mode` TEXT NOT NULL, `calories` REAL NOT NULL, `expectedBurnCalories` REAL NOT NULL, `desiredDeficitCalories` REAL NOT NULL, `proteinG` REAL NOT NULL, `sodiumMg` REAL NOT NULL, `carbsG` REAL NOT NULL, `fatG` REAL NOT NULL, `sugarG` REAL NOT NULL, `fiberG` REAL NOT NULL, `saturatedFatG` REAL NOT NULL, `currencyCode` TEXT NOT NULL, `dailyBudgetMicros` INTEGER NOT NULL, PRIMARY KEY(`id`))""")
+                db.execSQL("""INSERT OR IGNORE INTO `user_goals` VALUES (1,'CALORIE',1850,2300,450,120,2000,150,60,50,15,15,'TWD',0)""")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
         }
     }
 }

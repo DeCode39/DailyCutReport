@@ -19,9 +19,39 @@ import androidx.health.connect.client.units.Mass
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 
-class HealthConnectManager(private val context: Context) {
+internal data class HealthRecordWindow(
+    val start: ZonedDateTime,
+    val end: ZonedDateTime
+)
+
+internal fun FoodLogSnapshot.healthRecordWindow(zone: ZoneId): HealthRecordWindow {
+    val logged = Instant.ofEpochMilli(loggedAt).atZone(zone)
+    val localTime = if (logged.toLocalDate() == date) logged.toLocalTime() else LocalTime.NOON
+    val safeTime = localTime.coerceAtMost(LocalTime.of(23, 58))
+    val start = ZonedDateTime.of(date, safeTime, zone)
+    return HealthRecordWindow(start, start.plusMinutes(1))
+}
+
+interface HealthDataSource {
+    fun availabilityMessage(): String
+    fun isAvailable(): Boolean
+    suspend fun hasCorePermissions(): Boolean
+    suspend fun hasNutritionPermission(): Boolean
+    suspend fun hasNutritionWritePermission(): Boolean
+    suspend fun readDailySummary(date: LocalDate): HealthSummary
+    suspend fun writeNutrition(
+        date: LocalDate,
+        logs: List<FoodLogSnapshot>,
+        priorClientRecordIds: Set<String>,
+        clientRecordVersion: Long
+    ): HealthWriteSummary
+}
+
+class HealthConnectManager(private val context: Context) : HealthDataSource {
     companion object {
         val CORE_PERMISSIONS: Set<String> = setOf(
             HealthPermission.getReadPermission(StepsRecord::class),
@@ -39,38 +69,37 @@ class HealthConnectManager(private val context: Context) {
         if (isAvailable()) HealthConnectClient.getOrCreate(context) else null
     }
 
-    fun availabilityMessage(): String {
-        return when (HealthConnectClient.getSdkStatus(context)) {
-            HealthConnectClient.SDK_AVAILABLE -> "Health Connect available"
-            HealthConnectClient.SDK_UNAVAILABLE -> "Health Connect unavailable on this device"
-            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "Health Connect provider update required"
-            else -> "Unknown Health Connect status"
-        }
+    override fun availabilityMessage(): String = when (HealthConnectClient.getSdkStatus(context)) {
+        HealthConnectClient.SDK_AVAILABLE -> "Health Connect available"
+        HealthConnectClient.SDK_UNAVAILABLE -> "Health Connect unavailable on this device"
+        HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "Health Connect provider update required"
+        else -> "Unknown Health Connect status"
     }
 
-    fun isAvailable(): Boolean = HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
+    override fun isAvailable(): Boolean = HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
 
-    suspend fun hasCorePermissions(): Boolean {
+    override suspend fun hasCorePermissions(): Boolean {
         val hc = client ?: return false
-        val granted = hc.permissionController.getGrantedPermissions()
-        return granted.containsAll(CORE_PERMISSIONS)
+        return hc.permissionController.getGrantedPermissions().containsAll(CORE_PERMISSIONS)
     }
 
-    suspend fun hasNutritionPermission(): Boolean = client?.permissionController
+    override suspend fun hasNutritionPermission(): Boolean = client?.permissionController
         ?.getGrantedPermissions()?.contains(NUTRITION_PERMISSION) == true
 
-    suspend fun hasNutritionWritePermission(): Boolean = client?.permissionController
+    override suspend fun hasNutritionWritePermission(): Boolean = client?.permissionController
         ?.getGrantedPermissions()?.contains(NUTRITION_WRITE_PERMISSION) == true
 
-    suspend fun readDailySummary(date: LocalDate): HealthSummary {
+    override suspend fun readDailySummary(date: LocalDate): HealthSummary {
         val hc = client ?: return HealthSummary(healthConnectStatus = availabilityMessage())
-        if (!hasCorePermissions()) return HealthSummary(healthConnectStatus = "Health Connect activity permission not granted")
+        val granted = hc.permissionController.getGrantedPermissions()
+        if (!granted.containsAll(CORE_PERMISSIONS)) {
+            return HealthSummary(healthConnectStatus = "Health Connect activity permission not granted")
+        }
 
         val zone = ZoneId.systemDefault()
         val start = date.atStartOfDay(zone).toInstant()
         val end = date.plusDays(1).atStartOfDay(zone).toInstant()
         val timeRange = TimeRangeFilter.between(start, end)
-
         val aggregate = hc.aggregate(
             AggregateRequest(
                 metrics = setOf(
@@ -83,42 +112,16 @@ class HealthConnectManager(private val context: Context) {
             )
         )
 
-        val sessions = runCatching {
-            hc.readRecords(
-                ReadRecordsRequest(
-                    recordType = ExerciseSessionRecord::class,
-                    timeRangeFilter = timeRange,
-                    ascendingOrder = false,
-                    pageSize = 100
-                )
-            ).records
-        }.getOrDefault(emptyList())
-
-        val nutritionRecords = if (hasNutritionPermission()) runCatching {
-            hc.readRecords(
-                ReadRecordsRequest(
-                    recordType = NutritionRecord::class,
-                    timeRangeFilter = timeRange,
-                    ascendingOrder = false,
-                    pageSize = 200
-                )
-            ).records
-        }.getOrDefault(emptyList()) else emptyList()
-
+        val sessions = readAllExerciseSessions(hc, timeRange)
+        val nutritionGranted = NUTRITION_PERMISSION in granted
+        val nutritionRecords = if (nutritionGranted) readAllNutritionRecords(hc, timeRange) else emptyList()
         val exerciseMinutes = sessions.sumOf { session ->
-            val minutes = Duration.between(session.startTime, session.endTime).toMinutes()
-            minutes.coerceAtLeast(0)
+            Duration.between(session.startTime, session.endTime).toMinutes().coerceAtLeast(0)
         }
-
-        val nutritionCalories = nutritionRecords.sumOf { it.energy?.inKilocalories ?: 0.0 }
-        val nutritionProteinG = nutritionRecords.sumOf { it.protein?.inGrams ?: 0.0 }
-        val nutritionSodiumMg = nutritionRecords.sumOf { it.sodium?.inMilligrams ?: 0.0 }
-        val nutritionStatus = if (!hasNutritionPermission()) {
-            "Activity loaded; Health Connect nutrition is optional and not granted"
-        } else if (nutritionRecords.isEmpty()) {
-            "Activity loaded; no Health Connect nutrition records found"
-        } else {
-            "Loaded from Health Connect, including ${nutritionRecords.size} nutrition record(s)"
+        val nutritionStatus = when {
+            !nutritionGranted -> "Activity loaded; Health Connect nutrition is optional and not granted"
+            nutritionRecords.isEmpty() -> "Activity loaded; no Health Connect nutrition records found"
+            else -> "Loaded from Health Connect, including ${nutritionRecords.size} nutrition record(s)"
         }
 
         return HealthSummary(
@@ -128,45 +131,89 @@ class HealthConnectManager(private val context: Context) {
             totalCalories = aggregate[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0,
             exerciseSessions = sessions.size,
             exerciseMinutes = exerciseMinutes,
-            nutritionCalories = nutritionCalories,
-            nutritionProteinG = nutritionProteinG,
-            nutritionSodiumMg = nutritionSodiumMg,
+            nutritionCalories = nutritionRecords.sumOf { it.energy?.inKilocalories ?: 0.0 },
+            nutritionProteinG = nutritionRecords.sumOf { it.protein?.inGrams ?: 0.0 },
+            nutritionSodiumMg = nutritionRecords.sumOf { it.sodium?.inMilligrams ?: 0.0 },
             nutritionRecords = nutritionRecords.size,
             healthConnectStatus = nutritionStatus
         )
     }
 
-    suspend fun writeNutrition(
+    override suspend fun writeNutrition(
         date: LocalDate,
         logs: List<FoodLogSnapshot>,
-        priorClientRecordIds: Set<String> = emptySet()
+        priorClientRecordIds: Set<String>,
+        clientRecordVersion: Long
     ): HealthWriteSummary {
         val hc = client ?: error(availabilityMessage())
         require(hasNutritionWritePermission()) { "Health Connect nutrition write permission not granted" }
-
-        val records = logs.map { it.toNutritionRecord() }
-        val clientIds = (priorClientRecordIds + records.mapNotNull { it.metadata.clientRecordId }).toList()
-        if (clientIds.isNotEmpty()) {
-            runCatching {
-                hc.deleteRecords(
-                    recordType = NutritionRecord::class,
-                    recordIdsList = emptyList(),
-                    clientRecordIdsList = clientIds
-                )
-            }
-        }
+        val currentIds = logs.map { it.healthClientRecordId }.toSet()
+        val records = logs.map { it.toNutritionRecord(clientRecordVersion) }
         if (records.isNotEmpty()) hc.insertRecords(records)
+        val staleIds = priorClientRecordIds - currentIds
+        if (staleIds.isNotEmpty()) {
+            hc.deleteRecords(
+                recordType = NutritionRecord::class,
+                recordIdsList = emptyList(),
+                clientRecordIdsList = staleIds.toList()
+            )
+        }
         return HealthWriteSummary(records.size, date)
     }
 
-    private fun FoodLogSnapshot.toNutritionRecord(): NutritionRecord {
-        val start = Instant.ofEpochMilli(loggedAt)
-        val end = start.plus(Duration.ofMinutes(1))
+    private suspend fun readAllExerciseSessions(
+        hc: HealthConnectClient,
+        timeRange: TimeRangeFilter
+    ): List<ExerciseSessionRecord> {
+        val records = mutableListOf<ExerciseSessionRecord>()
+        var pageToken: String? = null
+        do {
+            val page = hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = ExerciseSessionRecord::class,
+                    timeRangeFilter = timeRange,
+                    ascendingOrder = false,
+                    pageSize = 100,
+                    pageToken = pageToken
+                )
+            )
+            records += page.records
+            pageToken = page.pageToken
+        } while (pageToken != null)
+        return records
+    }
+
+    private suspend fun readAllNutritionRecords(
+        hc: HealthConnectClient,
+        timeRange: TimeRangeFilter
+    ): List<NutritionRecord> {
+        val records = mutableListOf<NutritionRecord>()
+        var pageToken: String? = null
+        do {
+            val page = hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = NutritionRecord::class,
+                    timeRangeFilter = timeRange,
+                    ascendingOrder = false,
+                    pageSize = 200,
+                    pageToken = pageToken
+                )
+            )
+            records += page.records
+            pageToken = page.pageToken
+        } while (pageToken != null)
+        return records
+    }
+
+    private fun FoodLogSnapshot.toNutritionRecord(clientRecordVersion: Long): NutritionRecord {
+        val zone = ZoneId.systemDefault()
+        val (start, end) = healthRecordWindow(zone)
+        val displayName = listOf(productName, brand.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · ")
         return NutritionRecord(
-            startTime = start,
-            startZoneOffset = null,
-            endTime = end,
-            endZoneOffset = null,
+            startTime = start.toInstant(),
+            startZoneOffset = start.offset,
+            endTime = end.toInstant(),
+            endZoneOffset = end.offset,
             energy = calories.positiveEnergy(),
             protein = proteinG.positiveGrams(),
             sodium = sodiumMg.positiveMilligrams(),
@@ -175,12 +222,16 @@ class HealthConnectManager(private val context: Context) {
             sugar = sugarG.positiveGrams(),
             dietaryFiber = fiberG.positiveGrams(),
             saturatedFat = saturatedFatG.positiveGrams(),
+            name = displayName,
             mealType = MealType.MEAL_TYPE_UNKNOWN,
-            metadata = Metadata(clientRecordId = healthClientRecordId)
+            metadata = Metadata.manualEntry(
+                clientRecordId = healthClientRecordId,
+                clientRecordVersion = clientRecordVersion
+            )
         )
     }
 
-    private fun Double.positiveEnergy(): Energy? = takeIf { it > 0.0 }?.let { Energy.kilocalories(it) }
-    private fun Double.positiveGrams(): Mass? = takeIf { it > 0.0 }?.let { Mass.grams(it) }
-    private fun Double.positiveMilligrams(): Mass? = takeIf { it > 0.0 }?.let { Mass.milligrams(it) }
+    private fun Double.positiveEnergy(): Energy? = takeIf { it > 0.0 }?.let(Energy::kilocalories)
+    private fun Double.positiveGrams(): Mass? = takeIf { it > 0.0 }?.let(Mass::grams)
+    private fun Double.positiveMilligrams(): Mass? = takeIf { it > 0.0 }?.let(Mass::milligrams)
 }

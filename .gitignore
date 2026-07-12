@@ -4,3 +4,6 @@ local.properties
 build/
 app/build/
 app/signing/dailycut-debug.jks
+*.p12
+release.env
+/release-assets/

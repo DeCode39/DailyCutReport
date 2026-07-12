@@ -3,12 +3,15 @@ package com.littleone.dailycutreport
 import java.time.LocalDate
 import kotlin.math.roundToInt
 
-class MacroThresholdNotifier(
-    private val targets: DailyNutritionTargets = DailyNutritionTargets()
-) {
+class MacroThresholdNotifier {
     private val notified = mutableSetOf<String>()
 
-    fun crossingMessage(date: LocalDate, before: NutritionSummary, after: NutritionSummary): String? =
+    fun crossingMessage(
+        date: LocalDate,
+        before: NutritionSummary,
+        after: NutritionSummary,
+        targets: DailyNutritionTargets = DailyNutritionTargets()
+    ): String? =
         listOfNotNull(
             threshold(date, "calories", "Calories", before.calories, after.calories, targets.calories),
             threshold(date, "protein", "Protein", before.proteinG, after.proteinG, targets.proteinG),

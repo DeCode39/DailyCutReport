@@ -85,6 +85,51 @@ class NutritionDatabaseTest {
         assertEquals(1, totals.entries)
     }
 
+    @Test fun quantityMutationAndDeleteUndoAreTransactional() = runBlocking {
+        val dao = database.nutritionDao()
+        val product = ProductEntity(productId = "meal", name = "Meal", calories = 100.0)
+        val extras = listOf(ProductExtraNutrientEntity("meal", "Potassium", 200.0, "mg"))
+        dao.saveProductWithExtras(product, extras)
+        dao.addProductToDate("2026-01-02", product, 1.0, extras)
+        val id = dao.foodLogsForDate("2026-01-02").single().id
+
+        val edited = dao.updateFoodLogQuantitySnapshot(id, 2.5)!!
+        assertEquals(100.0, edited.before.calories, 0.0)
+        assertEquals(250.0, edited.after.calories, 0.0)
+        val deleted = dao.deleteFoodLogSnapshot(id)!!
+        assertEquals(0, deleted.after.entries)
+        assertEquals(1, deleted.deleted!!.extras.size)
+        val restored = dao.restoreFoodLogSnapshot(deleted.deleted!!)
+        assertEquals(250.0, restored.after.calories, 0.0)
+        assertEquals(1, dao.dailyExtrasForLog(id).size)
+    }
+
+    @Test fun ignoredLogPriceDoesNotCountTowardDailySpending() = runBlocking {
+        val dao = database.nutritionDao()
+        val product = ProductEntity(
+            productId = "meal", name = "Meal", purchasePriceMicros = 20_000_000L,
+            purchaseUnitServings = 2.0
+        )
+        dao.addProductToDate("2026-01-02", product, 2.0, emptyList(), 15_000_000L, true)
+
+        val spending = dao.spendingForDate("2026-01-02")
+        val log = dao.foodLogsForDate("2026-01-02").single()
+        assertEquals(0L, spending.knownTotalMicros)
+        assertEquals(0, spending.unknownEntries)
+        assertEquals(15_000_000L, log.actualPaidTotalMicros)
+        assertEquals(true, log.excludeCostFromBudget)
+    }
+
+    @Test fun escapedWildcardSearchMatchesLiteralProductName() = runBlocking {
+        val dao = database.nutritionDao()
+        dao.saveProductWithExtras(ProductEntity(productId = "literal", name = "100% Whey_Protein"), emptyList())
+        dao.saveProductWithExtras(ProductEntity(productId = "wild", name = "100X WheyAProtein"), emptyList())
+
+        val matches = dao.observeProducts("100\\% Whey\\_Protein").first()
+
+        assertEquals(listOf("literal"), matches.map { it.productId })
+    }
+
     @Test fun clearManualOverridesRemovesLegacyOverrideValues() = runBlocking {
         val dao = database.nutritionDao()
         dao.upsertDailyReport(DailyReportEntity(
@@ -130,7 +175,7 @@ class NutritionDatabaseTest {
         helper.close()
 
         val migrated = Room.databaseBuilder(context, NutritionDatabase::class.java, name)
-            .addMigrations(NutritionDatabase.MIGRATION_1_2, NutritionDatabase.MIGRATION_2_3)
+            .addMigrations(NutritionDatabase.MIGRATION_1_2, NutritionDatabase.MIGRATION_2_3, NutritionDatabase.MIGRATION_3_4)
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase
         val log = migrated.nutritionDao().observeLogsForDate("2026-01-02").first().single()
@@ -142,6 +187,46 @@ class NutritionDatabaseTest {
         migrated.close()
         context.deleteDatabase(name)
         database = Room.inMemoryDatabaseBuilder(context, NutritionDatabase::class.java).allowMainThreadQueries().build()
+    }
+
+    @Test fun productCorrectionPropagatesNutritionButPreservesLoggedCost() = runBlocking {
+        val dao = database.nutritionDao()
+        val original = ProductEntity(
+            productId = "meal", name = "Original", calories = 100.0,
+            purchasePriceMicros = 20_000_000L, purchaseUnitServings = 2.0
+        )
+        dao.saveProductWithExtras(original, listOf(ProductExtraNutrientEntity("meal", "BCAA", 1.0, "g")))
+        dao.addProductToDate("2026-01-02", original, 2.0, dao.extrasForProduct("meal"), 15_000_000L)
+
+        val mutation = dao.saveProductAndUpdateLinkedLogs(
+            original.copy(name = "Corrected", calories = 150.0, purchasePriceMicros = 30_000_000L),
+            listOf(ProductExtraNutrientEntity("meal", "Potassium", 100.0, "mg"))
+        )
+        val log = dao.foodLogsForDate("2026-01-02").single()
+
+        assertEquals(1, mutation.linkedEntriesUpdated)
+        assertEquals(setOf("2026-01-02"), mutation.affectedDates)
+        assertEquals("Corrected", log.productName)
+        assertEquals(150.0, log.caloriesPerServing, 0.0)
+        assertEquals(10_000_000L, log.catalogCostPerServingMicros)
+        assertEquals(15_000_000L, log.actualPaidTotalMicros)
+        assertEquals("Potassium", dao.dailyExtrasForLog(log.id).single().name)
+    }
+
+    @Test fun spendingUsesActualPaidIncludingExplicitFreeItems() = runBlocking {
+        val dao = database.nutritionDao()
+        val priced = ProductEntity(productId = "priced", name = "Priced", purchasePriceMicros = 12_000_000L, purchaseUnitServings = 2.0)
+        val unknown = ProductEntity(productId = "unknown", name = "Unknown")
+        dao.saveProductWithExtras(priced, emptyList())
+        dao.saveProductWithExtras(unknown, emptyList())
+        dao.addProductToDate("2026-01-02", priced, 2.0, emptyList())
+        dao.addProductToDate("2026-01-02", priced, 1.0, emptyList(), 0L)
+        dao.addProductToDate("2026-01-02", unknown, 1.0, emptyList())
+
+        val spending = dao.spendingForDate("2026-01-02")
+
+        assertEquals(12_000_000L, spending.knownTotalMicros)
+        assertEquals(1, spending.unknownEntries)
     }
 
     private fun createVersionOneSchema(db: SupportSQLiteDatabase) {

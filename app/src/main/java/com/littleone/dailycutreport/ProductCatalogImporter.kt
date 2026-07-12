@@ -60,8 +60,13 @@ object ProductCatalogParser {
                 sugarG = item.nonNegative("sugarG"),
                 fiberG = item.nonNegative("fiberG"),
                 saturatedFatG = item.nonNegative("saturatedFatG"),
+                includeInPlanner = item.optBoolean("includeInPlanner", true),
+                plannerItemType = item.optString("plannerItemType", PlannerItemType.FOOD.name).uppercase().also {
+                    require(it in PlannerItemType.entries.map(PlannerItemType::name))
+                },
+                alwaysIncludeInPlanner = item.optBoolean("alwaysIncludeInPlanner", false),
                 notes = item.optString("notes")
-            )
+            ).also { require(!it.alwaysIncludeInPlanner || it.includeInPlanner) }
             val extrasJson = item.optJSONArray("extras") ?: JSONArray()
             val extras = (0 until extrasJson.length()).map { extraIndex ->
                 val extra = extrasJson.getJSONObject(extraIndex)

@@ -2,14 +2,37 @@ package com.littleone.dailycutreport
 
 import android.app.Application
 import android.content.Context
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 class DailyCutApplication : Application() {
     lateinit var container: AppContainer
         private set
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
         container = DefaultAppContainer(this)
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                applicationScope.launch {
+                    val repository = container.repository
+                    runCatching {
+                        repository.initialize()
+                        if (repository.healthConnectAvailable() && repository.healthCorePermissionsGranted()) {
+                            repository.refreshHealth(LocalDate.now())
+                        }
+                        repository.retryPendingNutritionSync()
+                    }
+                }
+            }
+        })
     }
 }
 

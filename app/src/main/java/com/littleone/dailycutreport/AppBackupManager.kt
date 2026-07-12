@@ -36,7 +36,8 @@ class EncryptedAppBackupManager(
                 productExtras = dao.allProductExtras(),
                 reports = dao.allDailyReports(),
                 foodLogs = dao.allFoodLogs(),
-                dailyExtras = dao.allDailyExtras()
+                dailyExtras = dao.allDailyExtras(),
+                goals = dao.userGoals() ?: UserGoalsEntity()
             )
         ).toByteArray(Charsets.UTF_8)
         val encrypted = BackupCrypto.encrypt(payload, password)
@@ -64,8 +65,17 @@ class EncryptedAppBackupManager(
         } catch (_: AEADBadTagException) {
             throw IllegalArgumentException("Wrong password or damaged backup.")
         }
-        val payload = BackupJson.decode(plain.toString(Charsets.UTF_8))
-        dao.replaceUserData(payload.products, payload.productExtras, payload.reports, payload.foodLogs, payload.dailyExtras)
+        val decoded = BackupJson.decode(plain.toString(Charsets.UTF_8))
+        val payload = decoded.copy(reports = decoded.reports.map { report ->
+            report.copy(
+                manualFoodCalories = null,
+                manualProteinG = null,
+                manualSodiumMg = null,
+                manualBurnCalories = null,
+                notes = ""
+            )
+        })
+        dao.replaceUserData(payload.products, payload.productExtras, payload.reports, payload.foodLogs, payload.dailyExtras, payload.goals)
     }
 
     companion object {
@@ -79,7 +89,8 @@ data class BackupPayload(
     val productExtras: List<ProductExtraNutrientEntity>,
     val reports: List<DailyReportEntity>,
     val foodLogs: List<DailyFoodLogEntity>,
-    val dailyExtras: List<DailyExtraNutrientLogEntity>
+    val dailyExtras: List<DailyExtraNutrientLogEntity>,
+    val goals: UserGoalsEntity = UserGoalsEntity()
 )
 
 object BackupCrypto {
@@ -149,12 +160,12 @@ object BackupCrypto {
 }
 
 object BackupJson {
-    private const val SCHEMA_VERSION = 1
+    private const val SCHEMA_VERSION = 2
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
         put("createdAt", System.currentTimeMillis())
-        put("settings", JSONObject())
+        put("settings", payload.goals.toJson())
         put("products", JSONArray().apply { payload.products.forEach { put(it.toJson()) } })
         put("productExtras", JSONArray().apply { payload.productExtras.forEach { put(it.toJson()) } })
         put("dailyReports", JSONArray().apply { payload.reports.forEach { put(it.toJson()) } })
@@ -164,14 +175,16 @@ object BackupJson {
 
     fun decode(json: String): BackupPayload {
         val root = JSONObject(json)
-        require(root.getInt("schemaVersion") == SCHEMA_VERSION) { "Unsupported backup schema." }
+        val schema = root.getInt("schemaVersion")
+        require(schema in 1..SCHEMA_VERSION) { "Unsupported backup schema." }
         val products = root.getJSONArray("products").objects(::productFromJson)
         val productExtras = root.getJSONArray("productExtras").objects(::productExtraFromJson)
         val reports = root.getJSONArray("dailyReports").objects(::reportFromJson)
         val logs = root.getJSONArray("foodLogs").objects(::foodLogFromJson)
         val dailyExtras = root.getJSONArray("dailyExtras").objects(::dailyExtraFromJson)
         validate(products, productExtras, reports, logs, dailyExtras)
-        return BackupPayload(products, productExtras, reports, logs, dailyExtras)
+        val goals = if (schema >= 2) goalsFromJson(root.getJSONObject("settings")) else UserGoalsEntity()
+        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals)
     }
 
     private fun validate(
@@ -188,13 +201,24 @@ object BackupJson {
         require(logIds.size == logs.size && logs.all { it.id > 0 && it.quantity > 0 }) { "Invalid food logs in backup." }
         logs.forEach { LocalDate.parse(it.date) }
         require(dailyExtras.all { it.logId in logIds }) { "Backup contains an orphan daily nutrient." }
+        products.forEach {
+            require(it.purchasePriceMicros == null || it.purchasePriceMicros >= 0L)
+            require(it.purchaseUnitServings > 0.0)
+        }
+        logs.forEach {
+            require(it.catalogCostPerServingMicros == null || it.catalogCostPerServingMicros >= 0L)
+            require(it.actualPaidTotalMicros == null || it.actualPaidTotalMicros >= 0L)
+        }
     }
 
     private fun ProductEntity.toJson() = JSONObject().apply {
         put("productId", productId); putNullable("barcode", barcode); put("name", name); put("brand", brand)
         put("servingLabel", servingLabel); put("calories", calories); put("proteinG", proteinG); put("sodiumMg", sodiumMg)
         put("carbsG", carbsG); put("fatG", fatG); put("sugarG", sugarG); put("fiberG", fiberG)
-        put("saturatedFatG", saturatedFatG); put("notes", notes); put("createdAt", createdAt); put("updatedAt", updatedAt)
+        put("saturatedFatG", saturatedFatG); putNullable("purchasePriceMicros", purchasePriceMicros)
+        put("purchaseUnitServings", purchaseUnitServings); put("includeInPlanner", includeInPlanner)
+        put("plannerItemType", plannerItemType); put("alwaysIncludeInPlanner", alwaysIncludeInPlanner)
+        put("notes", notes); put("createdAt", createdAt); put("updatedAt", updatedAt)
     }
 
     private fun ProductExtraNutrientEntity.toJson() = JSONObject().apply {
@@ -216,7 +240,17 @@ object BackupJson {
         put("productName", productName); put("brand", brand); put("servingLabel", servingLabel); put("quantity", quantity)
         put("caloriesPerServing", caloriesPerServing); put("proteinGPerServing", proteinGPerServing); put("sodiumMgPerServing", sodiumMgPerServing)
         put("carbsGPerServing", carbsGPerServing); put("fatGPerServing", fatGPerServing); put("sugarGPerServing", sugarGPerServing)
-        put("fiberGPerServing", fiberGPerServing); put("saturatedFatGPerServing", saturatedFatGPerServing); put("loggedAt", loggedAt)
+        put("fiberGPerServing", fiberGPerServing); put("saturatedFatGPerServing", saturatedFatGPerServing)
+        putNullable("catalogCostPerServingMicros", catalogCostPerServingMicros)
+        putNullable("actualPaidTotalMicros", actualPaidTotalMicros)
+        put("excludeCostFromBudget", excludeCostFromBudget); put("loggedAt", loggedAt)
+    }
+
+    private fun UserGoalsEntity.toJson() = JSONObject().apply {
+        put("mode", mode); put("calories", calories); put("expectedBurnCalories", expectedBurnCalories)
+        put("desiredDeficitCalories", desiredDeficitCalories); put("proteinG", proteinG); put("sodiumMg", sodiumMg)
+        put("carbsG", carbsG); put("fatG", fatG); put("sugarG", sugarG); put("fiberG", fiberG)
+        put("saturatedFatG", saturatedFatG); put("currencyCode", currencyCode); put("dailyBudgetMicros", dailyBudgetMicros)
     }
 
     private fun DailyExtraNutrientLogEntity.toJson() = JSONObject().apply {
@@ -228,8 +262,15 @@ object BackupJson {
         brand = o.getString("brand"), servingLabel = o.requiredText("servingLabel"), calories = o.nonNegative("calories"),
         proteinG = o.nonNegative("proteinG"), sodiumMg = o.nonNegative("sodiumMg"), carbsG = o.nonNegative("carbsG"),
         fatG = o.nonNegative("fatG"), sugarG = o.nonNegative("sugarG"), fiberG = o.nonNegative("fiberG"),
-        saturatedFatG = o.nonNegative("saturatedFatG"), notes = o.getString("notes"), createdAt = o.getLong("createdAt"), updatedAt = o.getLong("updatedAt")
-    )
+        saturatedFatG = o.nonNegative("saturatedFatG"), purchasePriceMicros = o.optionalLong("purchasePriceMicros"),
+        purchaseUnitServings = o.optDouble("purchaseUnitServings", 1.0).also { require(it.isFinite() && it > 0.0) },
+        includeInPlanner = o.optBoolean("includeInPlanner", true),
+        plannerItemType = o.optString("plannerItemType", PlannerItemType.FOOD.name).also {
+            require(it in PlannerItemType.entries.map(PlannerItemType::name))
+        },
+        alwaysIncludeInPlanner = o.optBoolean("alwaysIncludeInPlanner", false),
+        notes = o.getString("notes"), createdAt = o.getLong("createdAt"), updatedAt = o.getLong("updatedAt")
+    ).also { require(!it.alwaysIncludeInPlanner || it.includeInPlanner) }
 
     private fun productExtraFromJson(o: JSONObject) = ProductExtraNutrientEntity(
         o.requiredText("productId"), o.requiredText("name"), o.nonNegative("value"), o.getString("unit")
@@ -252,8 +293,20 @@ object BackupJson {
         quantity = o.positive("quantity"), caloriesPerServing = o.nonNegative("caloriesPerServing"), proteinGPerServing = o.nonNegative("proteinGPerServing"),
         sodiumMgPerServing = o.nonNegative("sodiumMgPerServing"), carbsGPerServing = o.nonNegative("carbsGPerServing"),
         fatGPerServing = o.nonNegative("fatGPerServing"), sugarGPerServing = o.nonNegative("sugarGPerServing"),
-        fiberGPerServing = o.nonNegative("fiberGPerServing"), saturatedFatGPerServing = o.nonNegative("saturatedFatGPerServing"), loggedAt = o.getLong("loggedAt")
+        fiberGPerServing = o.nonNegative("fiberGPerServing"), saturatedFatGPerServing = o.nonNegative("saturatedFatGPerServing"),
+        catalogCostPerServingMicros = o.optionalLong("catalogCostPerServingMicros"),
+        actualPaidTotalMicros = o.optionalLong("actualPaidTotalMicros"),
+        excludeCostFromBudget = o.optBoolean("excludeCostFromBudget", false), loggedAt = o.getLong("loggedAt")
     )
+
+    private fun goalsFromJson(o: JSONObject) = UserGoalsEntity(
+        mode = o.getString("mode").also { require(it in GoalMode.entries.map(GoalMode::name)) },
+        calories = o.positive("calories"), expectedBurnCalories = o.positive("expectedBurnCalories"),
+        desiredDeficitCalories = o.nonNegative("desiredDeficitCalories"), proteinG = o.nonNegative("proteinG"),
+        sodiumMg = o.nonNegative("sodiumMg"), carbsG = o.nonNegative("carbsG"), fatG = o.nonNegative("fatG"),
+        sugarG = o.nonNegative("sugarG"), fiberG = o.nonNegative("fiberG"), saturatedFatG = o.nonNegative("saturatedFatG"),
+        currencyCode = o.requiredText("currencyCode"), dailyBudgetMicros = o.getLong("dailyBudgetMicros").also { require(it >= 0L) }
+    ).also { it.toDomain().requireValid() }
 
     private fun dailyExtraFromJson(o: JSONObject) = DailyExtraNutrientLogEntity(
         id = o.getLong("id"), logId = o.getLong("logId"), name = o.requiredText("name"),
@@ -263,6 +316,7 @@ object BackupJson {
     private fun JSONObject.putNullable(key: String, value: Any?) { put(key, value ?: JSONObject.NULL) }
     private fun JSONObject.nullableText(key: String): String? = if (isNull(key)) null else getString(key).trim().ifBlank { null }
     private fun JSONObject.nullableDouble(key: String): Double? = if (isNull(key)) null else getDouble(key).also { require(it.isFinite() && it >= 0) }
+    private fun JSONObject.optionalLong(key: String): Long? = if (!has(key) || isNull(key)) null else getLong(key).also { require(it >= 0L) }
     private fun JSONObject.requiredText(key: String): String = getString(key).trim().also { require(it.isNotBlank()) { "$key is required." } }
     private fun JSONObject.nonNegative(key: String): Double = getDouble(key).also { require(it.isFinite() && it >= 0) { "$key is invalid." } }
     private fun JSONObject.positive(key: String): Double = getDouble(key).also { require(it.isFinite() && it > 0) { "$key is invalid." } }

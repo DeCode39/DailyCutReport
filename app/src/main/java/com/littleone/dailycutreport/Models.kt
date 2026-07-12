@@ -42,6 +42,78 @@ data class DailyNutritionTargets(
     val saturatedFatG: Double = 15.0
 )
 
+enum class GoalMode { CALORIE, DEFICIT }
+
+enum class PlannerItemType { FOOD, DRINK }
+
+data class UserGoals(
+    val mode: GoalMode = GoalMode.CALORIE,
+    val calories: Double = 1850.0,
+    val expectedBurnCalories: Double = 2300.0,
+    val desiredDeficitCalories: Double = 450.0,
+    val proteinG: Double = 120.0,
+    val sodiumMg: Double = 2000.0,
+    val carbsG: Double = 150.0,
+    val fatG: Double = 60.0,
+    val sugarG: Double = 50.0,
+    val fiberG: Double = 15.0,
+    val saturatedFatG: Double = 15.0,
+    val currencyCode: String = "TWD",
+    val dailyBudgetMicros: Long = 0L
+) {
+    val effectiveCalorieTarget: Double
+        get() = if (mode == GoalMode.DEFICIT) expectedBurnCalories - desiredDeficitCalories else calories
+
+    val targets: DailyNutritionTargets
+        get() = DailyNutritionTargets(
+            effectiveCalorieTarget, proteinG, sodiumMg, carbsG, fatG, sugarG, fiberG, saturatedFatG
+        )
+
+    fun requireValid(): UserGoals = apply {
+        require(calories > 0.0) { "Calorie target must be greater than zero." }
+        require(expectedBurnCalories > 0.0) { "Expected burn must be greater than zero." }
+        require(desiredDeficitCalories >= 0.0 && desiredDeficitCalories < expectedBurnCalories) {
+            "Desired deficit must be lower than expected burn."
+        }
+        require(listOf(proteinG, sodiumMg, carbsG, fatG, sugarG, fiberG, saturatedFatG).all { it >= 0.0 }) {
+            "Nutrient goals cannot be negative."
+        }
+        require(runCatching { java.util.Currency.getInstance(currencyCode) }.isSuccess) { "Choose a valid currency code." }
+        require(dailyBudgetMicros >= 0L) { "Daily budget cannot be negative." }
+    }
+}
+
+data class ProductPricing(
+    val purchasePriceMicros: Long?,
+    val purchaseUnitServings: Double = 1.0
+) {
+    val costPerServingMicros: Long?
+        get() = purchasePriceMicros?.let { (it / purchaseUnitServings).toLong() }
+}
+
+data class LoggedCost(
+    val catalogCostPerServingMicros: Long? = null,
+    val actualPaidTotalMicros: Long? = null,
+    val excludedFromBudget: Boolean = false
+) {
+    fun recordedTotalMicros(quantity: Double): Long? = actualPaidTotalMicros
+        ?: catalogCostPerServingMicros?.let { (it * quantity).toLong() }
+
+    fun effectiveTotalMicros(quantity: Double): Long? = if (excludedFromBudget) 0L else recordedTotalMicros(quantity)
+}
+
+data class DailySpending(
+    val knownTotalMicros: Long = 0L,
+    val unknownEntries: Int = 0,
+    val budgetMicros: Long = 0L,
+    val catalogEstimatedMicros: Long = 0L,
+    val actualPaidMicros: Long = 0L,
+    val actualPaidEntries: Int = 0
+) {
+    val remainingMicros: Long get() = budgetMicros - knownTotalMicros
+    val isComplete: Boolean get() = unknownEntries == 0
+}
+
 data class HealthWriteSummary(val recordsWritten: Int, val date: LocalDate)
 
 data class ManualOverrides(
@@ -53,9 +125,27 @@ data class ManualOverrides(
 )
 
 enum class DayVerdict(val label: String) {
+    UNAVAILABLE("Burn data unavailable"),
     CUT("Cut day"),
     SURPLUS("Surplus day"),
     MAINTENANCE("Maintenance-ish")
+}
+
+sealed interface EnergyBalance {
+    data object Unavailable : EnergyBalance
+    data class Cut(val calories: Double) : EnergyBalance
+    data class Surplus(val calories: Double) : EnergyBalance
+    data class Maintenance(val calories: Double) : EnergyBalance
+}
+
+fun calculateEnergyBalance(burnCalories: Double, foodCalories: Double): EnergyBalance {
+    if (burnCalories <= 0.0) return EnergyBalance.Unavailable
+    val deficit = burnCalories - foodCalories
+    return when {
+        deficit >= 300.0 -> EnergyBalance.Cut(deficit)
+        deficit <= -200.0 -> EnergyBalance.Surplus(-deficit)
+        else -> EnergyBalance.Maintenance(deficit)
+    }
 }
 
 data class DailyReport(
@@ -90,10 +180,13 @@ data class DailyReport(
 
     val deficitCalories: Double get() = finalBurnCalories - finalFoodCalories
 
+    val energyBalance: EnergyBalance get() = calculateEnergyBalance(finalBurnCalories, finalFoodCalories)
+
     val verdict: DayVerdict
         get() = when {
-            deficitCalories >= 300.0 -> DayVerdict.CUT
-            deficitCalories <= -200.0 -> DayVerdict.SURPLUS
+            energyBalance is EnergyBalance.Unavailable -> DayVerdict.UNAVAILABLE
+            energyBalance is EnergyBalance.Cut -> DayVerdict.CUT
+            energyBalance is EnergyBalance.Surplus -> DayVerdict.SURPLUS
             else -> DayVerdict.MAINTENANCE
         }
 
@@ -131,6 +224,9 @@ data class FoodLogSnapshot(
     val sugarGPerServing: Double = 0.0,
     val fiberGPerServing: Double = 0.0,
     val saturatedFatGPerServing: Double = 0.0,
+    val catalogCostPerServingMicros: Long? = null,
+    val actualPaidTotalMicros: Long? = null,
+    val excludeCostFromBudget: Boolean = false,
     val loggedAt: Long = System.currentTimeMillis()
 ) {
     val calories: Double get() = caloriesPerServing * quantity
@@ -141,6 +237,8 @@ data class FoodLogSnapshot(
     val sugarG: Double get() = sugarGPerServing * quantity
     val fiberG: Double get() = fiberGPerServing * quantity
     val saturatedFatG: Double get() = saturatedFatGPerServing * quantity
+    val effectiveCostMicros: Long? get() = LoggedCost(catalogCostPerServingMicros, actualPaidTotalMicros, excludeCostFromBudget).effectiveTotalMicros(quantity)
+    val recordedCostMicros: Long? get() = LoggedCost(catalogCostPerServingMicros, actualPaidTotalMicros).recordedTotalMicros(quantity)
 }
 
 data class ProductWithExtras(
@@ -148,32 +246,78 @@ data class ProductWithExtras(
     val extras: List<ProductExtraNutrientEntity> = emptyList()
 )
 
-data class FoodLogEdit(
+data class FoodQuantityEdit(
     val id: Long,
     val quantity: Double,
-    val servingLabel: String,
-    val caloriesPerServing: Double,
-    val proteinGPerServing: Double,
-    val sodiumMgPerServing: Double,
-    val carbsGPerServing: Double,
-    val fatGPerServing: Double,
-    val sugarGPerServing: Double,
-    val fiberGPerServing: Double,
-    val saturatedFatGPerServing: Double
+    val actualPaidTotalMicros: Long? = null,
+    val excludeCostFromBudget: Boolean = false
 )
 
-fun FoodLogSnapshot.quantityEdit(quantity: Double) = FoodLogEdit(
+fun FoodLogSnapshot.quantityEdit(
+    quantity: Double,
+    actualPaidTotalMicros: Long? = this.actualPaidTotalMicros,
+    excludeCostFromBudget: Boolean = this.excludeCostFromBudget
+) = FoodQuantityEdit(
     id = id,
     quantity = quantity,
-    servingLabel = servingLabel,
-    caloriesPerServing = caloriesPerServing,
-    proteinGPerServing = proteinGPerServing,
-    sodiumMgPerServing = sodiumMgPerServing,
-    carbsGPerServing = carbsGPerServing,
-    fatGPerServing = fatGPerServing,
-    sugarGPerServing = sugarGPerServing,
-    fiberGPerServing = fiberGPerServing,
-    saturatedFatGPerServing = saturatedFatGPerServing
+    actualPaidTotalMicros = actualPaidTotalMicros,
+    excludeCostFromBudget = excludeCostFromBudget
+)
+
+data class DeletedFoodLogSnapshot(
+    val log: FoodLogSnapshot,
+    val extras: List<DailyExtraNutrientLogEntity>
+)
+
+data class FoodMutationResult(
+    val date: LocalDate,
+    val before: NutritionSummary,
+    val after: NutritionSummary,
+    val deleted: DeletedFoodLogSnapshot? = null
+)
+
+data class ProductMutationResult(
+    val product: ProductEntity,
+    val linkedEntriesUpdated: Int,
+    val affectedDates: Set<LocalDate>
+)
+
+data class ConstraintDelta(
+    val label: String,
+    val actual: Double,
+    val target: Double,
+    val percentDifference: Double,
+    val withinTolerance: Boolean
+)
+
+data class RecommendationItem(
+    val productId: String,
+    val name: String,
+    val purchaseUnits: Int,
+    val servings: Double,
+    val costMicros: Long,
+    val nutrition: NutritionSummary,
+    val itemType: PlannerItemType = PlannerItemType.FOOD,
+    val fixed: Boolean = false
+)
+
+data class RecommendationPlan(
+    val items: List<RecommendationItem>,
+    val nutrition: NutritionSummary,
+    val totalCostMicros: Long,
+    val projectedSpendingMicros: Long,
+    val withinBudget: Boolean,
+    val completeFit: Boolean,
+    val deltas: List<ConstraintDelta>,
+    val explanation: String
+)
+
+data class RecommendationResult(
+    val plans: List<RecommendationPlan>,
+    val excludedUnpricedProducts: Int,
+    val spendingIncomplete: Boolean,
+    val message: String? = null,
+    val excludedFromPlanningProducts: Int = 0
 )
 
 sealed interface ScannerResult {

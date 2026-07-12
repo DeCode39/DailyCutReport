@@ -39,8 +39,6 @@ class AndroidNutritionImagePreprocessor(private val context: Context) : Nutritio
     ): PreparedOcrImage = withContext(Dispatchers.IO) {
         val normalizedCrop = crop.normalized()
         val rotated = rotate(decode(source, PREPARE_MAX_DIMENSION), rotationDegrees)
-        val fullFrame = resize(rotated, OCR_MAX_DIMENSION)
-        val fullFrameUri = write(fullFrame, "full")
         val left = (rotated.width * normalizedCrop.left).roundToInt().coerceIn(0, rotated.width - 1)
         val top = (rotated.height * normalizedCrop.top).roundToInt().coerceIn(0, rotated.height - 1)
         val right = (rotated.width * normalizedCrop.right).roundToInt().coerceIn(left + 1, rotated.width)
@@ -48,20 +46,8 @@ class AndroidNutritionImagePreprocessor(private val context: Context) : Nutritio
         val cropped = Bitmap.createBitmap(rotated, left, top, right - left, bottom - top)
         val prepared = resize(cropped, OCR_MAX_DIMENSION)
         val quality = measureQuality(prepared)
-        try {
-            val uri = write(prepared, "prepared")
-            PreparedOcrImage(
-                source,
-                uri,
-                normalizeRotation(rotationDegrees),
-                normalizedCrop,
-                quality,
-                fullFrameUri
-            )
-        } catch (error: Throwable) {
-            delete(fullFrameUri)
-            throw error
-        }
+        val uri = write(prepared, "prepared")
+        PreparedOcrImage(source, uri, normalizeRotation(rotationDegrees), normalizedCrop, quality)
     }
 
     override suspend fun variants(prepared: Uri): List<OcrVariantImage> = withContext(Dispatchers.IO) {

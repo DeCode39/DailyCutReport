@@ -10,10 +10,12 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 interface TextRecognizerEngine {
     suspend fun recognize(uri: Uri, language: OcrLanguage): OcrTextDocument
@@ -29,9 +31,10 @@ class MlKitTextRecognizerEngine(private val context: Context) : TextRecognizerEn
         val image = InputImage.fromFilePath(context, uri)
         val recognizer = recognizer(language)
         try {
-            suspendCoroutine { continuation ->
+            suspendCancellableCoroutine { continuation ->
                 recognizer.process(image)
                     .addOnSuccessListener { result ->
+                        if (!continuation.isActive) return@addOnSuccessListener
                         val boxes = result.textBlocks.flatMap { block ->
                             block.lines.mapNotNull { line ->
                                 line.boundingBox?.let { bounds ->
@@ -55,7 +58,9 @@ class MlKitTextRecognizerEngine(private val context: Context) : TextRecognizerEn
                             )
                         )
                     }
-                    .addOnFailureListener(continuation::resumeWithException)
+                    .addOnFailureListener { error ->
+                        if (continuation.isActive) continuation.resumeWithException(error)
+                    }
             }
         } finally {
             recognizer.close()
@@ -82,6 +87,7 @@ class DefaultNutritionLabelOcr(
         } else listOf(language)
         val documents = mutableListOf<OcrTextDocument>()
         images.take(3).forEachIndexed { imageIndex, image ->
+            currentCoroutineContext().ensureActive()
             val variants = runCatching { preprocessor.variants(image) }
                 .getOrElse {
                     Log.w(TAG, "Could not prepare OCR image variants", it)
@@ -89,7 +95,9 @@ class DefaultNutritionLabelOcr(
                 }
             try {
                 languages.forEach { script ->
+                    currentCoroutineContext().ensureActive()
                     val recognized = variants.mapNotNull { variant ->
+                        currentCoroutineContext().ensureActive()
                         runCatching { engine.recognize(variant.uri, script) }
                             .onFailure { Log.w(TAG, "On-device OCR failed for $script", it) }
                             .getOrNull()

@@ -52,8 +52,7 @@ data class PreparedOcrImage(
     val uri: android.net.Uri,
     val rotationDegrees: Int,
     val crop: CropRegion,
-    val quality: ImageQuality,
-    val fullFrameUri: android.net.Uri = uri
+    val quality: ImageQuality
 )
 
 data class OcrVariantImage(

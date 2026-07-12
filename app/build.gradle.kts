@@ -1,4 +1,5 @@
 import java.io.ByteArrayOutputStream
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -9,16 +10,20 @@ plugins {
 
 android {
     namespace = "com.littleone.dailycutreport"
-    compileSdk = 35
+    compileSdk = 36
     buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.8.5"
+        versionCode = 20
+        versionName = "0.9.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        providers.gradleProperty("dcrAbi").orNull?.let { requestedAbi ->
+            require(requestedAbi == "arm64-v8a") { "Unsupported dcrAbi: $requestedAbi" }
+            ndk { abiFilters += requestedAbi }
+        }
     }
 
     signingConfigs {
@@ -28,6 +33,37 @@ android {
             keyAlias = "dailycut"
             keyPassword = "dailycutdebug"
         }
+        val releaseStoreFile = providers.environmentVariable("DCR_RELEASE_STORE_FILE").orNull
+        val releaseStorePassword = providers.environmentVariable("DCR_RELEASE_STORE_PASSWORD").orNull
+        val releaseKeyAlias = providers.environmentVariable("DCR_RELEASE_KEY_ALIAS").orNull
+        val releaseKeyPassword = providers.environmentVariable("DCR_RELEASE_KEY_PASSWORD").orNull
+        if (listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 
     compileOptions {
@@ -35,8 +71,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
     }
 
     buildFeatures {
@@ -47,21 +85,24 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
+
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 }
 
 ksp {
     arg("room.generateKotlin", "true")
+    arg("room.schemaLocation", file("schemas").absolutePath)
 }
 
 dependencies {
-    implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.navigation:navigation-compose:2.8.5")
-    implementation("androidx.health.connect:connect-client:1.1.0-alpha11")
+    implementation("androidx.health.connect:connect-client:1.1.0")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
@@ -82,9 +123,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraXVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
     implementation("androidx.camera:camera-view:$cameraXVersion")
-    implementation("androidx.concurrent:concurrent-futures:1.2.0")
+    // CameraX ProcessCameraProvider exposes Guava's ListenableFuture API.
     implementation("com.google.guava:guava:33.3.1-android")
-    implementation("com.google.guava:listenablefuture:1.0")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
@@ -97,17 +137,18 @@ dependencies {
     testImplementation("androidx.room:room-testing:$roomVersion")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.room:room-testing:$roomVersion")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
 
-val verifyOfflineDebugApk by tasks.registering {
+fun registerOfflineVerification(name: String, assembleTask: String, apkPath: String) = tasks.register(name) {
     group = "verification"
-    description = "Fails when the debug APK requests Android network permissions."
-    dependsOn("assembleDebug")
+    description = "Fails when the APK requests Android network permissions."
+    dependsOn(assembleTask)
 
     doLast {
-        val apk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
-        check(apk.isFile) { "Debug APK not found at ${apk.absolutePath}" }
+        val apk = layout.buildDirectory.file(apkPath).get().asFile
+        check(apk.isFile) { "APK not found at ${apk.absolutePath}" }
 
         val executable = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "aapt.exe" else "aapt"
         val aapt = android.sdkDirectory.resolve("build-tools/${android.buildToolsVersion}/$executable")
@@ -128,6 +169,17 @@ val verifyOfflineDebugApk by tasks.registering {
         }
     }
 }
+
+val verifyOfflineDebugApk = registerOfflineVerification(
+    "verifyOfflineDebugApk",
+    "assembleDebug",
+    "outputs/apk/debug/app-debug.apk"
+)
+val verifyOfflineReleaseApk = registerOfflineVerification(
+    "verifyOfflineReleaseApk",
+    "assembleRelease",
+    "outputs/apk/release/app-release.apk"
+)
 
 tasks.named("check").configure {
     dependsOn(verifyOfflineDebugApk)

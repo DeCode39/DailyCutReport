@@ -30,13 +30,11 @@ class NutritionImagePreprocessorTest {
 
         assertEquals(90, prepared.rotationDegrees)
         assertTrue(prepared.quality.width >= 900)
-        assertTrue(prepared.fullFrameUri != prepared.uri)
         assertEquals(OcrImageVariant.ORIGINAL, variants.first().variant)
         assertEquals(setOf(OcrImageVariant.ORIGINAL, OcrImageVariant.CONTRAST, OcrImageVariant.SHARPENED), variants.map { it.variant }.toSet())
 
         variants.filter { it.temporary }.forEach { processor.delete(it.uri) }
         processor.delete(prepared.uri)
-        processor.delete(prepared.fullFrameUri)
         sourceFile.delete()
         assertTrue(File(context.cacheDir, "ocr_prepared").listFiles().isNullOrEmpty())
     }
