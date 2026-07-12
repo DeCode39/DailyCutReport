@@ -98,6 +98,7 @@ sealed interface FoodWorkflowState {
         val ocrDraft: OcrNutritionDraft? = null
     ) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
+    data class BuildMeal(val products: List<ProductWithExtras>) : FoodWorkflowState
 }
 
 sealed interface FoodUiEvent {
@@ -161,6 +162,33 @@ class FoodsViewModel(
 
     fun createProduct() {
         workflow.value = FoodWorkflowState.EditProduct("", null, addAfterSave = true)
+    }
+
+    fun createMeal() {
+        viewModelScope.launch {
+            val products = repository.productsForMeal()
+            if (products.size < 2) {
+                _events.emit(FoodUiEvent.Message("Save at least two products before creating a meal."))
+            } else workflow.value = FoodWorkflowState.BuildMeal(products)
+        }
+    }
+
+    fun confirmMeal(
+        name: String,
+        entries: List<MealEntryInput>,
+        actualPaidTotalMicros: Long?,
+        excludeCostFromBudget: Boolean
+    ) {
+        val date = uiState.value.date
+        viewModelScope.launch {
+            runCatching { repository.addMeal(date, name, entries, actualPaidTotalMicros, excludeCostFromBudget) }
+                .onSuccess { result ->
+                    workflow.value = FoodWorkflowState.Idle
+                    afterFoodChange(result)
+                    _events.emit(FoodUiEvent.Message("Added ${entries.size} items as $name."))
+                }
+                .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not add meal.")) }
+        }
     }
 
     fun editProduct(product: ProductEntity) {

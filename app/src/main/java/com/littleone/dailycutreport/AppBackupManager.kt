@@ -243,7 +243,8 @@ object BackupJson {
         put("fiberGPerServing", fiberGPerServing); put("saturatedFatGPerServing", saturatedFatGPerServing)
         putNullable("catalogCostPerServingMicros", catalogCostPerServingMicros)
         putNullable("actualPaidTotalMicros", actualPaidTotalMicros)
-        put("excludeCostFromBudget", excludeCostFromBudget); put("loggedAt", loggedAt)
+        put("excludeCostFromBudget", excludeCostFromBudget)
+        putNullable("mealId", mealId); putNullable("mealName", mealName); put("loggedAt", loggedAt)
     }
 
     private fun UserGoalsEntity.toJson() = JSONObject().apply {
@@ -296,7 +297,8 @@ object BackupJson {
         fiberGPerServing = o.nonNegative("fiberGPerServing"), saturatedFatGPerServing = o.nonNegative("saturatedFatGPerServing"),
         catalogCostPerServingMicros = o.optionalLong("catalogCostPerServingMicros"),
         actualPaidTotalMicros = o.optionalLong("actualPaidTotalMicros"),
-        excludeCostFromBudget = o.optBoolean("excludeCostFromBudget", false), loggedAt = o.getLong("loggedAt")
+        excludeCostFromBudget = o.optBoolean("excludeCostFromBudget", false),
+        mealId = o.nullableText("mealId"), mealName = o.nullableText("mealName"), loggedAt = o.getLong("loggedAt")
     )
 
     private fun goalsFromJson(o: JSONObject) = UserGoalsEntity(

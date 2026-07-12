@@ -98,6 +98,12 @@ class ModelsTest {
         assertEquals(true, log.quantityEdit(3.0).excludeCostFromBudget)
     }
 
+    @Test fun mealPaidTotalAllocationIsExactIncludingFreeMeals() {
+        assertEquals(listOf(4L, 3L, 3L), allocateMealPaidTotal(10L, 3))
+        assertEquals(listOf(0L, 0L), allocateMealPaidTotal(0L, 2))
+        assertEquals(listOf(null, null), allocateMealPaidTotal(null, 2))
+    }
+
     @Test fun missingBurnProducesUnavailableBalance() {
         val report = DailyReport(
             date = LocalDate.of(2026, 1, 2),
@@ -118,6 +124,33 @@ class ModelsTest {
         assertEquals(50.0, targets.sugarG, 0.0)
         assertEquals(15.0, targets.fiberG, 0.0)
         assertEquals(15.0, targets.saturatedFatG, 0.0)
+    }
+
+    @Test fun storedGoalsAreSanitizedWithoutChangingIntentionalZeroTargets() {
+        val goals = UserGoals(
+            calories = Double.NaN,
+            expectedBurnCalories = 0.0,
+            desiredDeficitCalories = Double.POSITIVE_INFINITY,
+            proteinG = 0.0,
+            sodiumMg = -10.0,
+            currencyCode = "invalid",
+            dailyBudgetMicros = -1L
+        ).sanitized()
+
+        assertEquals(1850.0, goals.calories, 0.0)
+        assertEquals(2300.0, goals.expectedBurnCalories, 0.0)
+        assertEquals(0.0, goals.proteinG, 0.0)
+        assertEquals(0.0, goals.sodiumMg, 0.0)
+        assertEquals("TWD", goals.currencyCode)
+        assertEquals(0L, goals.dailyBudgetMicros)
+    }
+
+    @Test fun zeroOrInvalidTargetsProduceSafeProgress() {
+        assertEquals(0f, targetProgress(0.0, 0.0))
+        assertEquals(0f, targetProgress(10.0, 0.0))
+        assertEquals(0f, targetProgress(Double.NaN, 100.0))
+        assertEquals(0.5f, targetProgress(50.0, 100.0))
+        assertEquals(1f, targetProgress(150.0, 100.0))
     }
 
     @Test fun macroThresholdNotifierOnlyReportsCrossingsOnce() {

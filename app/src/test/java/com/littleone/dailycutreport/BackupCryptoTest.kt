@@ -30,7 +30,8 @@ class BackupCryptoTest {
             )),
             productExtras = emptyList(), reports = emptyList(), foodLogs = listOf(DailyFoodLogEntity(
                 id = 1, date = "2026-01-02", productId = "meal", productName = "Meal",
-                actualPaidTotalMicros = 10_000_000L, excludeCostFromBudget = true
+                actualPaidTotalMicros = 10_000_000L, excludeCostFromBudget = true,
+                mealId = "meal-group", mealName = "Lunch"
             )), dailyExtras = emptyList(),
             goals = UserGoals(currencyCode = "JPY", dailyBudgetMicros = 2_000_000_000L).toEntity()
         )
@@ -39,6 +40,8 @@ class BackupCryptoTest {
         assertEquals(PlannerItemType.DRINK.name, decoded.products.single().plannerItemType)
         assertEquals(true, decoded.products.single().alwaysIncludeInPlanner)
         assertEquals(true, decoded.foodLogs.single().excludeCostFromBudget)
+        assertEquals("meal-group", decoded.foodLogs.single().mealId)
+        assertEquals("Lunch", decoded.foodLogs.single().mealName)
         assertEquals("JPY", decoded.goals.currencyCode)
     }
 

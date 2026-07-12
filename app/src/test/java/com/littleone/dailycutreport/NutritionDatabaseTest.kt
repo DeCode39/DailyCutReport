@@ -120,6 +120,25 @@ class NutritionDatabaseTest {
         assertEquals(true, log.excludeCostFromBudget)
     }
 
+    @Test fun mealLoggingIsAtomicAndUsesOneExactGroupPrice() = runBlocking {
+        val dao = database.nutritionDao()
+        val first = ProductWithExtras(ProductEntity("first", name = "Rice", calories = 200.0))
+        val second = ProductWithExtras(ProductEntity("second", name = "Chicken", calories = 300.0))
+
+        val mutation = dao.addMealToDate(
+            "2026-01-02", "meal-id", "Lunch",
+            listOf(MealEntryInput(first, 1.0), MealEntryInput(second, 2.0)),
+            15_000_001L, false
+        )
+
+        val logs = dao.foodLogsForDate("2026-01-02")
+        assertEquals(2, mutation.after.entries)
+        assertEquals(800.0, mutation.after.calories, 0.0)
+        assertEquals(setOf("meal-id"), logs.mapNotNull { it.mealId }.toSet())
+        assertEquals(setOf("Lunch"), logs.mapNotNull { it.mealName }.toSet())
+        assertEquals(15_000_001L, dao.spendingForDate("2026-01-02").knownTotalMicros)
+    }
+
     @Test fun escapedWildcardSearchMatchesLiteralProductName() = runBlocking {
         val dao = database.nutritionDao()
         dao.saveProductWithExtras(ProductEntity(productId = "literal", name = "100% Whey_Protein"), emptyList())
@@ -175,7 +194,12 @@ class NutritionDatabaseTest {
         helper.close()
 
         val migrated = Room.databaseBuilder(context, NutritionDatabase::class.java, name)
-            .addMigrations(NutritionDatabase.MIGRATION_1_2, NutritionDatabase.MIGRATION_2_3, NutritionDatabase.MIGRATION_3_4)
+            .addMigrations(
+                NutritionDatabase.MIGRATION_1_2,
+                NutritionDatabase.MIGRATION_2_3,
+                NutritionDatabase.MIGRATION_3_4,
+                NutritionDatabase.MIGRATION_4_5
+            )
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase
         val log = migrated.nutritionDao().observeLogsForDate("2026-01-02").first().single()

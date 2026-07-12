@@ -22,9 +22,10 @@ fun Long.toMoneyInput(): String = BigDecimal(this)
     .toPlainString()
 
 fun formatMoney(micros: Long, currencyCode: String): String {
-    val currency = Currency.getInstance(currencyCode)
+    val normalizedCode = currencyCode.trim().uppercase()
+    val currency = runCatching { Currency.getInstance(normalizedCode) }.getOrElse { Currency.getInstance("TWD") }
     val digits = currency.defaultFractionDigits.coerceAtLeast(0)
     val amount = BigDecimal(micros).divide(BigDecimal(MONEY_MICROS_PER_UNIT))
         .setScale(digits, RoundingMode.HALF_UP)
-    return "$currencyCode ${amount.toPlainString()}"
+    return "${currency.currencyCode} ${amount.toPlainString()}"
 }

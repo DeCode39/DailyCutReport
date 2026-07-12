@@ -29,11 +29,19 @@ interface DailyCutRepository {
     suspend fun refreshHealth(date: LocalDate): Result<Unit>
     suspend fun lookupProduct(barcode: String): ProductWithExtras?
     suspend fun getProduct(productId: String): ProductWithExtras?
+    suspend fun productsForMeal(): List<ProductWithExtras>
     suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult
     suspend fun addProduct(
         date: LocalDate,
         product: ProductWithExtras,
         quantity: Double,
+        actualPaidTotalMicros: Long? = null,
+        excludeCostFromBudget: Boolean = false
+    ): FoodMutationResult
+    suspend fun addMeal(
+        date: LocalDate,
+        name: String,
+        entries: List<MealEntryInput>,
         actualPaidTotalMicros: Long? = null,
         excludeCostFromBudget: Boolean = false
     ): FoodMutationResult
@@ -74,7 +82,13 @@ class DefaultDailyCutRepository(
         withContext(Dispatchers.IO) {
             legacyImporter.importIfNeeded()
             catalogImporter.importIfNeeded()
-            if (dao.userGoals() == null) dao.upsertUserGoals(UserGoalsEntity())
+            val storedGoals = dao.userGoals()
+            if (storedGoals == null) {
+                dao.upsertUserGoals(UserGoalsEntity())
+            } else {
+                val sanitized = storedGoals.toDomain().sanitized()
+                if (sanitized != storedGoals.toDomain()) dao.upsertUserGoals(sanitized.toEntity())
+            }
             clearManualOverridesIfNeeded()
             DailyCutWidgetUpdater.updateAll(context)
         }
@@ -105,7 +119,7 @@ class DefaultDailyCutRepository(
         dao.observeRecentProducts().flowOn(Dispatchers.IO)
 
     override fun observeGoals(): Flow<UserGoals> = dao.observeUserGoals()
-        .map { (it ?: UserGoalsEntity()).toDomain() }
+        .map { (it ?: UserGoalsEntity()).toDomain().sanitized() }
         .flowOn(Dispatchers.IO)
 
     override fun observeSpending(date: LocalDate): Flow<DailySpending> = combine(
@@ -159,6 +173,10 @@ class DefaultDailyCutRepository(
         dao.productById(productId)?.let { ProductWithExtras(it, dao.extrasForProduct(it.productId)) }
     }
 
+    override suspend fun productsForMeal(): List<ProductWithExtras> = withContext(Dispatchers.IO) {
+        dao.allProducts().map { product -> ProductWithExtras(product, dao.extrasForProduct(product.productId)) }
+    }
+
     override suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult = withContext(Dispatchers.IO) {
         require(product.purchasePriceMicros == null || product.purchasePriceMicros >= 0L) { "Price cannot be negative." }
         require(product.purchaseUnitServings > 0.0) { "Minimum purchase servings must be greater than zero." }
@@ -199,6 +217,27 @@ class DefaultDailyCutRepository(
         )
             ?: error("Food entry no longer exists.")
         completeFoodMutation(mutation)
+    }
+
+    override suspend fun addMeal(
+        date: LocalDate,
+        name: String,
+        entries: List<MealEntryInput>,
+        actualPaidTotalMicros: Long?,
+        excludeCostFromBudget: Boolean
+    ): FoodMutationResult = withContext(Dispatchers.IO) {
+        require(name.isNotBlank()) { "Meal name is required." }
+        require(entries.size >= 2) { "Choose at least two meal items." }
+        require(entries.all { it.quantity > 0.0 && it.quantity.isFinite() }) { "Meal quantities must be greater than zero." }
+        require(actualPaidTotalMicros == null || actualPaidTotalMicros >= 0L) { "Actual paid cannot be negative." }
+        completeFoodMutation(dao.addMealToDate(
+            date = date.toString(),
+            mealId = java.util.UUID.randomUUID().toString(),
+            mealName = name.trim(),
+            entries = entries,
+            actualPaidTotalMicros = actualPaidTotalMicros,
+            excludeCostFromBudget = excludeCostFromBudget
+        ))
     }
 
     override suspend fun deleteFoodLog(id: Long): FoodMutationResult = withContext(Dispatchers.IO) {
@@ -350,6 +389,8 @@ private fun FoodLogSnapshot.toEntity() = DailyFoodLogEntity(
     catalogCostPerServingMicros = catalogCostPerServingMicros,
     actualPaidTotalMicros = actualPaidTotalMicros,
     excludeCostFromBudget = excludeCostFromBudget,
+    mealId = mealId,
+    mealName = mealName,
     loggedAt = loggedAt
 )
 

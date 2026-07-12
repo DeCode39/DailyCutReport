@@ -104,7 +104,7 @@ data class UserGoalsEntity(
 
 @Entity(
     tableName = "daily_food_logs",
-    indices = [Index("date"), Index("productId"), Index("barcode")]
+    indices = [Index("date"), Index("productId"), Index("barcode"), Index("mealId")]
 )
 data class DailyFoodLogEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -126,6 +126,8 @@ data class DailyFoodLogEntity(
     val catalogCostPerServingMicros: Long? = null,
     val actualPaidTotalMicros: Long? = null,
     val excludeCostFromBudget: Boolean = false,
+    val mealId: String? = null,
+    val mealName: String? = null,
     val loggedAt: Long = System.currentTimeMillis()
 )
 
@@ -209,6 +211,8 @@ fun DailyFoodLogEntity.toDomainSnapshot() = FoodLogSnapshot(
     catalogCostPerServingMicros = catalogCostPerServingMicros,
     actualPaidTotalMicros = actualPaidTotalMicros,
     excludeCostFromBudget = excludeCostFromBudget,
+    mealId = mealId,
+    mealName = mealName,
     loggedAt = loggedAt
 )
 
@@ -331,7 +335,9 @@ interface NutritionDao {
         quantity: Double,
         extras: List<ProductExtraNutrientEntity>,
         actualPaidTotalMicros: Long? = null,
-        excludeCostFromBudget: Boolean = false
+        excludeCostFromBudget: Boolean = false,
+        mealId: String? = null,
+        mealName: String? = null
     ): DailyNutritionMutation {
         val before = totalsForDate(date)
         val logId = insertFoodLog(
@@ -355,12 +361,40 @@ interface NutritionDao {
                     (it / product.purchaseUnitServings).toLong()
                 },
                 actualPaidTotalMicros = actualPaidTotalMicros,
-                excludeCostFromBudget = excludeCostFromBudget
+                excludeCostFromBudget = excludeCostFromBudget,
+                mealId = mealId,
+                mealName = mealName
             )
         )
         if (extras.isNotEmpty()) insertDailyExtraLogs(extras.map {
             DailyExtraNutrientLogEntity(logId = logId, name = it.name, valuePerServing = it.value, unit = it.unit)
         })
+        return DailyNutritionMutation(date, before, totalsForDate(date))
+    }
+
+    @Transaction
+    suspend fun addMealToDate(
+        date: String,
+        mealId: String,
+        mealName: String,
+        entries: List<MealEntryInput>,
+        actualPaidTotalMicros: Long?,
+        excludeCostFromBudget: Boolean
+    ): DailyNutritionMutation {
+        val before = totalsForDate(date)
+        val allocations = allocateMealPaidTotal(actualPaidTotalMicros, entries.size)
+        entries.forEachIndexed { index, entry ->
+            addProductToDate(
+                date = date,
+                product = entry.product.product,
+                quantity = entry.quantity,
+                extras = entry.product.extras,
+                actualPaidTotalMicros = allocations[index],
+                excludeCostFromBudget = excludeCostFromBudget,
+                mealId = mealId,
+                mealName = mealName
+            )
+        }
         return DailyNutritionMutation(date, before, totalsForDate(date))
     }
 
@@ -509,7 +543,7 @@ interface NutritionDao {
     entities = [ProductEntity::class, ProductExtraNutrientEntity::class, DailyReportEntity::class,
         DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class,
         UserGoalsEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class NutritionDatabase : RoomDatabase() {
@@ -575,9 +609,17 @@ abstract class NutritionDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `daily_food_logs` ADD COLUMN `mealId` TEXT")
+                db.execSQL("ALTER TABLE `daily_food_logs` ADD COLUMN `mealName` TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_daily_food_logs_mealId` ON `daily_food_logs` (`mealId`)")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { INSTANCE = it }
         }
     }
 }

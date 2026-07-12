@@ -42,6 +42,10 @@ data class DailyNutritionTargets(
     val saturatedFatG: Double = 15.0
 )
 
+fun targetProgress(value: Double, target: Double): Float =
+    if (!value.isFinite() || !target.isFinite() || target <= 0.0) 0f
+    else (value.coerceAtLeast(0.0) / target).toFloat().coerceIn(0f, 1f)
+
 enum class GoalMode { CALORIE, DEFICIT }
 
 enum class PlannerItemType { FOOD, DRINK }
@@ -80,6 +84,30 @@ data class UserGoals(
         }
         require(runCatching { java.util.Currency.getInstance(currencyCode) }.isSuccess) { "Choose a valid currency code." }
         require(dailyBudgetMicros >= 0L) { "Daily budget cannot be negative." }
+    }
+
+    fun sanitized(): UserGoals {
+        fun finiteOr(value: Double, fallback: Double, positive: Boolean = false): Double =
+            value.takeIf { it.isFinite() && (!positive || it > 0.0) } ?: fallback
+        val burn = finiteOr(expectedBurnCalories, 2300.0, positive = true)
+        val deficit = finiteOr(desiredDeficitCalories, 450.0).coerceIn(0.0, (burn - 1.0).coerceAtLeast(0.0))
+        val currency = currencyCode.trim().uppercase().takeIf {
+            runCatching { java.util.Currency.getInstance(it) }.isSuccess
+        } ?: "TWD"
+        return copy(
+            calories = finiteOr(calories, 1850.0, positive = true),
+            expectedBurnCalories = burn,
+            desiredDeficitCalories = deficit,
+            proteinG = finiteOr(proteinG, 120.0).coerceAtLeast(0.0),
+            sodiumMg = finiteOr(sodiumMg, 2000.0).coerceAtLeast(0.0),
+            carbsG = finiteOr(carbsG, 150.0).coerceAtLeast(0.0),
+            fatG = finiteOr(fatG, 60.0).coerceAtLeast(0.0),
+            sugarG = finiteOr(sugarG, 50.0).coerceAtLeast(0.0),
+            fiberG = finiteOr(fiberG, 15.0).coerceAtLeast(0.0),
+            saturatedFatG = finiteOr(saturatedFatG, 15.0).coerceAtLeast(0.0),
+            currencyCode = currency,
+            dailyBudgetMicros = dailyBudgetMicros.coerceAtLeast(0L)
+        )
     }
 }
 
@@ -227,6 +255,8 @@ data class FoodLogSnapshot(
     val catalogCostPerServingMicros: Long? = null,
     val actualPaidTotalMicros: Long? = null,
     val excludeCostFromBudget: Boolean = false,
+    val mealId: String? = null,
+    val mealName: String? = null,
     val loggedAt: Long = System.currentTimeMillis()
 ) {
     val calories: Double get() = caloriesPerServing * quantity
@@ -245,6 +275,21 @@ data class ProductWithExtras(
     val product: ProductEntity,
     val extras: List<ProductExtraNutrientEntity> = emptyList()
 )
+
+data class MealEntryInput(
+    val product: ProductWithExtras,
+    val quantity: Double
+)
+
+fun allocateMealPaidTotal(totalMicros: Long?, itemCount: Int): List<Long?> {
+    require(itemCount >= 0)
+    require(totalMicros == null || totalMicros >= 0L)
+    if (itemCount == 0) return emptyList()
+    if (totalMicros == null) return List(itemCount) { null }
+    val base = totalMicros / itemCount
+    val remainder = totalMicros % itemCount
+    return List(itemCount) { index -> base + if (index < remainder) 1L else 0L }
+}
 
 data class FoodQuantityEdit(
     val id: Long,

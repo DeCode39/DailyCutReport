@@ -283,13 +283,20 @@ private fun NutritionTargetsCard(
 
 @Composable
 private fun TargetRow(label: String, value: Double, target: Double, unit: String) {
+    val safeValue = value.takeIf(Double::isFinite)?.coerceAtLeast(0.0) ?: 0.0
+    val hasTarget = target.isFinite() && target > 0.0
+    val progress = targetProgress(safeValue, target)
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label)
-            Text("${value.roundToInt()} / ${target.roundToInt()} $unit", fontWeight = FontWeight.Bold)
+            Text(
+                if (hasTarget) "${safeValue.roundToInt()} / ${target.roundToInt()} $unit"
+                else "${safeValue.roundToInt()} $unit · no target",
+                fontWeight = FontWeight.Bold
+            )
         }
         LinearProgressIndicator(
-            progress = { (value / target).toFloat().coerceIn(0f, 1f) },
+            progress = { progress },
             modifier = Modifier.fillMaxWidth()
         )
     }
@@ -321,6 +328,9 @@ internal fun FoodsScreen(
             }
             item {
                 ProductSearchField(state.query, viewModel::setQuery)
+                OutlinedButton(onClick = viewModel::createMeal, modifier = Modifier.fillMaxWidth()) {
+                    Text("Add several items as a meal")
+                }
                 TextButton(onClick = { showManualTools = !showManualTools }) {
                     Text(if (showManualTools) "Hide manual options" else "Manual options")
                 }
@@ -380,6 +390,12 @@ internal fun FoodWorkflowDialogs(
             onDismiss = viewModel::cancelDialogs,
             onSave = viewModel::saveLogEdit
         )
+        is FoodWorkflowState.BuildMeal -> MealBuilderDialog(
+            products = workflow.products,
+            currencyCode = state.goals.currencyCode,
+            onDismiss = viewModel::cancelDialogs,
+            onConfirm = viewModel::confirmMeal
+        )
     }
 }
 
@@ -390,6 +406,7 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.Bold)
+                log.mealName?.let { Text("Meal · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
                 Text("${log.calories.roundToInt()} kcal · ${log.proteinG.roundToInt()} g protein", style = MaterialTheme.typography.bodyMedium)
                 Text("${log.sodiumMg.roundToInt()} mg sodium · ${log.carbsG.roundToInt()} g carbs", style = MaterialTheme.typography.bodySmall)
                 Text(
@@ -409,6 +426,68 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
             }
         }
     }
+}
+
+@Composable
+private fun MealBuilderDialog(
+    products: List<ProductWithExtras>,
+    currencyCode: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, List<MealEntryInput>, Long?, Boolean) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var quantities by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var actualPaid by remember { mutableStateOf("") }
+    var excludeCostFromBudget by remember { mutableStateOf(false) }
+    val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
+    val entries = products.mapNotNull { product ->
+        quantities[product.product.productId]?.numberOrNull()?.takeIf { it > 0.0 }?.let {
+            MealEntryInput(product, it)
+        }
+    }
+    val valid = name.isNotBlank() && entries.size >= 2 && (actualPaid.isBlank() || parsedPaid != null)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add one-time meal") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(name, { name = it }, label = { Text("Meal name") }, modifier = Modifier.fillMaxWidth())
+                Text("Choose at least two products. Each remains an editable nutrition entry.", style = MaterialTheme.typography.bodySmall)
+                products.forEach { product ->
+                    val id = product.product.productId
+                    val selected = id in quantities
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(product.product.name, fontWeight = FontWeight.Bold)
+                                    Text(product.product.servingLabel, style = MaterialTheme.typography.bodySmall)
+                                }
+                                Switch(selected, onCheckedChange = { checked ->
+                                    quantities = if (checked) quantities + (id to "1") else quantities - id
+                                })
+                            }
+                            if (selected) DecimalField("Quantity", quantities[id].orEmpty()) { value ->
+                                quantities = quantities + (id to value)
+                            }
+                        }
+                    }
+                }
+                DecimalField("Total actually paid ($currencyCode, optional)", actualPaid) { actualPaid = it }
+                Text("A meal total is divided across its item entries for exact budget accounting.", style = MaterialTheme.typography.bodySmall)
+                ToggleRow("Ignore this meal price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
+            }
+        },
+        confirmButton = {
+            Button(enabled = valid, onClick = {
+                onConfirm(name.trim(), entries, parsedPaid, excludeCostFromBudget)
+            }) { Text("Add meal") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable

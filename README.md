@@ -1,4 +1,4 @@
-# Daily Cut Report 0.9.2
+# Daily Cut Report 0.9.3
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -13,6 +13,8 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - A deterministic offline remaining-day planner that ranks three read-only purchase-unit suggestions against nutrition and budget tolerances.
 - Per-product planning controls: exclude an item, classify it as solid food or drink, or require one fixed purchase unit in every plan; recommendations allow at most two drink units.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
+- One-time meals atomically add several products under one meal name, with an optional total paid amount or whole-meal budget exclusion; no reusable templates are created.
+- Stored goal and currency values are sanitized on startup, and zero targets render safely.
 - Serialized, retryable Health Connect nutrition upserts after local food-log add/edit/delete, controlled by a separate optional write permission and surfaced in Settings.
 - In-app macro threshold snackbars when a food-log change crosses a daily target.
 - Dark yellow-on-black Material 3 color scheme.

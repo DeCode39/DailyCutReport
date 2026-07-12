@@ -57,5 +57,23 @@ class NutritionMigrationTest {
         migrated.close()
     }
 
+    @Test fun migrationFourToFivePreservesLogsAndAddsMealGrouping() {
+        helper.createDatabase("migration-4-5", 4).apply {
+            execSQL("INSERT INTO products (productId,barcode,name,brand,servingLabel,calories,proteinG,sodiumMg,carbsG,fatG,sugarG,fiberG,saturatedFatG,purchasePriceMicros,purchaseUnitServings,includeInPlanner,plannerItemType,alwaysIncludeInPlanner,notes,createdAt,updatedAt) VALUES ('meal',NULL,'Meal','','1 serving',100,10,20,0,0,0,0,0,NULL,1,1,'FOOD',0,'',1,1)")
+            execSQL("INSERT INTO daily_food_logs (id,date,productId,barcode,productName,brand,servingLabel,quantity,caloriesPerServing,proteinGPerServing,sodiumMgPerServing,carbsGPerServing,fatGPerServing,sugarGPerServing,fiberGPerServing,saturatedFatGPerServing,catalogCostPerServingMicros,actualPaidTotalMicros,excludeCostFromBudget,loggedAt) VALUES (1,'2026-07-12','meal',NULL,'Meal','','1 serving',2,100,10,20,0,0,0,0,0,NULL,NULL,0,1)")
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate("migration-4-5", 5, true, NutritionDatabase.MIGRATION_4_5)
+        migrated.query("SELECT productName,quantity,mealId,mealName FROM daily_food_logs WHERE id=1").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("Meal", cursor.getString(0))
+            assertEquals(2.0, cursor.getDouble(1), 0.0)
+            assertEquals(true, cursor.isNull(2))
+            assertEquals(true, cursor.isNull(3))
+        }
+        migrated.close()
+    }
+
     private companion object { const val DATABASE_NAME = "migration-3-4" }
 }
