@@ -113,6 +113,11 @@ jobs:
           gradle-version: '8.11.1'
       - name: Restore debug signing key
         run: base64 -d app/signing/dailycut-debug.jks.b64 > app/signing/dailycut-debug.jks
+      - name: Enable KVM acceleration
+        run: |
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+          fi
       - name: Run emulator instrumentation and OCR tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
