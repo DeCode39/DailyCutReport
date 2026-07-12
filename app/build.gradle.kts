@@ -17,8 +17,8 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.9.1"
+        versionCode = 21
+        versionName = "0.9.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         providers.gradleProperty("dcrAbi").orNull?.let { requestedAbi ->
             require(requestedAbi == "arm64-v8a") { "Unsupported dcrAbi: $requestedAbi" }
@@ -95,6 +95,9 @@ ksp {
 }
 
 dependencies {
+    // Room migration 2.8.4 uses serialization 1.8 APIs; keep the runtime aligned
+    // instead of accepting Navigation's older transitive BOM constraint.
+    implementation(platform("org.jetbrains.kotlinx:kotlinx-serialization-bom:1.8.1"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
