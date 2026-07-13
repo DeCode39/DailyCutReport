@@ -5,15 +5,23 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class GoalsAndMoneyTest {
-    @Test fun deficitModeDerivesStableCalorieAllowance() {
-        val goals = UserGoals(mode = GoalMode.DEFICIT, expectedBurnCalories = 2400.0, desiredDeficitCalories = 500.0)
-        assertEquals(1900.0, goals.effectiveCalorieTarget, 0.0)
-        assertEquals(1900.0, goals.targets.calories, 0.0)
+    @Test fun deficitModeDerivesAllowanceFromHealthConnectProjectedBurn() {
+        val goals = UserGoals(mode = GoalMode.DEFICIT, expectedBurnCalories = 1200.0, desiredDeficitCalories = 500.0)
+        assertEquals(1900.0, goals.calorieAllowance(2400.0)!!, 0.0)
+        assertEquals(1900.0, goals.targetsFor(2400.0).calories, 0.0)
+        assertEquals(1900.0, goals.forPlanning(2400.0)?.calories ?: 0.0, 0.0)
+        assertEquals(GoalMode.CALORIE, goals.forPlanning(2400.0)?.mode)
     }
 
-    @Test fun invalidDeficitIsRejected() {
+    @Test fun deficitModeDoesNotGuessWhenProjectedBurnIsUnavailableOrTooLow() {
+        val goals = UserGoals(mode = GoalMode.DEFICIT, desiredDeficitCalories = 500.0)
+        assertEquals(null, goals.calorieAllowance(null))
+        assertEquals(null, goals.calorieAllowance(500.0))
+    }
+
+    @Test fun negativeDeficitIsRejected() {
         assertThrows(IllegalArgumentException::class.java) {
-            UserGoals(mode = GoalMode.DEFICIT, expectedBurnCalories = 400.0, desiredDeficitCalories = 500.0).requireValid()
+            UserGoals(mode = GoalMode.DEFICIT, desiredDeficitCalories = -1.0).requireValid()
         }
     }
 

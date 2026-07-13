@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -41,7 +42,9 @@ data class TodayUiState(
     val planning: Boolean = false,
     val message: String? = null
 ) {
-    val targets: DailyNutritionTargets get() = goals.targets
+    val calorieAllowance: Double? get() = goals.calorieAllowance(report.projectedBurnCalories)
+    val targets: DailyNutritionTargets get() = goals.targetsFor(report.projectedBurnCalories)
+    val planningAvailable: Boolean get() = calorieAllowance != null
 }
 
 class TodayViewModel(
@@ -138,7 +141,14 @@ class FoodsViewModel(
     private val thresholdNotifier = MacroThresholdNotifier()
     private val latestGoals = repository.observeGoals()
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals())
-    private val productSearch = query.debounce(200).distinctUntilChanged().flatMapLatest(repository::observeProducts)
+    private val latestTargets = combine(
+        latestGoals,
+        selectedDate.flatMapLatest(repository::observeReport)
+    ) { goals, report -> goals.targetsFor(report.projectedBurnCalories) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals().targetsFor(null))
+    private val productSearch = query.debounce(200).distinctUntilChanged().flatMapLatest { value ->
+        if (value.isBlank()) flowOf(emptyList()) else repository.observeProducts(value)
+    }
 
     private val catalogState = combine(
         productSearch, repository.observeRecentProducts(), workflow, mode, bulkDraft
@@ -341,7 +351,7 @@ class FoodsViewModel(
     }
 
     private suspend fun afterFoodChange(result: FoodMutationResult) {
-        thresholdNotifier.crossingMessage(result.date, result.before, result.after, latestGoals.value.targets)
+        thresholdNotifier.crossingMessage(result.date, result.before, result.after, latestTargets.value)
             ?.let { _events.emit(FoodUiEvent.Threshold(it)) }
     }
 }

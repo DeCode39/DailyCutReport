@@ -151,6 +151,26 @@ class NutritionDatabaseTest {
         assertEquals(listOf("literal"), matches.map { it.productId })
     }
 
+    @Test fun recentProductsReturnsTenUniqueProductsOrderedByLatestLog() = runBlocking {
+        val dao = database.nutritionDao()
+        repeat(12) { index ->
+            val product = ProductEntity(productId = "p$index", name = "Product $index")
+            dao.saveProductWithExtras(product, emptyList())
+            dao.insertFoodLog(DailyFoodLogEntity(
+                date = "2026-01-02", productId = product.productId,
+                productName = product.name, loggedAt = index.toLong()
+            ))
+        }
+        dao.insertFoodLog(DailyFoodLogEntity(
+            date = "2026-01-03", productId = "p0", productName = "Product 0", loggedAt = 100L
+        ))
+
+        val recent = dao.observeRecentProducts().first()
+
+        assertEquals(10, recent.size)
+        assertEquals(listOf("p0", "p11", "p10", "p9", "p8", "p7", "p6", "p5", "p4", "p3"), recent.map { it.productId })
+    }
+
     @Test fun clearManualOverridesRemovesLegacyOverrideValues() = runBlocking {
         val dao = database.nutritionDao()
         dao.upsertDailyReport(DailyReportEntity(

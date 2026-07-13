@@ -18,6 +18,7 @@ class OfflineMealPlanner(
         goals: UserGoals
     ): RecommendationResult {
         goals.requireValid()
+        require(goals.mode == GoalMode.CALORIE) { "Planner requires a resolved calorie allowance." }
         val eligible = products.filter(ProductEntity::includeInPlanner).sortedBy(ProductEntity::productId)
         val excludedFromPlanning = products.size - eligible.size
         val unpriced = eligible.count { it.purchasePriceMicros == null }
@@ -236,7 +237,7 @@ class OfflineMealPlanner(
 
     private fun shortlist(products: List<ProductEntity>, consumed: NutritionSummary, goals: UserGoals): List<ProductEntity> {
         if (products.size <= 24) return products
-        val remainingCalories = (goals.effectiveCalorieTarget - consumed.calories).coerceAtLeast(1.0)
+        val remainingCalories = (goals.calories - consumed.calories).coerceAtLeast(1.0)
         val remainingProtein = (goals.proteinG - consumed.proteinG).coerceAtLeast(1.0)
         val remainingFiber = (goals.fiberG - consumed.fiberG).coerceAtLeast(1.0)
         val balanced = products.sortedWith(compareBy<ProductEntity> { product ->
@@ -259,7 +260,7 @@ class OfflineMealPlanner(
 
     private fun withinHardCeilings(state: PlanState, consumed: NutritionSummary, spending: DailySpending, goals: UserGoals): Boolean {
         val total = consumed + state.nutrition
-        val targets = goals.targets
+        val targets = goals.targetsFor(null)
         return state.totalUnits <= maxTotalUnits && state.drinkUnits <= maxDrinkUnits &&
             total.calories <= targets.calories * 1.1 && total.sodiumMg <= targets.sodiumMg * 1.1 &&
             total.carbsG <= targets.carbsG * 1.1 && total.fatG <= targets.fatG * 1.1 &&
@@ -286,7 +287,7 @@ class OfflineMealPlanner(
 
     private fun evaluateStrict(state: PlanState, consumed: NutritionSummary, spending: DailySpending, goals: UserGoals): Evaluation {
         val n = consumed + state.nutrition
-        val t = goals.targets
+        val t = goals.targetsFor(null)
         val calorieDeviation = normalizedDifference(n.calories, t.calories)
         val proteinShortfall = shortfall(n.proteinG, t.proteinG)
         val fiberShortfall = shortfall(n.fiberG, t.fiberG)
@@ -305,7 +306,7 @@ class OfflineMealPlanner(
 
     private fun evaluateMinimum(state: PlanState, consumed: NutritionSummary, goals: UserGoals): MinimumEvaluation {
         val n = consumed + state.nutrition
-        val t = goals.targets
+        val t = goals.targetsFor(null)
         val proteinShortfall = shortfall(n.proteinG, t.proteinG)
         val fiberShortfall = shortfall(n.fiberG, t.fiberG)
         val unmet = (if (proteinShortfall > 0.0) 1 else 0) + (if (fiberShortfall > 0.0) 1 else 0)
@@ -326,7 +327,7 @@ class OfflineMealPlanner(
         val projectedNutrition = consumed + nutrition
         val projectedSpending = spending.knownTotalMicros + knownCostMicros
         val evaluation = evaluateStrict(this, consumed, spending, goals)
-        val deltas = projectedNutrition.deltas(goals.targets) + ConstraintDelta(
+        val deltas = projectedNutrition.deltas(goals.targetsFor(null)) + ConstraintDelta(
             "Budget", projectedSpending.toDouble() / MONEY_MICROS_PER_UNIT,
             goals.dailyBudgetMicros.toDouble() / MONEY_MICROS_PER_UNIT,
             percentageDifference(projectedSpending.toDouble(), goals.dailyBudgetMicros.toDouble()),
@@ -355,7 +356,7 @@ class OfflineMealPlanner(
     }
 
     private fun hardViolations(nutrition: NutritionSummary, spendingMicros: Long, goals: UserGoals): List<ConstraintDelta> {
-        val nutritionViolations = nutrition.deltas(goals.targets).filter {
+        val nutritionViolations = nutrition.deltas(goals.targetsFor(null)).filter {
             it.label !in MINIMUM_LABELS && it.percentDifference > 10.0
         }
         val budget = ConstraintDelta(

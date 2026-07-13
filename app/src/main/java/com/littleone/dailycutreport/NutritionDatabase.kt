@@ -240,7 +240,7 @@ interface NutritionDao {
         JOIN daily_food_logs f ON f.productId = p.productId
         GROUP BY p.productId
         ORDER BY MAX(f.loggedAt) DESC
-        LIMIT 8
+        LIMIT 10
     """)
     fun observeRecentProducts(): Flow<List<ProductEntity>>
 

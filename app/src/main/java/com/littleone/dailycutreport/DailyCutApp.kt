@@ -203,8 +203,14 @@ internal fun TodayScreen(
             NutritionTargetsCard(
                 state.report.nutrition, state.targets, expandedTargets,
                 title = if (state.goals.mode == GoalMode.DEFICIT) {
-                    "Deficit goal · ${state.goals.desiredDeficitCalories.roundToInt()} kcal"
-                } else "Nutrition targets"
+                    "Dynamic deficit goal"
+                } else "Nutrition targets",
+                subtitle = if (state.goals.mode == GoalMode.DEFICIT) {
+                    state.calorieAllowance?.let { allowance ->
+                        "${state.report.projectedBurnCalories?.roundToInt()} projected burn − " +
+                            "${state.goals.desiredDeficitCalories.roundToInt()} deficit = ${allowance.roundToInt()} kcal allowance"
+                    } ?: "Refresh Health Connect to load a projected burn allowance."
+                } else null
             ) { expandedTargets = !expandedTargets }
         }
         item {
@@ -224,9 +230,9 @@ internal fun TodayScreen(
                     )
                     Button(
                         onClick = viewModel::planRemainingDay,
-                        enabled = !state.planning && state.goals.dailyBudgetMicros > 0L,
+                        enabled = !state.planning && state.goals.dailyBudgetMicros > 0L && state.planningAvailable,
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (state.planning) "Planning…" else "Plan remaining day") }
+                    ) { Text(if (state.planning) "Planning…" else if (state.planningAvailable) "Plan remaining day" else "Projected burn required") }
                 }
             }
         }
@@ -258,11 +264,13 @@ private fun NutritionTargetsCard(
     targets: DailyNutritionTargets,
     expanded: Boolean,
     title: String = "Nutrition targets",
+    subtitle: String? = null,
     onToggle: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge)
+            subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             TargetRow("Calories", nutrition.calories, targets.calories, "kcal")
             TargetRow("Protein", nutrition.proteinG, targets.proteinG, "g")
             TargetRow("Sodium", nutrition.sodiumMg, targets.sodiumMg, "mg")
@@ -349,15 +357,20 @@ internal fun FoodsScreen(
             if (state.mode == FoodMode.BULK) item {
                 BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
             }
-            if (state.query.isBlank() && state.recentProducts.isNotEmpty()) {
-                item { Text("Recent", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-                items(state.recentProducts, key = { "recent-${it.productId}" }) { product ->
+            if (state.query.isBlank()) {
+                item { Text("Recently used", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+                if (state.recentProducts.isEmpty()) {
+                    item { Text("Search the catalog to add your first food.", style = MaterialTheme.typography.bodySmall) }
+                } else items(state.recentProducts, key = { "recent-${it.productId}" }) { product ->
                     ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
                 }
-                item { Text("All products", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-            }
-            items(state.products, key = { it.productId }) { product ->
-                ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
+            } else {
+                item { Text("Search results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+                if (state.products.isEmpty()) {
+                    item { Text("No matching products.", style = MaterialTheme.typography.bodySmall) }
+                } else items(state.products, key = { it.productId }) { product ->
+                    ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
+                }
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
@@ -802,7 +815,7 @@ internal fun SettingsScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 4 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 5 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -823,7 +836,6 @@ internal fun SettingsScreen(
 private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
     var mode by remember(goals) { mutableStateOf(goals.mode) }
     var calories by remember(goals) { mutableStateOf(goals.calories.toInput()) }
-    var expectedBurn by remember(goals) { mutableStateOf(goals.expectedBurnCalories.toInput()) }
     var deficit by remember(goals) { mutableStateOf(goals.desiredDeficitCalories.toInput()) }
     var protein by remember(goals) { mutableStateOf(goals.proteinG.toInput()) }
     var sodium by remember(goals) { mutableStateOf(goals.sodiumMg.toInput()) }
@@ -834,13 +846,13 @@ private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
     var saturated by remember(goals) { mutableStateOf(goals.saturatedFatG.toInput()) }
     var currency by remember(goals) { mutableStateOf(goals.currencyCode) }
     var budget by remember(goals) { mutableStateOf(goals.dailyBudgetMicros.toMoneyInput()) }
-    val numbers = listOf(calories, expectedBurn, deficit, protein, sodium, carbs, fat, sugar, fiber, saturated)
+    val numbers = listOf(calories, deficit, protein, sodium, carbs, fat, sugar, fiber, saturated)
     val budgetMicros = runCatching { parseMoneyMicros(budget) }.getOrNull()
     val candidate = runCatching {
         UserGoals(
             mode = mode,
             calories = calories.numberOrNull() ?: error("Enter calories"),
-            expectedBurnCalories = expectedBurn.numberOrNull() ?: error("Enter expected burn"),
+            expectedBurnCalories = goals.expectedBurnCalories,
             desiredDeficitCalories = deficit.numberOrNull() ?: error("Enter deficit"),
             proteinG = protein.numberOrNull() ?: error("Enter protein"),
             sodiumMg = sodium.numberOrNull() ?: error("Enter sodium"),
@@ -864,9 +876,11 @@ private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
             }
             if (mode == GoalMode.CALORIE) DecimalField("Calories kcal", calories) { calories = it }
             else {
-                DecimalField("Expected daily burn kcal", expectedBurn) { expectedBurn = it }
                 DecimalField("Desired deficit kcal", deficit) { deficit = it }
-                candidate?.let { Text("Effective allowance: ${it.effectiveCalorieTarget.roundToInt()} kcal", style = MaterialTheme.typography.bodySmall) }
+                Text(
+                    "Daily allowance is calculated automatically from Health Connect projected burn minus this deficit.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
             DecimalField("Protein minimum g", protein) { protein = it }
             DecimalField("Sodium maximum mg", sodium) { sodium = it }

@@ -140,6 +140,19 @@ class DefaultDailyCutRepository(
         val goals = withContext(Dispatchers.IO) { (dao.userGoals() ?: UserGoalsEntity()).toDomain() }
         val nutrition = withContext(Dispatchers.IO) { dao.totalsForDate(date.toString()).toSummary(emptyMap()) }
         val rawSpending = withContext(Dispatchers.IO) { dao.spendingForDate(date.toString()) }
+        val projectedBurn = withContext(Dispatchers.IO) {
+            dao.dailyReport(date.toString())?.totalCalories?.takeIf { it.isFinite() && it > 0.0 }
+        }
+        val planningGoals = goals.forPlanning(projectedBurn) ?: return@withContext RecommendationResult(
+            plans = emptyList(),
+            unpricedProducts = 0,
+            spendingIncomplete = rawSpending.unknownEntries > 0,
+            message = if (projectedBurn == null) {
+                "Refresh Health Connect to load projected burn before planning in deficit mode."
+            } else {
+                "Projected burn must exceed the desired deficit before calories can be planned."
+            }
+        )
         val products = withContext(Dispatchers.IO) { dao.allProducts() }
         mealPlanner.generate(
             products, nutrition,
@@ -147,7 +160,7 @@ class DefaultDailyCutRepository(
                 rawSpending.knownTotalMicros, rawSpending.unknownEntries, goals.dailyBudgetMicros,
                 rawSpending.catalogEstimatedMicros, rawSpending.actualPaidMicros, rawSpending.actualPaidEntries
             ),
-            goals
+            planningGoals
         )
     }
 

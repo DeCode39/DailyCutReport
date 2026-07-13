@@ -67,20 +67,26 @@ data class UserGoals(
     val currencyCode: String = "TWD",
     val dailyBudgetMicros: Long = 0L
 ) {
-    val effectiveCalorieTarget: Double
-        get() = if (mode == GoalMode.DEFICIT) expectedBurnCalories - desiredDeficitCalories else calories
+    fun calorieAllowance(projectedBurnCalories: Double?): Double? = when (mode) {
+        GoalMode.CALORIE -> calories
+        GoalMode.DEFICIT -> projectedBurnCalories
+            ?.takeIf { it.isFinite() && it > desiredDeficitCalories }
+            ?.minus(desiredDeficitCalories)
+    }
 
-    val targets: DailyNutritionTargets
-        get() = DailyNutritionTargets(
-            effectiveCalorieTarget, proteinG, sodiumMg, carbsG, fatG, sugarG, fiberG, saturatedFatG
-        )
+    fun targetsFor(projectedBurnCalories: Double?): DailyNutritionTargets = DailyNutritionTargets(
+        calorieAllowance(projectedBurnCalories) ?: 0.0,
+        proteinG, sodiumMg, carbsG, fatG, sugarG, fiberG, saturatedFatG
+    )
+
+    fun forPlanning(projectedBurnCalories: Double?): UserGoals? = calorieAllowance(projectedBurnCalories)?.let { allowance ->
+        copy(mode = GoalMode.CALORIE, calories = allowance)
+    }
 
     fun requireValid(): UserGoals = apply {
         require(calories > 0.0) { "Calorie target must be greater than zero." }
         require(expectedBurnCalories > 0.0) { "Expected burn must be greater than zero." }
-        require(desiredDeficitCalories >= 0.0 && desiredDeficitCalories < expectedBurnCalories) {
-            "Desired deficit must be lower than expected burn."
-        }
+        require(desiredDeficitCalories >= 0.0) { "Desired deficit cannot be negative." }
         require(listOf(proteinG, sodiumMg, carbsG, fatG, sugarG, fiberG, saturatedFatG).all { it >= 0.0 }) {
             "Nutrient goals cannot be negative."
         }
@@ -92,7 +98,7 @@ data class UserGoals(
         fun finiteOr(value: Double, fallback: Double, positive: Boolean = false): Double =
             value.takeIf { it.isFinite() && (!positive || it > 0.0) } ?: fallback
         val burn = finiteOr(expectedBurnCalories, 2300.0, positive = true)
-        val deficit = finiteOr(desiredDeficitCalories, 450.0).coerceIn(0.0, (burn - 1.0).coerceAtLeast(0.0))
+        val deficit = finiteOr(desiredDeficitCalories, 450.0).coerceAtLeast(0.0)
         val currency = currencyCode.trim().uppercase().takeIf {
             runCatching { java.util.Currency.getInstance(it) }.isSuccess
         } ?: "TWD"
@@ -185,6 +191,9 @@ data class DailyReport(
     val manual: ManualOverrides = ManualOverrides(),
     val savedAtEpochMs: Long = System.currentTimeMillis()
 ) {
+    val projectedBurnCalories: Double?
+        get() = health.totalCalories.takeIf { it.isFinite() && it > 0.0 }
+
     val finalBurnCalories: Double
         get() = manual.burnCalories ?: health.totalCalories.takeIf { it > 0.0 }
             ?: health.activeCalories.takeIf { it > 0.0 }

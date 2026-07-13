@@ -34,7 +34,7 @@ object DailyCutWidgetUpdater {
             ?: report?.nutritionCalories?.takeIf { report.nutritionRecords > 0 }
             ?: 0.0
         if (goals.mode == GoalMode.CALORIE) {
-            return "${food.roundToInt()} / ${goals.effectiveCalorieTarget.roundToInt()} kcal"
+            return "${food.roundToInt()} / ${goals.calories.roundToInt()} kcal"
         }
         return when (val balance = calculateEnergyBalance(burn, food)) {
             EnergyBalance.Unavailable -> "Open app to load burn"

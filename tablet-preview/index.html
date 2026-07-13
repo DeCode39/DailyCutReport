@@ -90,7 +90,6 @@
       <article class="card"><h2>Goals and daily budget</h2><div class="grid">
         <label>Goal mode<select id="goalMode"><option value="CALORIE">Calorie</option><option value="DEFICIT">Deficit</option></select></label>
         <label>Calories<input id="goalCalories" inputmode="decimal"></label>
-        <label>Expected burn<input id="goalBurn" inputmode="decimal"></label>
         <label>Desired deficit<input id="goalDeficit" inputmode="decimal"></label>
         <label>Protein minimum g<input id="goalProtein" inputmode="decimal"></label>
         <label>Sodium maximum mg<input id="goalSodium" inputmode="decimal"></label>
@@ -101,7 +100,7 @@
         <label>Saturated fat maximum g<input id="goalSaturated" inputmode="decimal"></label>
         <label>Currency code<input id="currencyCode" maxlength="3"></label>
         <label>Daily budget<input id="dailyBudget" inputmode="decimal"></label>
-      </div><button id="saveGoals">Save goals</button></article>
+      </div><p class="muted">Deficit mode calculates its allowance from the selected date's projected burn minus the desired deficit. Expected burn is no longer entered manually.</p><button id="saveGoals">Save goals</button></article>
       <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
       <article class="card"><h2>Native capabilities</h2><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK. All manual report, product, log, date, and export workflows are available here.</p></article>
       <article class="card"><h2>Encrypted backup</h2><p>Export or restore the same password-protected backup format used by Android.</p><div class="actions"><button id="exportBackup">Export backup</button><button id="importBackup">Restore backup</button></div><input id="backupFile" type="file" accept=".dcrbackup,application/octet-stream" class="hidden"></article>

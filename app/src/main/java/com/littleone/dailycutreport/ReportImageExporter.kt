@@ -118,9 +118,10 @@ class ReportImageExporter(private val context: Context) {
 
         rule(y); y += 54f
         text("Goals and spending", 72f, y, 31f, accent, true); y += 48f
+        val calorieAllowance = goals.calorieAllowance(report.projectedBurnCalories)
         metric(
             if (goals.mode == GoalMode.DEFICIT) "Deficit allowance" else "Calorie target",
-            "${whole.format(goals.effectiveCalorieTarget)} kcal", 72f, y
+            calorieAllowance?.let { "${whole.format(it)} kcal" } ?: "Unavailable", 72f, y
         )
         metric("Known spending", formatMoney(spending.knownTotalMicros, goals.currencyCode), 570f, y); y += 110f
         metric("Catalog estimate", formatMoney(spending.catalogEstimatedMicros, goals.currencyCode), 72f, y)

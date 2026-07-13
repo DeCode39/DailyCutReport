@@ -25,10 +25,11 @@
   function updateLog(state,id,changes){const index=state.logs.findIndex(x=>x.id===id);if(index>=0)state.logs[index]={...state.logs[index],...changes};return state.logs[index]||null;}
   function deleteLog(state,id){state.logs=state.logs.filter(x=>x.id!==id);}
   function spending(state,date){return state.logs.filter(x=>x.date===date).reduce((t,x)=>{if(x.excludeCostFromBudget)return t;const cost=x.actualPaidTotalMicros??(x.catalogCostPerServingMicros==null?null:Math.round(x.catalogCostPerServingMicros*number(x.quantity)));if(cost==null)t.unknownEntries++;else t.knownTotalMicros+=cost;return t;},{knownTotalMicros:0,unknownEntries:0,budgetMicros:state.settings.dailyBudgetMicros||0});}
-  function effectiveCalories(settings){return settings.goalMode==='DEFICIT'?number(settings.expectedBurnCalories)-number(settings.desiredDeficitCalories):number(settings.calories);}
+  function recentProducts(state,limit=10){const ids=[...new Set([...state.logs].sort((a,b)=>(b.loggedAt||b.id)-(a.loggedAt||a.id)).map(x=>x.productId).filter(Boolean))];return ids.slice(0,limit).map(id=>state.products[id]).filter(Boolean);}
+  function effectiveCalories(settings,projectedBurn=null){if(settings.goalMode!=='DEFICIT')return number(settings.calories);const burn=number(projectedBurn),deficit=number(settings.desiredDeficitCalories);return burn>deficit?burn-deficit:null;}
   function plan(state,date){
     const consumed=totals(state,date),spent=spending(state,date),s=state.settings;
-    const target={calories:effectiveCalories(s),protein:number(s.protein),sodium:number(s.sodium),carbs:number(s.carbs),fat:number(s.fat),sugar:number(s.sugar),fiber:number(s.fiber),saturated:number(s.saturated)};
+    const allowance=effectiveCalories(s,(state.reports[date]||{}).burn),target={calories:allowance??0,protein:number(s.protein),sodium:number(s.sodium),carbs:number(s.carbs),fat:number(s.fat),sugar:number(s.sugar),fiber:number(s.fiber),saturated:number(s.saturated)};
     const all=Object.values(state.products),eligible=all.filter(p=>p.includeInPlanner!==false).sort((a,b)=>a.productId.localeCompare(b.productId));
     const excludedFromPlanningProducts=all.length-eligible.length,unpricedProducts=eligible.filter(p=>p.purchasePriceMicros==null).length;
     const base={items:[],nutrition:{calories:0,protein:0,sodium:0,carbs:0,fat:0,sugar:0,fiber:0,saturated:0},knownCost:0,unknownCosts:0,units:0,drinks:0};
@@ -41,6 +42,7 @@
     const complete=x=>deltas(projected(x),spent.knownTotalMicros+x.knownCost).every(d=>d.withinTolerance);
     const toPlan=(x,mode='STRICT')=>{const n=projected(x),cost=spent.knownTotalMicros+x.knownCost,allDeltas=deltas(n,cost);return{items:x.items,nutrition:n,totalCostMicros:x.knownCost,projectedSpendingMicros:cost,withinBudget:s.dailyBudgetMicros>0&&cost<=s.dailyBudgetMicros,completeFit:complete(x),minimumTargetFallback:mode==='UNRESTRICTED_MINIMUM',mode,unknownCostItems:x.unknownCosts,unmetMinimums:allDeltas.filter(d=>(d.label==='Protein'||d.label==='Fiber')&&d.actual<d.target),deltas:allDeltas};};
     const result=(plans,message,blockingViolations=[])=>({plans,unpricedProducts,excludedFromPlanningProducts,spendingIncomplete:spent.unknownEntries>0||plans.some(p=>p.unknownCostItems>0),message,blockingViolations});
+    if(allowance==null)return result([],'Load projected burn for this date before planning in deficit mode.');
     const compareTuple=(a,b)=>{for(let i=0;i<a.length;i++){if(a[i]<b[i])return-1;if(a[i]>b[i])return 1;}return 0;};
 
     const minimumScore=x=>{const n=projected(x),protein=shortfall(n.protein,target.protein),fiber=shortfall(n.fiber,target.fiber),misses=(protein>0?1:0)+(fiber>0?1:0);const upperDamage=['sodium','carbs','fat','sugar','saturated'].reduce((sum,k)=>sum+Math.max(0,over(n[k],target[k])-over(consumed[k],target[k])),0);return[misses,protein+fiber,x.nutrition.calories,upperDamage,x.unknownCosts>0?1:0,x.knownCost,x.items.length,signature(x)];};
@@ -62,5 +64,5 @@
     const strictPlans=beam.filter(x=>x.items.length&&complete(x)).sort((a,b)=>score(a)-score(b)||a.knownCost-b.knownCost||signature(a).localeCompare(signature(b))).slice(0,3).map(x=>toPlan(x));
     return strictPlans.length?result(strictPlans,null):fallbackResult('No complete strict plan fits the current values and limits.');
   }
-  return{KEY,OLD_KEY,number,optional,localDate,empty,migrate,save,seed,totals,report,upsertProduct,findBarcode,addLog,addBulkPurchase,allocateBulkTotal,updateLog,deleteLog,spending,effectiveCalories,plan,defaultSettings,uuid,catalog};
+  return{KEY,OLD_KEY,number,optional,localDate,empty,migrate,save,seed,totals,report,upsertProduct,findBarcode,addLog,addBulkPurchase,allocateBulkTotal,updateLog,deleteLog,spending,recentProducts,effectiveCalories,plan,defaultSettings,uuid,catalog};
 });
