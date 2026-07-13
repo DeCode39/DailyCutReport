@@ -377,11 +377,15 @@ interface NutritionDao {
         date: String,
         groupId: String,
         groupLabel: String,
-        entries: List<BulkLogEntryInput>,
+        selections: List<BulkLogSelection>,
         actualPaidTotalMicros: Long?,
         excludeCostFromBudget: Boolean
     ): DailyNutritionMutation {
         val before = totalsForDate(date)
+        val entries = selections.map { selection ->
+            val product = productById(selection.productId) ?: error("A selected product no longer exists.")
+            BulkLogEntryInput(ProductWithExtras(product, extrasForProduct(product.productId)), selection.quantity)
+        }
         val allocations = allocateBulkPaidTotal(actualPaidTotalMicros, entries)
         entries.forEachIndexed { index, entry ->
             addProductToDate(

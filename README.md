@@ -1,4 +1,4 @@
-# Daily Cut Report 0.9.4
+# Daily Cut Report 0.9.5
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -10,10 +10,10 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Scan access from Today and Foods, with the daily food log shown on Today.
 - Custom calorie or expected-burn/deficit goals, editable macro targets, one ISO currency, and a daily food budget.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
-- A deterministic offline remaining-day planner that ranks up to three complete purchase-unit suggestions. When no complete fit exists, it names the blocking values and returns one best option for remaining protein and fiber minimums.
+- A deterministic offline remaining-day planner that ranks up to three strict purchase-unit suggestions. If strict planning fails, it names the blocking values and returns one best minimum-target fallback from planner-enabled products. That fallback may ignore fixed-item, two-drink, budget, upper-nutrient, and strict quantity limits, while still respecting each product's physical purchase unit.
 - Per-product planning controls: exclude an item, classify it as solid food or drink, or require one fixed purchase unit in every plan; recommendations allow at most two drink units.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
-- Bulk checkout logging atomically adds several products with one final paid total, so multi-buy and whole-order discounts require no per-item arithmetic. The exact total is allocated internally using catalog estimates or quantity fallback and can be excluded from budget calculations as one group.
+- Inline bulk purchase mode on Foods keeps normal search and barcode scanning available while building a date-locked cart. It atomically adds several products with one final paid total, so multi-buy and whole-order discounts require no per-item arithmetic. The exact total is allocated internally using catalog estimates or quantity fallback and can be excluded from budget calculations as one group.
 - Stored goal and currency values are sanitized on startup, and zero targets render safely.
 - Serialized, retryable Health Connect nutrition upserts after local food-log add/edit/delete, controlled by a separate optional write permission and surfaced in Settings.
 - In-app macro threshold snackbars when a food-log change crosses a daily target.
@@ -43,7 +43,7 @@ ML Kit dependencies declare them transitively, so the app manifest explicitly re
 
 OCR remains an assistive workflow with manual correction. Captured images and recognized text are transient and discarded after use or cancellation.
 
-Future quality-of-life candidates include a fuller Today summary widget, food-log copy from a previous day, one-tap usual foods, and richer Health Connect sync history.
+Future quality-of-life candidates include sending a planner result directly into the bulk cart, receipt-group editing, continuous multi-scan, favorites/usual foods, food-log copy from a previous day, a fuller Today summary widget, and richer Health Connect sync history.
 
 ## Build and verify
 
@@ -112,6 +112,7 @@ Catalog schema 2 uses a stable ID and an optional physical barcode:
 
 - `AppShell.kt`: Compose navigation, shared workflow host, and app-level snackbars.
 - `DailyCutApp.kt`: Today, Foods, Settings, OCR, and shared dialog components.
+- `FoodsComponents.kt`: isolated inline bulk cart, product catalog, search editor, and planner-result UI.
 - `ViewModels.kt`: shared date and screen state.
 - `DailyCutRepository.kt`: application data boundary.
 - `NutritionDatabase.kt`: Room schema, DAO, and v1→v2→v3→v4 migrations.

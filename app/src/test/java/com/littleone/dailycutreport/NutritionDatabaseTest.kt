@@ -124,10 +124,12 @@ class NutritionDatabaseTest {
         val dao = database.nutritionDao()
         val first = ProductWithExtras(ProductEntity("first", name = "Rice", calories = 200.0))
         val second = ProductWithExtras(ProductEntity("second", name = "Chicken", calories = 300.0))
+        dao.saveProductWithExtras(first.product, first.extras)
+        dao.saveProductWithExtras(second.product, second.extras)
 
         val mutation = dao.addBulkPurchaseToDate(
             "2026-01-02", "bulk-id", "7-Eleven",
-            listOf(BulkLogEntryInput(first, 1.0), BulkLogEntryInput(second, 2.0)),
+            listOf(BulkLogSelection("first", 1.0), BulkLogSelection("second", 2.0)),
             15_000_001L, false
         )
 

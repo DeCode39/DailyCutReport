@@ -67,7 +67,22 @@
         <p class="muted">Nutrition-label OCR is available in the Android app only.</p>
         <div class="actions"><button id="saveProduct">Save product</button><button id="saveAndAddProduct">Save and add</button></div>
       </article>
-      <article class="card"><h2>Saved products</h2><button id="addBulkPurchase">Bulk log a purchase</button><input id="productSearch" placeholder="Search products"><div id="productList"></div></article>
+      <article class="card">
+        <h2>Saved products</h2>
+        <label><input id="bulkMode" type="checkbox"> Bulk purchase mode</label>
+        <p id="bulkHelp" class="muted hidden">Search and add products, then enter the final checkout total once.</p>
+        <input id="productSearch" placeholder="Search products">
+        <div id="bulkCart" class="hidden">
+          <h3>Bulk cart</h3><p id="bulkDate" class="muted"></p><div id="bulkItems"></div>
+          <div class="grid">
+            <label>Store or group label<input id="bulkLabel" placeholder="e.g. 7-Eleven"></label>
+            <label>Final checkout total<input id="bulkPaid" inputmode="decimal" placeholder="Blank uses estimates"></label>
+          </div>
+          <label><input id="bulkIgnoreBudget" type="checkbox"> Log price but ignore it in budget calculations</label>
+          <div class="actions"><button id="commitBulk">Log selected items</button><button id="discardBulk" class="danger">Discard cart</button></div>
+        </div>
+        <div id="productList"></div>
+      </article>
       <article class="card"><h2>Food log</h2><div id="foodLog"></div></article>
     </section>
 

@@ -16,6 +16,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -51,12 +53,16 @@ fun DailyCutApp(
         val selectedDate by dateViewModel.selectedDate.collectAsStateWithLifecycle()
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
+        var scannerTarget by remember { mutableStateOf(ScanTarget.STANDALONE) }
         val showMessage: (String) -> Unit = { message ->
             scope.launch { snackbarHostState.showSnackbar(message) }
         }
         val externalScannerLaunch = scannerLaunchRequests?.value ?: 0
         LaunchedEffect(externalScannerLaunch) {
-            if (externalScannerLaunch > 0 && route != "scanner") navController.navigate("scanner")
+            if (externalScannerLaunch > 0 && route != "scanner") {
+                scannerTarget = ScanTarget.STANDALONE
+                navController.navigate("scanner")
+            }
         }
         LaunchedEffect(Unit) {
             foodsViewModel.events.collect { event ->
@@ -110,7 +116,10 @@ fun DailyCutApp(
                 composable(Destination.TODAY.route) {
                     TodayScreen(
                         selectedDate, dateViewModel, todayViewModel,
-                        onScan = { navController.navigate("scanner") },
+                        onScan = {
+                            scannerTarget = ScanTarget.STANDALONE
+                            navController.navigate("scanner")
+                        },
                         onEditLog = foodsViewModel::edit,
                         onDeleteLog = foodsViewModel::delete,
                         onMessage = showMessage
@@ -119,7 +128,10 @@ fun DailyCutApp(
                 composable(Destination.FOODS.route) {
                     FoodsScreen(
                         selectedDate, dateViewModel, foodsViewModel,
-                        onScan = { navController.navigate("scanner") },
+                        onScan = { target ->
+                            scannerTarget = target
+                            navController.navigate("scanner")
+                        },
                         onOcr = { navController.navigate("ocr") }
                     )
                 }
@@ -136,7 +148,7 @@ fun DailyCutApp(
                 composable("scanner") {
                     BarcodeScannerScreen { result ->
                         navController.popBackStack()
-                        if (result is ScannerResult.Found) foodsViewModel.handleBarcode(result.barcode)
+                        if (result is ScannerResult.Found) foodsViewModel.handleBarcode(result.barcode, scannerTarget)
                     }
                 }
                 composable("ocr") {

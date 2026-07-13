@@ -29,7 +29,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilledIconButton
@@ -68,10 +67,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -307,7 +304,7 @@ internal fun FoodsScreen(
     selectedDate: LocalDate,
     dateViewModel: ReportDateViewModel,
     viewModel: FoodsViewModel,
-    onScan: () -> Unit,
+    onScan: (ScanTarget) -> Unit,
     onOcr: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -315,7 +312,7 @@ internal fun FoodsScreen(
     var showManualTools by remember { mutableStateOf(false) }
 
     Scaffold(floatingActionButton = {
-        FloatingActionButton(onClick = onScan) { Text("Scan") }
+        FloatingActionButton(onClick = { onScan(viewModel.scanTarget()) }) { Text("Scan") }
     }) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
@@ -327,10 +324,14 @@ internal fun FoodsScreen(
                 DateHeader(selectedDate, dateViewModel)
             }
             item {
-                ProductSearchField(state.query, viewModel::setQuery)
-                OutlinedButton(onClick = viewModel::createBulkPurchase, modifier = Modifier.fillMaxWidth()) {
-                    Text("Bulk log a purchase")
+                ToggleRow("Bulk purchase mode", state.mode == FoodMode.BULK) { enabled ->
+                    viewModel.setMode(if (enabled) FoodMode.BULK else FoodMode.NORMAL)
                 }
+                if (state.mode == FoodMode.BULK) Text(
+                    "Search and add products below, then enter one final checkout total.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                ProductSearchField(state.query, viewModel::setQuery)
                 TextButton(onClick = { showManualTools = !showManualTools }) {
                     Text(if (showManualTools) "Hide manual options" else "Manual options")
                 }
@@ -339,21 +340,24 @@ internal fun FoodsScreen(
                         value = manualCode,
                         onValueChange = { manualCode = it },
                         label = { Text("Barcode / product code") },
-                        trailingIcon = { TextButton(onClick = { viewModel.handleBarcode(manualCode) }) { Text("Use") } },
+                        trailingIcon = { TextButton(onClick = { viewModel.handleBarcode(manualCode, viewModel.scanTarget()) }) { Text("Use") } },
                         modifier = Modifier.fillMaxWidth()
                     )
                     TextButton(onClick = viewModel::createProduct) { Text("Create product manually") }
                 }
             }
+            if (state.mode == FoodMode.BULK) item {
+                BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
+            }
             if (state.query.isBlank() && state.recentProducts.isNotEmpty()) {
                 item { Text("Recent", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
                 items(state.recentProducts, key = { "recent-${it.productId}" }) { product ->
-                    ProductCatalogRow(product, state.goals.currencyCode, viewModel)
+                    ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
                 }
                 item { Text("All products", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
             }
             items(state.products, key = { it.productId }) { product ->
-                ProductCatalogRow(product, state.goals.currencyCode, viewModel)
+                ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
@@ -377,7 +381,7 @@ internal fun FoodWorkflowDialogs(
         is FoodWorkflowState.EditProduct -> ProductEditorDialog(
             initialBarcode = workflow.barcode,
             existing = workflow.product,
-            addAfterSave = workflow.addAfterSave,
+            saveTarget = workflow.saveTarget,
             ocrDraft = workflow.ocrDraft,
             currencyCode = state.goals.currencyCode,
             onScanNutrition = onOcr,
@@ -389,12 +393,6 @@ internal fun FoodWorkflowDialogs(
             state.goals.currencyCode,
             onDismiss = viewModel::cancelDialogs,
             onSave = viewModel::saveLogEdit
-        )
-        is FoodWorkflowState.BuildBulkPurchase -> BulkPurchaseDialog(
-            products = workflow.products,
-            currencyCode = state.goals.currencyCode,
-            onDismiss = viewModel::cancelDialogs,
-            onConfirm = viewModel::confirmBulkPurchase
         )
     }
 }
@@ -426,200 +424,6 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
             }
         }
     }
-}
-
-@Composable
-private fun BulkPurchaseDialog(
-    products: List<ProductWithExtras>,
-    currencyCode: String,
-    onDismiss: () -> Unit,
-    onConfirm: (String, List<BulkLogEntryInput>, Long?, Boolean) -> Unit
-) {
-    var label by remember { mutableStateOf("") }
-    var quantities by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var actualPaid by remember { mutableStateOf("") }
-    var excludeCostFromBudget by remember { mutableStateOf(false) }
-    val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
-    val entries = products.mapNotNull { product ->
-        quantities[product.product.productId]?.numberOrNull()?.takeIf { it > 0.0 }?.let {
-            BulkLogEntryInput(product, it)
-        }
-    }
-    val valid = entries.size >= 2 && (actualPaid.isBlank() || parsedPaid != null)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Bulk log a purchase") },
-        text = {
-            Column(
-                Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    label,
-                    { label = it },
-                    label = { Text("Store or group label (optional)") },
-                    placeholder = { Text("e.g. 7-Eleven") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    "Choose at least two products and enter the final checkout price once. Each product is still logged as its own nutrition entry.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                products.forEach { product ->
-                    val id = product.product.productId
-                    val selected = id in quantities
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(product.product.name, fontWeight = FontWeight.Bold)
-                                    Text(product.product.servingLabel, style = MaterialTheme.typography.bodySmall)
-                                }
-                                Switch(selected, onCheckedChange = { checked ->
-                                    quantities = if (checked) quantities + (id to "1") else quantities - id
-                                })
-                            }
-                            if (selected) DecimalField("Quantity", quantities[id].orEmpty()) { value ->
-                                quantities = quantities + (id to value)
-                            }
-                        }
-                    }
-                }
-                DecimalField("Total actually paid ($currencyCode, optional)", actualPaid) { actualPaid = it }
-                Text(
-                    "The exact total is allocated internally using catalog estimates (or quantities when estimates are missing). You do not need to calculate item discounts.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                ToggleRow("Log the price but ignore it in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
-            }
-        },
-        confirmButton = {
-            Button(enabled = valid, onClick = {
-                onConfirm(label.trim(), entries, parsedPaid, excludeCostFromBudget)
-            }) { Text("Log items") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@Composable
-private fun RecommendationDialog(result: RecommendationResult, currencyCode: String, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Remaining-day suggestions") },
-        text = {
-            Column(
-                Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                result.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-                if (result.blockingViolations.isNotEmpty()) {
-                    Text("Values preventing a complete plan", fontWeight = FontWeight.Bold)
-                    result.blockingViolations.forEach { violation ->
-                        Text(
-                            "${violation.label}: ${constraintValue(violation, currencyCode)} " +
-                                "(target ${constraintTarget(violation, currencyCode)}, ${"%+.1f".format(violation.percentDifference)}%)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-                if (result.excludedUnpricedProducts > 0) Text(
-                    "${result.excludedUnpricedProducts} unpriced product(s) were excluded.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                if (result.excludedFromPlanningProducts > 0) Text(
-                    "${result.excludedFromPlanningProducts} product(s) are disabled for planning.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                if (result.spendingIncomplete) Text(
-                    "Existing unknown costs mean budget totals are estimates.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                result.plans.forEachIndexed { index, plan ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                if (plan.minimumTargetFallback) "Best minimum-target option" else "Option ${index + 1}",
-                                fontWeight = FontWeight.Bold
-                            )
-                            plan.items.forEach { item ->
-                                Text("${item.purchaseUnits} × ${item.name} · ${item.servings.toDisplay()} servings" +
-                                    if (item.fixed) " · fixed" else "")
-                            }
-                            MetricRow("Additional cost", formatMoney(plan.totalCostMicros, currencyCode))
-                            MetricRow("Projected spending", formatMoney(plan.projectedSpendingMicros, currencyCode))
-                            MetricRow("Projected calories", "${plan.nutrition.calories.roundToInt()} kcal")
-                            MetricRow("Projected protein", "${plan.nutrition.proteinG.roundToInt()} g")
-                            Text(plan.explanation, style = MaterialTheme.typography.bodySmall)
-                            plan.deltas.filterNot { it.withinTolerance }.forEach { delta ->
-                                Text(
-                                    "${delta.label}: ${"%+.1f".format(delta.percentDifference)}% from target",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                    }
-                }
-                if (result.plans.isEmpty()) Text("No suggestions available for the current catalog and limits.")
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
-    )
-}
-
-private fun constraintValue(delta: ConstraintDelta, currencyCode: String): String = when (delta.label) {
-    "Budget" -> formatMoney((delta.actual * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${delta.actual.roundToInt()} kcal"
-    "Sodium" -> "${delta.actual.roundToInt()} mg"
-    else -> "${delta.actual.toDisplay()} g"
-}
-
-private fun constraintTarget(delta: ConstraintDelta, currencyCode: String): String = when (delta.label) {
-    "Budget" -> formatMoney((delta.target * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${delta.target.roundToInt()} kcal"
-    "Sodium" -> "${delta.target.roundToInt()} mg"
-    else -> "${delta.target.toDisplay()} g"
-}
-
-@Composable
-private fun ProductCatalogRow(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel) {
-    Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(product.name, fontWeight = FontWeight.Bold)
-                Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.barcode).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                product.purchasePriceMicros?.let {
-                    Text("${formatMoney(it, currencyCode)} / ${product.purchaseUnitServings.toDisplay()} serving(s)", style = MaterialTheme.typography.bodySmall)
-                }
-                Text(
-                    when {
-                        !product.includeInPlanner -> "Not used in planning"
-                        product.alwaysIncludeInPlanner -> "${product.plannerItemType.lowercase()} · fixed in plans"
-                        else -> product.plannerItemType.lowercase().replaceFirstChar(Char::uppercase)
-                    },
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit") }
-            Button(onClick = { viewModel.selectProduct(product) }) { Text("Add") }
-        }
-    }
-}
-
-@Composable
-internal fun ProductSearchField(initialQuery: String, onQueryChange: (String) -> Unit) {
-    var field by remember { mutableStateOf(TextFieldValue(initialQuery)) }
-    OutlinedTextField(
-        value = field,
-        onValueChange = {
-            field = it
-            onQueryChange(it.text)
-        },
-        label = { Text("Search saved products") },
-        modifier = Modifier.fillMaxWidth().testTag("product_search")
-    )
 }
 
 @Composable
@@ -1119,7 +923,7 @@ private fun BackupPasswordDialog(exporting: Boolean, onDismiss: () -> Unit, onCo
     )
 }
 
-@Composable private fun MetricRow(label: String, value: String) {
+@Composable internal fun MetricRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label)
         Text(value, fontWeight = FontWeight.Bold)
@@ -1164,7 +968,7 @@ private fun QuantityDialog(
 private fun ProductEditorDialog(
     initialBarcode: String?,
     existing: ProductWithExtras?,
-    addAfterSave: Boolean,
+    saveTarget: ProductSaveTarget,
     ocrDraft: OcrNutritionDraft?,
     currencyCode: String,
     onScanNutrition: () -> Unit,
@@ -1263,7 +1067,7 @@ private fun ProductEditorDialog(
                     updatedAt = System.currentTimeMillis()
                 )
                 onSave(entity, parseExtras(productId, extras), 1.0)
-            }) { Text(if (addAfterSave) "Save and continue" else "Save") }
+            }) { Text(if (saveTarget == ProductSaveTarget.CATALOG_ONLY) "Save" else "Save and continue") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
@@ -1302,7 +1106,7 @@ private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDism
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, onCheckedChange: (Boolean) -> Unit) {
+internal fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, onCheckedChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Switch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
@@ -1310,7 +1114,7 @@ private fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, 
 }
 
 @Composable
-private fun DecimalField(label: String, value: String, onValueChange: (String) -> Unit) {
+internal fun DecimalField(label: String, value: String, onValueChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -1324,7 +1128,7 @@ private fun String.numberOrNull(): Double? = trim().replace(',', '.').takeIf { i
 private fun String.number(): Double = numberOrNull() ?: 0.0
 private fun Double.toInput(): String = if (this == 0.0) "" else toString()
 private fun Double.toReviewInput(): String = if (this == 0.0) "0" else toString()
-private fun Double.toDisplay(): String = if (this == toLong().toDouble()) toLong().toString() else toString()
+internal fun Double.toDisplay(): String = if (this == toLong().toDouble()) toLong().toString() else toString()
 private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
     EnergyBalance.Unavailable -> "Add Health Connect burn data"
     is EnergyBalance.Cut -> "−${balance.calories.roundToInt()} kcal"

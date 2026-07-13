@@ -121,6 +121,17 @@ class ModelsTest {
         assertEquals(listOf(3L, 7L), allocateBulkPaidTotal(10L, listOf(priced, unpriced)))
     }
 
+    @Test fun bulkDraftRequiresTwoValidItemsAndAcceptsAnExplicitFreeCheckout() {
+        val date = LocalDate.of(2026, 1, 2)
+        val first = BulkDraftItem(ProductEntity(productId = "first", name = "First"), "1.5")
+        val second = BulkDraftItem(ProductEntity(productId = "second", name = "Second"), "2")
+
+        assertEquals(false, BulkDraft(date = date, items = listOf(first)).isValid)
+        assertEquals(true, BulkDraft(date = date, items = listOf(first, second), actualPaidText = "0").isValid)
+        assertEquals(false, BulkDraft(date = date, items = listOf(first, second.copy(quantityText = "0"))).isValid)
+        assertEquals(false, BulkDraft(date = date, items = listOf(first, second), actualPaidText = "not money").isValid)
+    }
+
     @Test fun missingBurnProducesUnavailableBalance() {
         val report = DailyReport(
             date = LocalDate.of(2026, 1, 2),

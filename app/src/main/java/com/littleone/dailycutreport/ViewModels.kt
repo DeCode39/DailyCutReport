@@ -94,11 +94,10 @@ sealed interface FoodWorkflowState {
     data class EditProduct(
         val barcode: String,
         val product: ProductWithExtras?,
-        val addAfterSave: Boolean,
+        val saveTarget: ProductSaveTarget,
         val ocrDraft: OcrNutritionDraft? = null
     ) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
-    data class BuildBulkPurchase(val products: List<ProductWithExtras>) : FoodWorkflowState
 }
 
 sealed interface FoodUiEvent {
@@ -113,7 +112,17 @@ data class FoodsUiState(
     val recentProducts: List<ProductEntity> = emptyList(),
     val goals: UserGoals = UserGoals(),
     val query: String = "",
-    val workflow: FoodWorkflowState = FoodWorkflowState.Idle
+    val workflow: FoodWorkflowState = FoodWorkflowState.Idle,
+    val mode: FoodMode = FoodMode.NORMAL,
+    val bulkDraft: BulkDraft = BulkDraft()
+)
+
+private data class FoodsCatalogState(
+    val products: List<ProductEntity>,
+    val recent: List<ProductEntity>,
+    val workflow: FoodWorkflowState,
+    val mode: FoodMode,
+    val bulkDraft: BulkDraft
 )
 
 class FoodsViewModel(
@@ -122,6 +131,8 @@ class FoodsViewModel(
 ) : ViewModel() {
     private val query = MutableStateFlow("")
     private val workflow = MutableStateFlow<FoodWorkflowState>(FoodWorkflowState.Idle)
+    private val mode = MutableStateFlow(FoodMode.NORMAL)
+    private val bulkDraft = MutableStateFlow(BulkDraft())
     private val _events = MutableSharedFlow<FoodUiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<FoodUiEvent> = _events.asSharedFlow()
     private val thresholdNotifier = MacroThresholdNotifier()
@@ -129,8 +140,10 @@ class FoodsViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals())
     private val productSearch = query.debounce(200).distinctUntilChanged().flatMapLatest(repository::observeProducts)
 
-    private val catalogState = combine(productSearch, repository.observeRecentProducts(), workflow) { products, recent, active ->
-        Triple(products, recent, active)
+    private val catalogState = combine(
+        productSearch, repository.observeRecentProducts(), workflow, mode, bulkDraft
+    ) { products, recent, active, foodMode, draft ->
+        FoodsCatalogState(products, recent, active, foodMode, draft)
     }
     val uiState: StateFlow<FoodsUiState> = combine(
         selectedDate,
@@ -138,18 +151,26 @@ class FoodsViewModel(
         catalogState,
         latestGoals
     ) { date, logs, catalog, goals ->
-        FoodsUiState(date, logs, catalog.first, catalog.second, goals, query.value, catalog.third)
+        FoodsUiState(
+            date, logs, catalog.products, catalog.recent, goals, query.value,
+            catalog.workflow, catalog.mode, catalog.bulkDraft
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FoodsUiState())
 
     fun setQuery(value: String) { query.value = value }
 
-    fun handleBarcode(barcode: String) {
+    fun handleBarcode(barcode: String, target: ScanTarget = ScanTarget.STANDALONE) {
         val normalized = barcode.trim()
         if (normalized.isBlank()) return
         viewModelScope.launch {
             val saved = repository.lookupProduct(normalized)
             if (saved == null) {
-                workflow.value = FoodWorkflowState.EditProduct(normalized, null, addAfterSave = true)
+                workflow.value = FoodWorkflowState.EditProduct(
+                    normalized, null,
+                    if (target == ScanTarget.BULK_CART) ProductSaveTarget.BULK_CART else ProductSaveTarget.STANDALONE_LOG
+                )
+            } else if (target == ScanTarget.BULK_CART) {
+                addProductToBulk(saved.product)
             } else workflow.value = FoodWorkflowState.ConfirmQuantity(saved)
         }
     }
@@ -161,31 +182,66 @@ class FoodsViewModel(
     }
 
     fun createProduct() {
-        workflow.value = FoodWorkflowState.EditProduct("", null, addAfterSave = true)
+        workflow.value = FoodWorkflowState.EditProduct(
+            "", null,
+            if (mode.value == FoodMode.BULK) ProductSaveTarget.BULK_CART else ProductSaveTarget.STANDALONE_LOG
+        )
     }
 
-    fun createBulkPurchase() {
-        viewModelScope.launch {
-            val products = repository.productsForBulkLogging()
-            if (products.size < 2) {
-                _events.emit(FoodUiEvent.Message("Save at least two products before bulk logging."))
-            } else workflow.value = FoodWorkflowState.BuildBulkPurchase(products)
+    fun setMode(value: FoodMode) { mode.value = value }
+    fun scanTarget(): ScanTarget = if (mode.value == FoodMode.BULK) ScanTarget.BULK_CART else ScanTarget.STANDALONE
+
+    fun addProductToBulk(product: ProductEntity) {
+        val current = bulkDraft.value
+        if (current.items.any { it.product.productId == product.productId }) {
+            viewModelScope.launch { _events.emit(FoodUiEvent.Message("${product.name} is already in the bulk cart.")) }
+            return
         }
+        bulkDraft.value = current.copy(
+            date = current.date ?: uiState.value.date,
+            items = current.items + BulkDraftItem(product)
+        )
     }
 
-    fun confirmBulkPurchase(
-        label: String,
-        entries: List<BulkLogEntryInput>,
-        actualPaidTotalMicros: Long?,
-        excludeCostFromBudget: Boolean
-    ) {
-        val date = uiState.value.date
+    fun removeBulkProduct(productId: String) {
+        val current = bulkDraft.value
+        val remaining = current.items.filterNot { it.product.productId == productId }
+        bulkDraft.value = current.copy(items = remaining, date = current.date.takeIf { remaining.isNotEmpty() })
+    }
+
+    fun updateBulkQuantity(productId: String, value: String) {
+        bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
+            if (it.product.productId == productId) it.copy(quantityText = value) else it
+        })
+    }
+
+    fun updateBulkLabel(value: String) { bulkDraft.value = bulkDraft.value.copy(label = value) }
+    fun updateBulkPaid(value: String) { bulkDraft.value = bulkDraft.value.copy(actualPaidText = value) }
+    fun updateBulkBudgetExclusion(value: Boolean) { bulkDraft.value = bulkDraft.value.copy(excludeCostFromBudget = value) }
+    fun discardBulkDraft() { bulkDraft.value = BulkDraft() }
+
+    fun confirmBulkPurchase() {
+        val draft = bulkDraft.value
+        val date = draft.date ?: return
         viewModelScope.launch {
-            runCatching { repository.addBulkPurchase(date, label, entries, actualPaidTotalMicros, excludeCostFromBudget) }
+            runCatching {
+                require(draft.isValid) { "Choose at least two items and enter valid quantities and price." }
+                val paid = if (draft.actualPaidText.isBlank()) null
+                else requireNotNull(parseMoneyMicros(draft.actualPaidText)) { "Enter a valid final checkout total." }
+                repository.addBulkPurchase(
+                    date = date,
+                    label = draft.label,
+                    entries = draft.items.map { BulkLogSelection(it.product.productId, requireNotNull(it.quantity)) },
+                    actualPaidTotalMicros = paid,
+                    excludeCostFromBudget = draft.excludeCostFromBudget
+                )
+            }
                 .onSuccess { result ->
                     workflow.value = FoodWorkflowState.Idle
+                    bulkDraft.value = BulkDraft()
+                    mode.value = FoodMode.NORMAL
                     afterFoodChange(result)
-                    _events.emit(FoodUiEvent.Message("Bulk logged ${entries.size} items with one checkout total."))
+                    _events.emit(FoodUiEvent.Message("Bulk logged ${draft.items.size} items with one checkout total."))
                 }
                 .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not bulk log items.")) }
         }
@@ -194,7 +250,7 @@ class FoodsViewModel(
     fun editProduct(product: ProductEntity) {
         viewModelScope.launch {
             repository.getProduct(product.productId)?.let {
-                workflow.value = FoodWorkflowState.EditProduct(product.barcode.orEmpty(), it, addAfterSave = false)
+                workflow.value = FoodWorkflowState.EditProduct(product.barcode.orEmpty(), it, ProductSaveTarget.CATALOG_ONLY)
             }
         }
     }
@@ -220,13 +276,24 @@ class FoodsViewModel(
             runCatching {
                 repository.saveProduct(product, extras)
             }.onSuccess { result ->
-                if (editor.addAfterSave) {
-                    workflow.value = FoodWorkflowState.ConfirmQuantity(ProductWithExtras(product, extras))
-                    _events.emit(FoodUiEvent.Message("Saved ${product.name}. Confirm quantity to add it."))
-                } else {
-                    workflow.value = FoodWorkflowState.Idle
-                    val linked = if (result.linkedEntriesUpdated == 0) "" else " Updated ${result.linkedEntriesUpdated} linked log entr${if (result.linkedEntriesUpdated == 1) "y" else "ies"}."
-                    _events.emit(FoodUiEvent.Message("Updated ${product.name}.$linked"))
+                when (editor.saveTarget) {
+                    ProductSaveTarget.STANDALONE_LOG -> {
+                        workflow.value = FoodWorkflowState.ConfirmQuantity(ProductWithExtras(product, extras))
+                        _events.emit(FoodUiEvent.Message("Saved ${product.name}. Confirm quantity to add it."))
+                    }
+                    ProductSaveTarget.BULK_CART -> {
+                        addProductToBulk(product)
+                        workflow.value = FoodWorkflowState.Idle
+                        _events.emit(FoodUiEvent.Message("Saved ${product.name} and added it to the bulk cart."))
+                    }
+                    ProductSaveTarget.CATALOG_ONLY -> {
+                        bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map { item ->
+                            if (item.product.productId == result.product.productId) item.copy(product = result.product) else item
+                        })
+                        workflow.value = FoodWorkflowState.Idle
+                        val linked = if (result.linkedEntriesUpdated == 0) "" else " Updated ${result.linkedEntriesUpdated} linked log entr${if (result.linkedEntriesUpdated == 1) "y" else "ies"}."
+                        _events.emit(FoodUiEvent.Message("Updated ${product.name}.$linked"))
+                    }
                 }
             }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not save product.")) }
         }

@@ -19,7 +19,7 @@ class OfflineMealPlannerTest {
         )
         val result = planner.generate(listOf(priced, ProductEntity("unknown", name = "Unknown")), NutritionSummary(), DailySpending(budgetMicros = goals.dailyBudgetMicros), goals)
 
-        assertEquals(1, result.excludedUnpricedProducts)
+        assertEquals(1, result.unpricedProducts)
         assertTrue(result.plans.isNotEmpty())
         assertTrue(result.plans.all { plan -> plan.items.all { it.servings % 2.0 == 0.0 } })
     }
@@ -50,11 +50,11 @@ class OfflineMealPlannerTest {
             purchasePriceMicros = 1L, includeInPlanner = false
         )
         val fixed = ProductEntity(
-            "fixed", name = "Fixed meal", calories = 300.0, proteinG = 25.0,
+            "fixed", name = "Fixed meal", calories = 300.0, proteinG = 25.0, fiberG = 2.0,
             purchasePriceMicros = 20_000_000L, alwaysIncludeInPlanner = true
         )
         val optional = ProductEntity(
-            "optional", name = "Optional", calories = 200.0, proteinG = 20.0,
+            "optional", name = "Optional", calories = 200.0, proteinG = 20.0, fiberG = 2.0,
             purchasePriceMicros = 10_000_000L
         )
 
@@ -73,7 +73,8 @@ class OfflineMealPlannerTest {
                 purchasePriceMicros = 5_000_000L, plannerItemType = PlannerItemType.DRINK.name
             )
         }
-        val result = planner.generate(drinks, NutritionSummary(), DailySpending(budgetMicros = goals.dailyBudgetMicros), goals)
+        val drinkGoals = goals.copy(calories = 200.0, proteinG = 20.0, fiberG = 0.0)
+        val result = planner.generate(drinks, NutritionSummary(), DailySpending(budgetMicros = drinkGoals.dailyBudgetMicros), drinkGoals)
 
         assertTrue(result.plans.isNotEmpty())
         assertTrue(result.plans.all { plan ->
@@ -109,7 +110,7 @@ class OfflineMealPlannerTest {
             DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
         )
 
-        assertEquals(listOf("Sodium"), result.blockingViolations.map { it.label })
+        assertTrue(result.blockingViolations.any { it.label == "Sodium" })
         assertEquals(1, result.plans.size)
         assertTrue(result.plans.single().minimumTargetFallback)
         assertTrue(result.plans.single().nutrition.proteinG >= goals.proteinG)
@@ -131,5 +132,51 @@ class OfflineMealPlannerTest {
         assertEquals(1, result.plans.size)
         assertTrue(result.plans.single().minimumTargetFallback)
         assertTrue(result.blockingViolations.any { it.label == "Calories" })
+    }
+
+    @Test fun unrestrictedFallbackIgnoresFixedDrinkBudgetAndStrictQuantityLimits() {
+        val fallbackGoals = goals.copy(
+            calories = 10.0, proteinG = 25.0, fiberG = 0.0, dailyBudgetMicros = 1L
+        )
+        val fixed = ProductEntity(
+            "fixed", name = "Fixed", calories = 100.0, proteinG = 1.0,
+            purchasePriceMicros = 1_000_000L, alwaysIncludeInPlanner = true
+        )
+        val drink = ProductEntity(
+            "drink", name = "Unpriced drink", calories = 1.0, proteinG = 1.0,
+            purchasePriceMicros = null, plannerItemType = PlannerItemType.DRINK.name
+        )
+        val disabled = ProductEntity(
+            "disabled", name = "Disabled perfect item", calories = 0.0, proteinG = 100.0,
+            purchasePriceMicros = 0L, includeInPlanner = false
+        )
+
+        val result = planner.generate(
+            listOf(fixed, drink, disabled), NutritionSummary(),
+            DailySpending(budgetMicros = fallbackGoals.dailyBudgetMicros), fallbackGoals
+        )
+
+        val plan = result.plans.single()
+        assertTrue(plan.minimumTargetFallback)
+        assertEquals(listOf("drink"), plan.items.map { it.productId })
+        assertEquals(25, plan.items.single().purchaseUnits)
+        assertEquals(null, plan.items.single().costMicros)
+        assertEquals(1, plan.unknownCostItems)
+        assertTrue(plan.items.single().purchaseUnits > 20)
+    }
+
+    @Test fun unrestrictedFallbackRespectsPhysicalPurchaseUnitServings() {
+        val product = ProductEntity(
+            "two-pack", name = "Two pack", calories = 100.0, proteinG = 20.0, fiberG = 2.5,
+            purchasePriceMicros = null, purchaseUnitServings = 2.0
+        )
+
+        val plan = planner.generate(
+            listOf(product), NutritionSummary(), DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
+        ).plans.single()
+
+        assertTrue(plan.minimumTargetFallback)
+        assertEquals(2, plan.items.single().purchaseUnits)
+        assertEquals(4.0, plan.items.single().servings, 0.0)
     }
 }

@@ -283,6 +283,33 @@ data class BulkLogEntryInput(
     val quantity: Double
 )
 
+data class BulkLogSelection(
+    val productId: String,
+    val quantity: Double
+)
+
+enum class FoodMode { NORMAL, BULK }
+enum class ProductSaveTarget { STANDALONE_LOG, BULK_CART, CATALOG_ONLY }
+enum class ScanTarget { STANDALONE, BULK_CART }
+
+data class BulkDraftItem(
+    val product: ProductEntity,
+    val quantityText: String = "1"
+) {
+    val quantity: Double? get() = quantityText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 && it.isFinite() }
+}
+
+data class BulkDraft(
+    val date: LocalDate? = null,
+    val items: List<BulkDraftItem> = emptyList(),
+    val label: String = "",
+    val actualPaidText: String = "",
+    val excludeCostFromBudget: Boolean = false
+) {
+    val isValid: Boolean get() = items.size >= 2 && items.all { it.quantity != null } &&
+        (actualPaidText.isBlank() || runCatching { parseMoneyMicros(actualPaidText) != null }.getOrDefault(false))
+}
+
 /**
  * Allocates one checkout total across ordinary food-log rows while preserving the exact total.
  * Catalog estimates are used as weights when every item has one; otherwise quantities are used.
@@ -374,11 +401,13 @@ data class RecommendationItem(
     val name: String,
     val purchaseUnits: Int,
     val servings: Double,
-    val costMicros: Long,
+    val costMicros: Long?,
     val nutrition: NutritionSummary,
     val itemType: PlannerItemType = PlannerItemType.FOOD,
     val fixed: Boolean = false
 )
+
+enum class RecommendationMode { STRICT, UNRESTRICTED_MINIMUM }
 
 data class RecommendationPlan(
     val items: List<RecommendationItem>,
@@ -389,12 +418,17 @@ data class RecommendationPlan(
     val completeFit: Boolean,
     val deltas: List<ConstraintDelta>,
     val explanation: String,
-    val minimumTargetFallback: Boolean = false
-)
+    val unknownCostItems: Int = 0,
+    val mode: RecommendationMode = RecommendationMode.STRICT,
+    val unmetMinimums: List<ConstraintDelta> = emptyList()
+) {
+    val minimumTargetFallback: Boolean get() = mode == RecommendationMode.UNRESTRICTED_MINIMUM
+    val spendingComplete: Boolean get() = unknownCostItems == 0
+}
 
 data class RecommendationResult(
     val plans: List<RecommendationPlan>,
-    val excludedUnpricedProducts: Int,
+    val unpricedProducts: Int,
     val spendingIncomplete: Boolean,
     val message: String? = null,
     val excludedFromPlanningProducts: Int = 0,
