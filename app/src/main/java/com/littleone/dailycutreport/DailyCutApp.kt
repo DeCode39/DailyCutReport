@@ -328,8 +328,8 @@ internal fun FoodsScreen(
             }
             item {
                 ProductSearchField(state.query, viewModel::setQuery)
-                OutlinedButton(onClick = viewModel::createMeal, modifier = Modifier.fillMaxWidth()) {
-                    Text("Add several items as a meal")
+                OutlinedButton(onClick = viewModel::createBulkPurchase, modifier = Modifier.fillMaxWidth()) {
+                    Text("Bulk log a purchase")
                 }
                 TextButton(onClick = { showManualTools = !showManualTools }) {
                     Text(if (showManualTools) "Hide manual options" else "Manual options")
@@ -390,11 +390,11 @@ internal fun FoodWorkflowDialogs(
             onDismiss = viewModel::cancelDialogs,
             onSave = viewModel::saveLogEdit
         )
-        is FoodWorkflowState.BuildMeal -> MealBuilderDialog(
+        is FoodWorkflowState.BuildBulkPurchase -> BulkPurchaseDialog(
             products = workflow.products,
             currencyCode = state.goals.currencyCode,
             onDismiss = viewModel::cancelDialogs,
-            onConfirm = viewModel::confirmMeal
+            onConfirm = viewModel::confirmBulkPurchase
         )
     }
 }
@@ -406,7 +406,7 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.Bold)
-                log.mealName?.let { Text("Meal · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
+                log.mealName?.let { Text("Bulk log · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
                 Text("${log.calories.roundToInt()} kcal · ${log.proteinG.roundToInt()} g protein", style = MaterialTheme.typography.bodyMedium)
                 Text("${log.sodiumMg.roundToInt()} mg sodium · ${log.carbsG.roundToInt()} g carbs", style = MaterialTheme.typography.bodySmall)
                 Text(
@@ -429,33 +429,42 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
 }
 
 @Composable
-private fun MealBuilderDialog(
+private fun BulkPurchaseDialog(
     products: List<ProductWithExtras>,
     currencyCode: String,
     onDismiss: () -> Unit,
-    onConfirm: (String, List<MealEntryInput>, Long?, Boolean) -> Unit
+    onConfirm: (String, List<BulkLogEntryInput>, Long?, Boolean) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
+    var label by remember { mutableStateOf("") }
     var quantities by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var actualPaid by remember { mutableStateOf("") }
     var excludeCostFromBudget by remember { mutableStateOf(false) }
     val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
     val entries = products.mapNotNull { product ->
         quantities[product.product.productId]?.numberOrNull()?.takeIf { it > 0.0 }?.let {
-            MealEntryInput(product, it)
+            BulkLogEntryInput(product, it)
         }
     }
-    val valid = name.isNotBlank() && entries.size >= 2 && (actualPaid.isBlank() || parsedPaid != null)
+    val valid = entries.size >= 2 && (actualPaid.isBlank() || parsedPaid != null)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add one-time meal") },
+        title = { Text("Bulk log a purchase") },
         text = {
             Column(
                 Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(name, { name = it }, label = { Text("Meal name") }, modifier = Modifier.fillMaxWidth())
-                Text("Choose at least two products. Each remains an editable nutrition entry.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    label,
+                    { label = it },
+                    label = { Text("Store or group label (optional)") },
+                    placeholder = { Text("e.g. 7-Eleven") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Choose at least two products and enter the final checkout price once. Each product is still logged as its own nutrition entry.",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 products.forEach { product ->
                     val id = product.product.productId
                     val selected = id in quantities
@@ -477,14 +486,17 @@ private fun MealBuilderDialog(
                     }
                 }
                 DecimalField("Total actually paid ($currencyCode, optional)", actualPaid) { actualPaid = it }
-                Text("A meal total is divided across its item entries for exact budget accounting.", style = MaterialTheme.typography.bodySmall)
-                ToggleRow("Ignore this meal price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
+                Text(
+                    "The exact total is allocated internally using catalog estimates (or quantities when estimates are missing). You do not need to calculate item discounts.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                ToggleRow("Log the price but ignore it in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
             }
         },
         confirmButton = {
             Button(enabled = valid, onClick = {
-                onConfirm(name.trim(), entries, parsedPaid, excludeCostFromBudget)
-            }) { Text("Add meal") }
+                onConfirm(label.trim(), entries, parsedPaid, excludeCostFromBudget)
+            }) { Text("Log items") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
@@ -501,6 +513,17 @@ private fun RecommendationDialog(result: RecommendationResult, currencyCode: Str
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 result.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+                if (result.blockingViolations.isNotEmpty()) {
+                    Text("Values preventing a complete plan", fontWeight = FontWeight.Bold)
+                    result.blockingViolations.forEach { violation ->
+                        Text(
+                            "${violation.label}: ${constraintValue(violation, currencyCode)} " +
+                                "(target ${constraintTarget(violation, currencyCode)}, ${"%+.1f".format(violation.percentDifference)}%)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
                 if (result.excludedUnpricedProducts > 0) Text(
                     "${result.excludedUnpricedProducts} unpriced product(s) were excluded.",
                     style = MaterialTheme.typography.bodySmall
@@ -516,7 +539,10 @@ private fun RecommendationDialog(result: RecommendationResult, currencyCode: Str
                 result.plans.forEachIndexed { index, plan ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Option ${index + 1}", fontWeight = FontWeight.Bold)
+                            Text(
+                                if (plan.minimumTargetFallback) "Best minimum-target option" else "Option ${index + 1}",
+                                fontWeight = FontWeight.Bold
+                            )
                             plan.items.forEach { item ->
                                 Text("${item.purchaseUnits} × ${item.name} · ${item.servings.toDisplay()} servings" +
                                     if (item.fixed) " · fixed" else "")
@@ -541,6 +567,20 @@ private fun RecommendationDialog(result: RecommendationResult, currencyCode: Str
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
+}
+
+private fun constraintValue(delta: ConstraintDelta, currencyCode: String): String = when (delta.label) {
+    "Budget" -> formatMoney((delta.actual * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
+    "Calories" -> "${delta.actual.roundToInt()} kcal"
+    "Sodium" -> "${delta.actual.roundToInt()} mg"
+    else -> "${delta.actual.toDisplay()} g"
+}
+
+private fun constraintTarget(delta: ConstraintDelta, currencyCode: String): String = when (delta.label) {
+    "Budget" -> formatMoney((delta.target * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
+    "Calories" -> "${delta.target.roundToInt()} kcal"
+    "Sodium" -> "${delta.target.roundToInt()} mg"
+    else -> "${delta.target.toDisplay()} g"
 }
 
 @Composable

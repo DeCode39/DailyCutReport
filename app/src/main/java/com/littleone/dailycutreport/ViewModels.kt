@@ -98,7 +98,7 @@ sealed interface FoodWorkflowState {
         val ocrDraft: OcrNutritionDraft? = null
     ) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
-    data class BuildMeal(val products: List<ProductWithExtras>) : FoodWorkflowState
+    data class BuildBulkPurchase(val products: List<ProductWithExtras>) : FoodWorkflowState
 }
 
 sealed interface FoodUiEvent {
@@ -164,30 +164,30 @@ class FoodsViewModel(
         workflow.value = FoodWorkflowState.EditProduct("", null, addAfterSave = true)
     }
 
-    fun createMeal() {
+    fun createBulkPurchase() {
         viewModelScope.launch {
-            val products = repository.productsForMeal()
+            val products = repository.productsForBulkLogging()
             if (products.size < 2) {
-                _events.emit(FoodUiEvent.Message("Save at least two products before creating a meal."))
-            } else workflow.value = FoodWorkflowState.BuildMeal(products)
+                _events.emit(FoodUiEvent.Message("Save at least two products before bulk logging."))
+            } else workflow.value = FoodWorkflowState.BuildBulkPurchase(products)
         }
     }
 
-    fun confirmMeal(
-        name: String,
-        entries: List<MealEntryInput>,
+    fun confirmBulkPurchase(
+        label: String,
+        entries: List<BulkLogEntryInput>,
         actualPaidTotalMicros: Long?,
         excludeCostFromBudget: Boolean
     ) {
         val date = uiState.value.date
         viewModelScope.launch {
-            runCatching { repository.addMeal(date, name, entries, actualPaidTotalMicros, excludeCostFromBudget) }
+            runCatching { repository.addBulkPurchase(date, label, entries, actualPaidTotalMicros, excludeCostFromBudget) }
                 .onSuccess { result ->
                     workflow.value = FoodWorkflowState.Idle
                     afterFoodChange(result)
-                    _events.emit(FoodUiEvent.Message("Added ${entries.size} items as $name."))
+                    _events.emit(FoodUiEvent.Message("Bulk logged ${entries.size} items with one checkout total."))
                 }
-                .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not add meal.")) }
+                .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not bulk log items.")) }
         }
     }
 

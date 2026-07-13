@@ -1,5 +1,7 @@
 package com.littleone.dailycutreport
 
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.LocalDate
 
 data class HealthSummary(
@@ -276,19 +278,51 @@ data class ProductWithExtras(
     val extras: List<ProductExtraNutrientEntity> = emptyList()
 )
 
-data class MealEntryInput(
+data class BulkLogEntryInput(
     val product: ProductWithExtras,
     val quantity: Double
 )
 
-fun allocateMealPaidTotal(totalMicros: Long?, itemCount: Int): List<Long?> {
-    require(itemCount >= 0)
+/**
+ * Allocates one checkout total across ordinary food-log rows while preserving the exact total.
+ * Catalog estimates are used as weights when every item has one; otherwise quantities are used.
+ * The allocation is internal bookkeeping—the user only enters the checkout total once.
+ */
+fun allocateBulkPaidTotal(totalMicros: Long?, entries: List<BulkLogEntryInput>): List<Long?> {
     require(totalMicros == null || totalMicros >= 0L)
-    if (itemCount == 0) return emptyList()
-    if (totalMicros == null) return List(itemCount) { null }
-    val base = totalMicros / itemCount
-    val remainder = totalMicros % itemCount
-    return List(itemCount) { index -> base + if (index < remainder) 1L else 0L }
+    if (entries.isEmpty()) return emptyList()
+    if (totalMicros == null) return List(entries.size) { null }
+    if (totalMicros == 0L) return List(entries.size) { 0L }
+
+    val catalogWeights = entries.map { entry ->
+        val product = entry.product.product
+        product.purchasePriceMicros?.takeIf { it >= 0L }
+            ?.takeIf { product.purchaseUnitServings > 0.0 }
+            ?.let { it.toDouble() * entry.quantity / product.purchaseUnitServings }
+            ?.takeIf { it.isFinite() && it >= 0.0 }
+    }
+    val weights = if (catalogWeights.all { it != null } && catalogWeights.sumOf { it ?: 0.0 } > 0.0) {
+        catalogWeights.map { requireNotNull(it) }
+    } else {
+        entries.map { it.quantity.takeIf(Double::isFinite)?.coerceAtLeast(0.0) ?: 0.0 }
+    }
+    val effectiveWeights = if (weights.any { it > 0.0 }) weights else List(entries.size) { 1.0 }
+    val decimalWeights = effectiveWeights.map(BigDecimal::valueOf)
+    val totalWeight = decimalWeights.fold(BigDecimal.ZERO, BigDecimal::add)
+    val total = BigDecimal.valueOf(totalMicros)
+    val raw = decimalWeights.map { total.multiply(it).divide(totalWeight, 24, RoundingMode.DOWN) }
+    val allocated = raw.map { it.setScale(0, RoundingMode.DOWN).longValueExact() }.toMutableList()
+    var remainder = totalMicros - allocated.sum()
+    val order = raw.indices.sortedWith(
+        compareByDescending<Int> { raw[it].subtract(BigDecimal.valueOf(allocated[it])) }.thenBy { it }
+    )
+    if (remainder > 0L) {
+        val completeRounds = remainder / order.size
+        if (completeRounds > 0L) allocated.indices.forEach { allocated[it] += completeRounds }
+        remainder %= order.size
+        repeat(remainder.toInt()) { allocated[order[it]]++ }
+    }
+    return allocated
 }
 
 data class FoodQuantityEdit(
@@ -354,7 +388,8 @@ data class RecommendationPlan(
     val withinBudget: Boolean,
     val completeFit: Boolean,
     val deltas: List<ConstraintDelta>,
-    val explanation: String
+    val explanation: String,
+    val minimumTargetFallback: Boolean = false
 )
 
 data class RecommendationResult(
@@ -362,7 +397,8 @@ data class RecommendationResult(
     val excludedUnpricedProducts: Int,
     val spendingIncomplete: Boolean,
     val message: String? = null,
-    val excludedFromPlanningProducts: Int = 0
+    val excludedFromPlanningProducts: Int = 0,
+    val blockingViolations: List<ConstraintDelta> = emptyList()
 )
 
 sealed interface ScannerResult {

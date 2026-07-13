@@ -61,7 +61,7 @@ jobs:
         run: |
           gradle --no-daemon verifyOfflineReleaseApk
           mkdir -p release-assets
-          cp app/build/outputs/apk/release/app-release.apk release-assets/DailyCutReport-0.9.3-universal.apk
+          cp app/build/outputs/apk/release/app-release.apk release-assets/DailyCutReport-0.9.4-universal.apk
 
       - name: Build arm64 release
         env:
@@ -71,12 +71,12 @@ jobs:
           DCR_RELEASE_KEY_PASSWORD: ${{ secrets.DCR_RELEASE_KEY_PASSWORD }}
         run: |
           gradle --no-daemon clean verifyOfflineReleaseApk -PdcrAbi=arm64-v8a
-          cp app/build/outputs/apk/release/app-release.apk release-assets/DailyCutReport-0.9.3-arm64.apk
+          cp app/build/outputs/apk/release/app-release.apk release-assets/DailyCutReport-0.9.4-arm64.apk
 
       - name: Verify signatures, ABIs, and size gates
         run: |
-          universal=release-assets/DailyCutReport-0.9.3-universal.apk
-          arm64=release-assets/DailyCutReport-0.9.3-arm64.apk
+          universal=release-assets/DailyCutReport-0.9.4-universal.apk
+          arm64=release-assets/DailyCutReport-0.9.4-arm64.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$universal"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$arm64"
           test "$(stat -c%s "$universal")" -le $((80 * 1024 * 1024))
@@ -87,7 +87,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DailyCutReport-0.9.3-signed
+          name: DailyCutReport-0.9.4-signed
           path: release-assets/*
           if-no-files-found: error
 

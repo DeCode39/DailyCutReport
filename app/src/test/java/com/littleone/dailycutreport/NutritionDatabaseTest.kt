@@ -120,22 +120,22 @@ class NutritionDatabaseTest {
         assertEquals(true, log.excludeCostFromBudget)
     }
 
-    @Test fun mealLoggingIsAtomicAndUsesOneExactGroupPrice() = runBlocking {
+    @Test fun bulkLoggingIsAtomicAndUsesOneExactCheckoutPrice() = runBlocking {
         val dao = database.nutritionDao()
         val first = ProductWithExtras(ProductEntity("first", name = "Rice", calories = 200.0))
         val second = ProductWithExtras(ProductEntity("second", name = "Chicken", calories = 300.0))
 
-        val mutation = dao.addMealToDate(
-            "2026-01-02", "meal-id", "Lunch",
-            listOf(MealEntryInput(first, 1.0), MealEntryInput(second, 2.0)),
+        val mutation = dao.addBulkPurchaseToDate(
+            "2026-01-02", "bulk-id", "7-Eleven",
+            listOf(BulkLogEntryInput(first, 1.0), BulkLogEntryInput(second, 2.0)),
             15_000_001L, false
         )
 
         val logs = dao.foodLogsForDate("2026-01-02")
         assertEquals(2, mutation.after.entries)
         assertEquals(800.0, mutation.after.calories, 0.0)
-        assertEquals(setOf("meal-id"), logs.mapNotNull { it.mealId }.toSet())
-        assertEquals(setOf("Lunch"), logs.mapNotNull { it.mealName }.toSet())
+        assertEquals(setOf("bulk-id"), logs.mapNotNull { it.mealId }.toSet())
+        assertEquals(setOf("7-Eleven"), logs.mapNotNull { it.mealName }.toSet())
         assertEquals(15_000_001L, dao.spendingForDate("2026-01-02").knownTotalMicros)
     }
 

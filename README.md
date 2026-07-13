@@ -1,4 +1,4 @@
-# Daily Cut Report 0.9.3
+# Daily Cut Report 0.9.4
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -10,10 +10,10 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Scan access from Today and Foods, with the daily food log shown on Today.
 - Custom calorie or expected-burn/deficit goals, editable macro targets, one ISO currency, and a daily food budget.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
-- A deterministic offline remaining-day planner that ranks three read-only purchase-unit suggestions against nutrition and budget tolerances.
+- A deterministic offline remaining-day planner that ranks up to three complete purchase-unit suggestions. When no complete fit exists, it names the blocking values and returns one best option for remaining protein and fiber minimums.
 - Per-product planning controls: exclude an item, classify it as solid food or drink, or require one fixed purchase unit in every plan; recommendations allow at most two drink units.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
-- One-time meals atomically add several products under one meal name, with an optional total paid amount or whole-meal budget exclusion; no reusable templates are created.
+- Bulk checkout logging atomically adds several products with one final paid total, so multi-buy and whole-order discounts require no per-item arithmetic. The exact total is allocated internally using catalog estimates or quantity fallback and can be excluded from budget calculations as one group.
 - Stored goal and currency values are sanitized on startup, and zero targets render safely.
 - Serialized, retryable Health Connect nutrition upserts after local food-log add/edit/delete, controlled by a separate optional write permission and surfaced in Settings.
 - In-app macro threshold snackbars when a food-log change crosses a daily target.
@@ -79,7 +79,7 @@ Public 0.8.5 APKs used the old debug certificate, so Android cannot install a pr
 
 ## Data upgrades
 
-Database version 4 adds goals, pricing, purchase units, and logged costs. Version 3 previously migrated barcode-keyed products to stable internal IDs. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
+Database version 5 adds optional one-time bulk-log grouping fields. Version 4 added goals, pricing, purchase units, and logged costs; version 3 migrated barcode-keyed products to stable internal IDs. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
 
 The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Backup schema 2 includes goals and cost data while accepting schema 1. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered.
 

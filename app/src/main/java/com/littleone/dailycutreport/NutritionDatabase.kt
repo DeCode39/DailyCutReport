@@ -373,16 +373,16 @@ interface NutritionDao {
     }
 
     @Transaction
-    suspend fun addMealToDate(
+    suspend fun addBulkPurchaseToDate(
         date: String,
-        mealId: String,
-        mealName: String,
-        entries: List<MealEntryInput>,
+        groupId: String,
+        groupLabel: String,
+        entries: List<BulkLogEntryInput>,
         actualPaidTotalMicros: Long?,
         excludeCostFromBudget: Boolean
     ): DailyNutritionMutation {
         val before = totalsForDate(date)
-        val allocations = allocateMealPaidTotal(actualPaidTotalMicros, entries.size)
+        val allocations = allocateBulkPaidTotal(actualPaidTotalMicros, entries)
         entries.forEachIndexed { index, entry ->
             addProductToDate(
                 date = date,
@@ -391,8 +391,8 @@ interface NutritionDao {
                 extras = entry.product.extras,
                 actualPaidTotalMicros = allocations[index],
                 excludeCostFromBudget = excludeCostFromBudget,
-                mealId = mealId,
-                mealName = mealName
+                mealId = groupId,
+                mealName = groupLabel
             )
         }
         return DailyNutritionMutation(date, before, totalsForDate(date))

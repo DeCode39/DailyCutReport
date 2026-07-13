@@ -98,10 +98,27 @@ class ModelsTest {
         assertEquals(true, log.quantityEdit(3.0).excludeCostFromBudget)
     }
 
-    @Test fun mealPaidTotalAllocationIsExactIncludingFreeMeals() {
-        assertEquals(listOf(4L, 3L, 3L), allocateMealPaidTotal(10L, 3))
-        assertEquals(listOf(0L, 0L), allocateMealPaidTotal(0L, 2))
-        assertEquals(listOf(null, null), allocateMealPaidTotal(null, 2))
+    @Test fun bulkPaidTotalAllocationIsExactAndUsesCatalogWeights() {
+        val lowCost = BulkLogEntryInput(ProductWithExtras(ProductEntity(
+            productId = "low", name = "Low", purchasePriceMicros = 20L, purchaseUnitServings = 1.0
+        )), 1.0)
+        val highCost = BulkLogEntryInput(ProductWithExtras(ProductEntity(
+            productId = "high", name = "High", purchasePriceMicros = 80L, purchaseUnitServings = 1.0
+        )), 1.0)
+        val entries = listOf(lowCost, highCost)
+
+        assertEquals(listOf(2L, 8L), allocateBulkPaidTotal(10L, entries))
+        assertEquals(listOf(0L, 0L), allocateBulkPaidTotal(0L, entries))
+        assertEquals(listOf(null, null), allocateBulkPaidTotal(null, entries))
+    }
+
+    @Test fun bulkPaidTotalFallsBackToQuantityWeightsWhenAnyCatalogPriceIsMissing() {
+        val priced = BulkLogEntryInput(ProductWithExtras(ProductEntity(
+            productId = "priced", name = "Priced", purchasePriceMicros = 80L
+        )), 1.0)
+        val unpriced = BulkLogEntryInput(ProductWithExtras(ProductEntity(productId = "unpriced", name = "Unpriced")), 3.0)
+
+        assertEquals(listOf(3L, 7L), allocateBulkPaidTotal(10L, listOf(priced, unpriced)))
     }
 
     @Test fun missingBurnProducesUnavailableBalance() {

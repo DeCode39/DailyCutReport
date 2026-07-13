@@ -96,4 +96,40 @@ class OfflineMealPlannerTest {
         val elapsedMillis = (System.nanoTime() - started) / 1_000_000
         assertTrue("Planner took ${elapsedMillis}ms", elapsedMillis < 500L)
     }
+
+    @Test fun existingUpperLimitViolationIsNamedAndReturnsOneMinimumTargetFallback() {
+        val proteinAndFiber = ProductEntity(
+            "protein", name = "Protein bowl", calories = 200.0, proteinG = 40.0, fiberG = 5.0,
+            purchasePriceMicros = 20_000_000L
+        )
+        val consumed = NutritionSummary(sodiumMg = 2_500.0)
+
+        val result = planner.generate(
+            listOf(proteinAndFiber), consumed,
+            DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
+        )
+
+        assertEquals(listOf("Sodium"), result.blockingViolations.map { it.label })
+        assertEquals(1, result.plans.size)
+        assertTrue(result.plans.single().minimumTargetFallback)
+        assertTrue(result.plans.single().nutrition.proteinG >= goals.proteinG)
+        assertTrue(result.plans.single().nutrition.fiberG >= goals.fiberG)
+    }
+
+    @Test fun impossibleCompletePlanReturnsOnlyBestFallbackAndListsProjectedViolation() {
+        val neededProtein = ProductEntity(
+            "protein", name = "Protein", calories = 150.0, proteinG = 80.0, fiberG = 10.0,
+            purchasePriceMicros = 20_000_000L
+        )
+        val consumed = NutritionSummary(calories = 1_000.0)
+
+        val result = planner.generate(
+            listOf(neededProtein), consumed,
+            DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
+        )
+
+        assertEquals(1, result.plans.size)
+        assertTrue(result.plans.single().minimumTargetFallback)
+        assertTrue(result.blockingViolations.any { it.label == "Calories" })
+    }
 }

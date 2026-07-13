@@ -29,7 +29,7 @@ interface DailyCutRepository {
     suspend fun refreshHealth(date: LocalDate): Result<Unit>
     suspend fun lookupProduct(barcode: String): ProductWithExtras?
     suspend fun getProduct(productId: String): ProductWithExtras?
-    suspend fun productsForMeal(): List<ProductWithExtras>
+    suspend fun productsForBulkLogging(): List<ProductWithExtras>
     suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult
     suspend fun addProduct(
         date: LocalDate,
@@ -38,10 +38,10 @@ interface DailyCutRepository {
         actualPaidTotalMicros: Long? = null,
         excludeCostFromBudget: Boolean = false
     ): FoodMutationResult
-    suspend fun addMeal(
+    suspend fun addBulkPurchase(
         date: LocalDate,
-        name: String,
-        entries: List<MealEntryInput>,
+        label: String,
+        entries: List<BulkLogEntryInput>,
         actualPaidTotalMicros: Long? = null,
         excludeCostFromBudget: Boolean = false
     ): FoodMutationResult
@@ -173,7 +173,7 @@ class DefaultDailyCutRepository(
         dao.productById(productId)?.let { ProductWithExtras(it, dao.extrasForProduct(it.productId)) }
     }
 
-    override suspend fun productsForMeal(): List<ProductWithExtras> = withContext(Dispatchers.IO) {
+    override suspend fun productsForBulkLogging(): List<ProductWithExtras> = withContext(Dispatchers.IO) {
         dao.allProducts().map { product -> ProductWithExtras(product, dao.extrasForProduct(product.productId)) }
     }
 
@@ -219,21 +219,20 @@ class DefaultDailyCutRepository(
         completeFoodMutation(mutation)
     }
 
-    override suspend fun addMeal(
+    override suspend fun addBulkPurchase(
         date: LocalDate,
-        name: String,
-        entries: List<MealEntryInput>,
+        label: String,
+        entries: List<BulkLogEntryInput>,
         actualPaidTotalMicros: Long?,
         excludeCostFromBudget: Boolean
     ): FoodMutationResult = withContext(Dispatchers.IO) {
-        require(name.isNotBlank()) { "Meal name is required." }
-        require(entries.size >= 2) { "Choose at least two meal items." }
-        require(entries.all { it.quantity > 0.0 && it.quantity.isFinite() }) { "Meal quantities must be greater than zero." }
+        require(entries.size >= 2) { "Choose at least two items." }
+        require(entries.all { it.quantity > 0.0 && it.quantity.isFinite() }) { "Item quantities must be greater than zero." }
         require(actualPaidTotalMicros == null || actualPaidTotalMicros >= 0L) { "Actual paid cannot be negative." }
-        completeFoodMutation(dao.addMealToDate(
+        completeFoodMutation(dao.addBulkPurchaseToDate(
             date = date.toString(),
-            mealId = java.util.UUID.randomUUID().toString(),
-            mealName = name.trim(),
+            groupId = java.util.UUID.randomUUID().toString(),
+            groupLabel = label.trim().ifBlank { "Bulk purchase" },
             entries = entries,
             actualPaidTotalMicros = actualPaidTotalMicros,
             excludeCostFromBudget = excludeCostFromBudget
