@@ -27,6 +27,7 @@ class DailyCutApplication : Application() {
                         repository.initialize()
                         if (repository.healthConnectAvailable() && repository.healthCorePermissionsGranted()) {
                             repository.refreshHealth(LocalDate.now())
+                            repository.syncHealthHistory(force = false)
                         }
                         repository.retryPendingNutritionSync()
                     }

@@ -37,7 +37,10 @@ class EncryptedAppBackupManager(
                 reports = dao.allDailyReports(),
                 foodLogs = dao.allFoodLogs(),
                 dailyExtras = dao.allDailyExtras(),
-                goals = dao.userGoals() ?: UserGoalsEntity()
+                goals = dao.userGoals() ?: UserGoalsEntity(),
+                healthProfile = dao.healthProfile() ?: HealthProfileEntity(),
+                weights = dao.allWeightEntries(),
+                walkingSessions = dao.allWalkingSamples()
             )
         ).toByteArray(Charsets.UTF_8)
         val encrypted = BackupCrypto.encrypt(payload, password)
@@ -75,7 +78,11 @@ class EncryptedAppBackupManager(
                 notes = ""
             )
         })
-        dao.replaceUserData(payload.products, payload.productExtras, payload.reports, payload.foodLogs, payload.dailyExtras, payload.goals)
+        dao.replaceUserData(
+            payload.products, payload.productExtras, payload.reports, payload.foodLogs,
+            payload.dailyExtras, payload.goals, payload.healthProfile, payload.weights,
+            payload.walkingSessions
+        )
     }
 
     companion object {
@@ -90,7 +97,10 @@ data class BackupPayload(
     val reports: List<DailyReportEntity>,
     val foodLogs: List<DailyFoodLogEntity>,
     val dailyExtras: List<DailyExtraNutrientLogEntity>,
-    val goals: UserGoalsEntity = UserGoalsEntity()
+    val goals: UserGoalsEntity = UserGoalsEntity(),
+    val healthProfile: HealthProfileEntity = HealthProfileEntity(),
+    val weights: List<WeightEntryEntity> = emptyList(),
+    val walkingSessions: List<WalkingSessionSampleEntity> = emptyList()
 )
 
 object BackupCrypto {
@@ -160,7 +170,7 @@ object BackupCrypto {
 }
 
 object BackupJson {
-    private const val SCHEMA_VERSION = 2
+    private const val SCHEMA_VERSION = 3
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
@@ -171,6 +181,9 @@ object BackupJson {
         put("dailyReports", JSONArray().apply { payload.reports.forEach { put(it.toJson()) } })
         put("foodLogs", JSONArray().apply { payload.foodLogs.forEach { put(it.toJson()) } })
         put("dailyExtras", JSONArray().apply { payload.dailyExtras.forEach { put(it.toJson()) } })
+        put("healthProfile", payload.healthProfile.toJson())
+        put("weightEntries", JSONArray().apply { payload.weights.forEach { put(it.toJson()) } })
+        put("walkingSessions", JSONArray().apply { payload.walkingSessions.forEach { put(it.toJson()) } })
     }.toString()
 
     fun decode(json: String): BackupPayload {
@@ -184,7 +197,11 @@ object BackupJson {
         val dailyExtras = root.getJSONArray("dailyExtras").objects(::dailyExtraFromJson)
         validate(products, productExtras, reports, logs, dailyExtras)
         val goals = if (schema >= 2) goalsFromJson(root.getJSONObject("settings")) else UserGoalsEntity()
-        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals)
+        val healthProfile = if (schema >= 3) healthProfileFromJson(root.getJSONObject("healthProfile")) else HealthProfileEntity()
+        val weights = if (schema >= 3) root.getJSONArray("weightEntries").objects(::weightFromJson) else emptyList()
+        val walking = if (schema >= 3) root.getJSONArray("walkingSessions").objects(::walkingFromJson) else emptyList()
+        validateHealth(weights, walking)
+        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals, healthProfile, weights, walking)
     }
 
     private fun validate(
@@ -254,6 +271,21 @@ object BackupJson {
         put("saturatedFatG", saturatedFatG); put("currencyCode", currencyCode); put("dailyBudgetMicros", dailyBudgetMicros)
     }
 
+    private fun HealthProfileEntity.toJson() = JSONObject().apply {
+        put("weightUnit", weightUnit); putNullable("targetWeightKg", targetWeightKg)
+    }
+
+    private fun WeightEntryEntity.toJson() = JSONObject().apply {
+        put("entryId", entryId); put("date", date); put("recordedAtEpochMs", recordedAtEpochMs)
+        put("weightKg", weightKg); put("source", source)
+    }
+
+    private fun WalkingSessionSampleEntity.toJson() = JSONObject().apply {
+        put("sessionId", sessionId); put("date", date); put("startEpochMs", startEpochMs)
+        put("durationMinutes", durationMinutes); put("steps", steps); put("distanceKm", distanceKm)
+        put("activeCalories", activeCalories)
+    }
+
     private fun DailyExtraNutrientLogEntity.toJson() = JSONObject().apply {
         put("id", id); put("logId", logId); put("name", name); put("valuePerServing", valuePerServing); put("unit", unit)
     }
@@ -309,6 +341,30 @@ object BackupJson {
         sugarG = o.nonNegative("sugarG"), fiberG = o.nonNegative("fiberG"), saturatedFatG = o.nonNegative("saturatedFatG"),
         currencyCode = o.requiredText("currencyCode"), dailyBudgetMicros = o.getLong("dailyBudgetMicros").also { require(it >= 0L) }
     ).also { it.toDomain().requireValid() }
+
+    private fun healthProfileFromJson(o: JSONObject) = HealthProfileEntity(
+        weightUnit = o.getString("weightUnit").also { require(it in WeightUnit.entries.map(WeightUnit::name)) },
+        targetWeightKg = o.nullableDouble("targetWeightKg")?.also { require(it > 0.0) }
+    )
+
+    private fun weightFromJson(o: JSONObject) = WeightEntryEntity(
+        entryId = o.requiredText("entryId"), date = o.requiredText("date"),
+        recordedAtEpochMs = o.getLong("recordedAtEpochMs"), weightKg = o.positive("weightKg"),
+        source = o.getString("source").also { require(it in WeightSource.entries.map(WeightSource::name)) }
+    )
+
+    private fun walkingFromJson(o: JSONObject) = WalkingSessionSampleEntity(
+        sessionId = o.requiredText("sessionId"), date = o.requiredText("date"), startEpochMs = o.getLong("startEpochMs"),
+        durationMinutes = o.positive("durationMinutes"), steps = o.getLong("steps").also { require(it >= 0L) },
+        distanceKm = o.nonNegative("distanceKm"), activeCalories = o.nonNegative("activeCalories")
+    )
+
+    private fun validateHealth(weights: List<WeightEntryEntity>, walking: List<WalkingSessionSampleEntity>) {
+        require(weights.map(WeightEntryEntity::entryId).toSet().size == weights.size) { "Duplicate weight entries in backup." }
+        require(walking.map(WalkingSessionSampleEntity::sessionId).toSet().size == walking.size) { "Duplicate walking sessions in backup." }
+        weights.forEach { LocalDate.parse(it.date) }
+        walking.forEach { LocalDate.parse(it.date) }
+    }
 
     private fun dailyExtraFromJson(o: JSONObject) = DailyExtraNutrientLogEntity(
         id = o.getLong("id"), logId = o.getLong("logId"), name = o.requiredText("name"),

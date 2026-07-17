@@ -94,14 +94,64 @@ class TodayViewModel(
 sealed interface FoodWorkflowState {
     data object Idle : FoodWorkflowState
     data class ConfirmQuantity(val product: ProductWithExtras) : FoodWorkflowState
-    data class EditProduct(
-        val barcode: String,
-        val product: ProductWithExtras?,
-        val saveTarget: ProductSaveTarget,
-        val ocrDraft: OcrNutritionDraft? = null
-    ) : FoodWorkflowState
+    data class EditProduct(val draft: ProductEditorDraft) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
 }
+
+data class ProductEditorDraft(
+    val existing: ProductWithExtras? = null,
+    val saveTarget: ProductSaveTarget = ProductSaveTarget.STANDALONE_LOG,
+    val barcode: String = "",
+    val name: String = "",
+    val brand: String = "",
+    val servingLabel: String = "1 serving",
+    val calories: String = "",
+    val protein: String = "",
+    val sodium: String = "",
+    val carbs: String = "",
+    val fat: String = "",
+    val sugar: String = "",
+    val fiber: String = "",
+    val saturatedFat: String = "",
+    val purchasePrice: String = "",
+    val purchaseServings: String = "1",
+    val includeInPlanner: Boolean = true,
+    val plannerItemType: PlannerItemType = PlannerItemType.FOOD,
+    val alwaysIncludeInPlanner: Boolean = false,
+    val extras: String = "",
+    val ocrDraft: OcrNutritionDraft? = null
+) {
+    companion object {
+        fun create(initialBarcode: String, existing: ProductWithExtras?, saveTarget: ProductSaveTarget): ProductEditorDraft {
+            val product = existing?.product
+            return ProductEditorDraft(
+                existing = existing,
+                saveTarget = saveTarget,
+                barcode = product?.barcode ?: initialBarcode,
+                name = product?.name.orEmpty(),
+                brand = product?.brand.orEmpty(),
+                servingLabel = product?.servingLabel ?: "1 serving",
+                calories = product?.calories.editableNumber(),
+                protein = product?.proteinG.editableNumber(),
+                sodium = product?.sodiumMg.editableNumber(),
+                carbs = product?.carbsG.editableNumber(),
+                fat = product?.fatG.editableNumber(),
+                sugar = product?.sugarG.editableNumber(),
+                fiber = product?.fiberG.editableNumber(),
+                saturatedFat = product?.saturatedFatG.editableNumber(),
+                purchasePrice = product?.purchasePriceMicros?.let { it / 1_000_000.0 }?.editableNumber().orEmpty(),
+                purchaseServings = product?.purchaseUnitServings?.editableNumber().ifNullOrBlank("1"),
+                includeInPlanner = product?.includeInPlanner ?: true,
+                plannerItemType = PlannerItemType.entries.firstOrNull { it.name == product?.plannerItemType } ?: PlannerItemType.FOOD,
+                alwaysIncludeInPlanner = product?.alwaysIncludeInPlanner ?: false,
+                extras = existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()
+            )
+        }
+    }
+}
+
+private fun Double?.editableNumber(): String = this?.takeUnless { it == 0.0 }?.let(::formatDecimal).orEmpty()
+private fun String?.ifNullOrBlank(fallback: String): String = if (isNullOrBlank()) fallback else this
 
 sealed interface FoodUiEvent {
     data class Message(val text: String, val undo: DeletedFoodLogSnapshot? = null) : FoodUiEvent
@@ -175,10 +225,10 @@ class FoodsViewModel(
         viewModelScope.launch {
             val saved = repository.lookupProduct(normalized)
             if (saved == null) {
-                workflow.value = FoodWorkflowState.EditProduct(
+                workflow.value = FoodWorkflowState.EditProduct(ProductEditorDraft.create(
                     normalized, null,
                     if (target == ScanTarget.BULK_CART) ProductSaveTarget.BULK_CART else ProductSaveTarget.STANDALONE_LOG
-                )
+                ))
             } else if (target == ScanTarget.BULK_CART) {
                 addProductToBulk(saved.product)
             } else workflow.value = FoodWorkflowState.ConfirmQuantity(saved)
@@ -192,10 +242,10 @@ class FoodsViewModel(
     }
 
     fun createProduct() {
-        workflow.value = FoodWorkflowState.EditProduct(
+        workflow.value = FoodWorkflowState.EditProduct(ProductEditorDraft.create(
             "", null,
             if (mode.value == FoodMode.BULK) ProductSaveTarget.BULK_CART else ProductSaveTarget.STANDALONE_LOG
-        )
+        ))
     }
 
     fun setMode(value: FoodMode) { mode.value = value }
@@ -260,7 +310,9 @@ class FoodsViewModel(
     fun editProduct(product: ProductEntity) {
         viewModelScope.launch {
             repository.getProduct(product.productId)?.let {
-                workflow.value = FoodWorkflowState.EditProduct(product.barcode.orEmpty(), it, ProductSaveTarget.CATALOG_ONLY)
+                workflow.value = FoodWorkflowState.EditProduct(
+                    ProductEditorDraft.create(product.barcode.orEmpty(), it, ProductSaveTarget.CATALOG_ONLY)
+                )
             }
         }
     }
@@ -286,7 +338,7 @@ class FoodsViewModel(
             runCatching {
                 repository.saveProduct(product, extras)
             }.onSuccess { result ->
-                when (editor.saveTarget) {
+                when (editor.draft.saveTarget) {
                     ProductSaveTarget.STANDALONE_LOG -> {
                         workflow.value = FoodWorkflowState.ConfirmQuantity(ProductWithExtras(product, extras))
                         _events.emit(FoodUiEvent.Message("Saved ${product.name}. Confirm quantity to add it."))
@@ -313,7 +365,11 @@ class FoodsViewModel(
 
     fun applyOcr(draft: OcrNutritionDraft) {
         val editor = workflow.value as? FoodWorkflowState.EditProduct ?: return
-        workflow.value = editor.copy(ocrDraft = draft)
+        workflow.value = FoodWorkflowState.EditProduct(editor.draft.mergeOcr(draft))
+    }
+
+    fun updateProductDraft(updated: ProductEditorDraft) {
+        if (workflow.value is FoodWorkflowState.EditProduct) workflow.value = FoodWorkflowState.EditProduct(updated)
     }
 
     fun saveLogEdit(edit: FoodQuantityEdit) {
@@ -354,6 +410,22 @@ class FoodsViewModel(
         thresholdNotifier.crossingMessage(result.date, result.before, result.after, latestTargets.value)
             ?.let { _events.emit(FoodUiEvent.Threshold(it)) }
     }
+}
+
+internal fun ProductEditorDraft.mergeOcr(ocr: OcrNutritionDraft): ProductEditorDraft {
+    fun accepted(field: OcrField, previous: String): String = ocr.values[field]?.let(::formatDecimal) ?: previous
+    return copy(
+        servingLabel = ocr.servingLabel?.takeIf(String::isNotBlank) ?: servingLabel,
+        calories = accepted(OcrField.CALORIES, calories),
+        protein = accepted(OcrField.PROTEIN, protein),
+        sodium = accepted(OcrField.SODIUM, sodium),
+        carbs = accepted(OcrField.CARBS, carbs),
+        fat = accepted(OcrField.FAT, fat),
+        sugar = accepted(OcrField.SUGAR, sugar),
+        fiber = accepted(OcrField.FIBER, fiber),
+        saturatedFat = accepted(OcrField.SATURATED_FAT, saturatedFat),
+        ocrDraft = ocr
+    )
 }
 
 data class OcrUiState(
@@ -452,7 +524,9 @@ data class SettingsUiState(
     val corePermissionsGranted: Boolean = false,
     val nutritionPermissionGranted: Boolean = false,
     val nutritionWritePermissionGranted: Boolean = false,
+    val weightPermissionGranted: Boolean = false,
     val nutritionSyncStatus: String? = null,
+    val healthHistoryStatus: String? = null,
     val goals: UserGoals = UserGoals(),
     val isRefreshingHealth: Boolean = false,
     val message: String? = null
@@ -477,7 +551,9 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
                 corePermissionsGranted = repository.healthCorePermissionsGranted(),
                 nutritionPermissionGranted = repository.healthNutritionPermissionGranted(),
                 nutritionWritePermissionGranted = repository.healthNutritionWritePermissionGranted(),
+                weightPermissionGranted = repository.healthWeightPermissionGranted(),
                 nutritionSyncStatus = repository.nutritionSyncStatus(),
+                healthHistoryStatus = repository.healthHistoryStatus(),
                 goals = _uiState.value.goals,
                 isRefreshingHealth = _uiState.value.isRefreshingHealth,
                 message = _uiState.value.message
@@ -529,6 +605,72 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
     fun clearMessage() { _uiState.value = _uiState.value.copy(message = null) }
 }
 
+data class HealthUiState(
+    val dashboard: HealthDashboard? = null,
+    val refreshing: Boolean = false,
+    val message: String? = null
+)
+
+class HealthViewModel(
+    private val repository: DailyCutRepository,
+    selectedDate: StateFlow<LocalDate>
+) : ViewModel() {
+    private val refreshing = MutableStateFlow(false)
+    private val message = MutableStateFlow<String?>(null)
+    val uiState: StateFlow<HealthUiState> = combine(
+        selectedDate.flatMapLatest(repository::observeHealthDashboard), refreshing, message
+    ) { dashboard, busy, note -> HealthUiState(dashboard, busy, note) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HealthUiState())
+
+    fun setWeightUnit(unit: WeightUnit) {
+        val profile = uiState.value.dashboard?.profile ?: return
+        viewModelScope.launch { repository.updateHealthProfile(profile.copy(weightUnit = unit)) }
+    }
+
+    fun setTargetWeight(displayValue: Double?) {
+        val profile = uiState.value.dashboard?.profile ?: return
+        val kilograms = displayValue?.let(profile.weightUnit::toKg)
+        viewModelScope.launch {
+            runCatching { repository.updateHealthProfile(profile.copy(targetWeightKg = kilograms)) }
+                .onFailure { message.value = it.message ?: "Could not save target weight." }
+        }
+    }
+
+    fun saveManualWeight(displayValue: Double) {
+        val dashboard = uiState.value.dashboard ?: return
+        viewModelScope.launch {
+            runCatching {
+                repository.upsertManualWeight(
+                    dashboard.selectedDate,
+                    dashboard.profile.weightUnit.toKg(displayValue)
+                )
+            }.onSuccess { message.value = "Weight saved." }
+                .onFailure { message.value = it.message ?: "Could not save weight." }
+        }
+    }
+
+    fun deleteManualWeight() {
+        val dashboard = uiState.value.dashboard ?: return
+        viewModelScope.launch {
+            repository.deleteManualWeight(dashboard.selectedDate)
+            message.value = "Manual weight removed."
+        }
+    }
+
+    fun refreshHistory() {
+        if (refreshing.value) return
+        viewModelScope.launch {
+            refreshing.value = true
+            repository.syncHealthHistory(force = true)
+                .onSuccess { message.value = "28-day Health Connect history refreshed." }
+                .onFailure { message.value = "History refresh failed: ${it.message ?: "unknown error"}" }
+            refreshing.value = false
+        }
+    }
+
+    fun clearMessage() { message.value = null }
+}
+
 class AppViewModelFactory(
     private val repository: DailyCutRepository,
     private val selectedDate: StateFlow<LocalDate>? = null,
@@ -540,6 +682,7 @@ class AppViewModelFactory(
         modelClass.isAssignableFrom(ReportDateViewModel::class.java) -> ReportDateViewModel() as T
         modelClass.isAssignableFrom(TodayViewModel::class.java) -> TodayViewModel(repository, requireNotNull(selectedDate)) as T
         modelClass.isAssignableFrom(FoodsViewModel::class.java) -> FoodsViewModel(repository, requireNotNull(selectedDate)) as T
+        modelClass.isAssignableFrom(HealthViewModel::class.java) -> HealthViewModel(repository, requireNotNull(selectedDate)) as T
         modelClass.isAssignableFrom(SettingsViewModel::class.java) -> SettingsViewModel(repository) as T
         modelClass.isAssignableFrom(OcrViewModel::class.java) -> OcrViewModel(requireNotNull(ocr), requireNotNull(preprocessor)) as T
         else -> error("Unknown ViewModel: ${modelClass.name}")

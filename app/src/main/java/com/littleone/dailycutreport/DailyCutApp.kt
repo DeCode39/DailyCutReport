@@ -185,10 +185,10 @@ internal fun TodayScreen(
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(state.report.verdict.label, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
                     Text(balanceLabel(state.report.energyBalance), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                    MetricRow("Burn", "${state.report.finalBurnCalories.roundToInt()} kcal")
-                    MetricRow("Food", "${state.report.finalFoodCalories.roundToInt()} kcal")
-                    MetricRow("Protein", "${state.report.finalProteinG.roundToInt()} g")
-                    MetricRow("Sodium", "${state.report.finalSodiumMg.roundToInt()} mg")
+                    MetricRow("Burn", "${formatDecimal(state.report.finalBurnCalories)} kcal")
+                    MetricRow("Food", "${formatDecimal(state.report.finalFoodCalories)} kcal")
+                    MetricRow("Protein", "${formatDecimal(state.report.finalProteinG)} g")
+                    MetricRow("Sodium", "${formatDecimal(state.report.finalSodiumMg)} mg")
                     Text(
                         if (state.report.finalBurnCalories > 0.0) {
                             "Health data updated ${Instant.ofEpochMilli(state.report.savedAtEpochMs).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd MMM, HH:mm"))}"
@@ -240,10 +240,10 @@ internal fun TodayScreen(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Activity", style = MaterialTheme.typography.titleLarge)
-                    MetricRow("Steps", state.report.health.steps.toString())
-                    MetricRow("Distance", "%.1f km".format(state.report.health.distanceKm))
-                    MetricRow("Active burn", "${state.report.health.activeCalories.roundToInt()} kcal")
-                    MetricRow("Total burn", "${state.report.health.totalCalories.roundToInt()} kcal")
+                    MetricRow("Steps", formatInteger(state.report.health.steps))
+                    MetricRow("Distance", "${formatDecimal(state.report.health.distanceKm)} km")
+                    MetricRow("Active burn", "${formatDecimal(state.report.health.activeCalories)} kcal")
+                    MetricRow("Total burn", "${formatDecimal(state.report.health.totalCalories)} kcal")
                     Text(state.report.health.healthConnectStatus, style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -295,8 +295,8 @@ private fun TargetRow(label: String, value: Double, target: Double, unit: String
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label)
             Text(
-                if (hasTarget) "${safeValue.roundToInt()} / ${target.roundToInt()} $unit"
-                else "${safeValue.roundToInt()} $unit · no target",
+                if (hasTarget) "${formatDecimal(safeValue)} / ${formatDecimal(target)} $unit"
+                else "${formatDecimal(safeValue)} $unit · no target",
                 fontWeight = FontWeight.Bold
             )
         }
@@ -392,11 +392,9 @@ internal fun FoodWorkflowDialogs(
             onConfirm = viewModel::confirmAdd
         )
         is FoodWorkflowState.EditProduct -> ProductEditorDialog(
-            initialBarcode = workflow.barcode,
-            existing = workflow.product,
-            saveTarget = workflow.saveTarget,
-            ocrDraft = workflow.ocrDraft,
+            draft = workflow.draft,
             currencyCode = state.goals.currencyCode,
+            onDraftChange = viewModel::updateProductDraft,
             onScanNutrition = onOcr,
             onDismiss = viewModel::cancelDialogs,
             onSave = viewModel::saveProduct
@@ -418,8 +416,8 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.Bold)
                 log.mealName?.let { Text("Bulk log · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
-                Text("${log.calories.roundToInt()} kcal · ${log.proteinG.roundToInt()} g protein", style = MaterialTheme.typography.bodyMedium)
-                Text("${log.sodiumMg.roundToInt()} mg sodium · ${log.carbsG.roundToInt()} g carbs", style = MaterialTheme.typography.bodySmall)
+                Text("${formatDecimal(log.calories)} kcal · ${formatDecimal(log.proteinG)} g protein", style = MaterialTheme.typography.bodyMedium)
+                Text("${formatDecimal(log.sodiumMg)} mg sodium · ${formatDecimal(log.carbsG)} g carbs", style = MaterialTheme.typography.bodySmall)
                 Text(
                     (log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "Cost unknown") +
                         if (log.excludeCostFromBudget) " · ignored in budget" else "",
@@ -724,13 +722,231 @@ private fun CropSlider(label: String, value: Float, range: ClosedFloatingPointRa
 }
 
 @Composable
+internal fun HealthScreen(
+    selectedDate: LocalDate,
+    dateViewModel: ReportDateViewModel,
+    viewModel: HealthViewModel,
+    onMessage: (String) -> Unit
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val dashboard = state.dashboard
+    var weightInput by remember(selectedDate, dashboard?.profile?.weightUnit) { mutableStateOf("") }
+    var targetInput by remember(dashboard?.profile?.targetWeightKg, dashboard?.profile?.weightUnit) {
+        mutableStateOf(dashboard?.profile?.targetWeightKg?.let { dashboard.profile.weightUnit.fromKg(it) }?.let(::formatDecimal).orEmpty())
+    }
+    var explanationExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(state.message) {
+        state.message?.let { onMessage(it); viewModel.clearMessage() }
+    }
+    LazyColumn(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Health", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            DateHeader(selectedDate, dateViewModel)
+        }
+        if (dashboard == null) {
+            item { Text("Loading local health history…") }
+        } else {
+            item { DeficitSummaryCard(dashboard) }
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Weight", style = MaterialTheme.typography.titleLarge)
+                        val projection = dashboard.projection
+                        if (projection.currentWeightKg != null) {
+                            Text(
+                                "${formatDecimal(dashboard.profile.weightUnit.fromKg(projection.currentWeightKg))} ${dashboard.profile.weightUnit.label} · " +
+                                    "${projection.currentWeightSource?.name?.lowercase()?.replace('_', ' ')} · ${projection.currentWeightDate}"
+                            )
+                        } else Text("No weight recorded. Manual weights work without Health Connect permission.")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            WeightUnit.entries.forEach { unit ->
+                                RadioButton(
+                                    selected = dashboard.profile.weightUnit == unit,
+                                    onClick = { viewModel.setWeightUnit(unit) }
+                                )
+                                Text(unit.label, Modifier.padding(end = 12.dp))
+                            }
+                        }
+                        DecimalField("Weight for $selectedDate (${dashboard.profile.weightUnit.label})", weightInput) { weightInput = it }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                enabled = weightInput.numberOrNull()?.let { it > 0.0 } == true,
+                                onClick = { weightInput.numberOrNull()?.let(viewModel::saveManualWeight) }
+                            ) { Text("Save weight") }
+                            if (projection.currentWeightSource == WeightSource.MANUAL && projection.currentWeightDate == selectedDate) {
+                                TextButton(onClick = viewModel::deleteManualWeight) { Text("Remove manual") }
+                            }
+                        }
+                        DecimalField("Target weight (${dashboard.profile.weightUnit.label}, optional)", targetInput) { targetInput = it }
+                        OutlinedButton(
+                            enabled = targetInput.isBlank() || targetInput.numberOrNull()?.let { it > 0.0 } == true,
+                            onClick = { viewModel.setTargetWeight(targetInput.numberOrNull()) }
+                        ) { Text(if (targetInput.isBlank()) "Clear target" else "Save target") }
+                        Text("Manual entries take precedence over imported weight for the same date.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item { WeightProjectionCard(dashboard) }
+            item { WalkingGuidanceCard(dashboard) }
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("28-day trend", style = MaterialTheme.typography.titleLarge)
+                        HealthTrendChart(dashboard.trends)
+                        Text("Yellow: daily deficit. Green: smoothed weight samples.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Data quality: ${dashboard.projection.quality.name.lowercase()}", style = MaterialTheme.typography.titleMedium)
+                        Text("${dashboard.projection.validDeficitDays} valid deficit days · ${dashboard.projection.weightDays} weight days")
+                        dashboard.historyLastSynced?.let { Text("History synced $it", style = MaterialTheme.typography.bodySmall) }
+                        Button(
+                            onClick = viewModel::refreshHistory,
+                            enabled = !state.refreshing,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (state.refreshing) "Refreshing…" else "Refresh 28-day history") }
+                        TextButton(onClick = { explanationExpanded = !explanationExpanded }) {
+                            Text(if (explanationExpanded) "Hide calculation" else "How this is calculated")
+                        }
+                        if (explanationExpanded) Text(
+                            "Energy estimates blend your desired deficit with valid recent burn and nutrition days. " +
+                                "Weight trends use a robust slope and are limited to 35% of the estimate. Ranges widen for variable or conflicting data. " +
+                                "Walking guidance uses plausible personal sessions when available, otherwise body-weight-based estimates. These are planning estimates, not medical predictions.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun DeficitSummaryCard(dashboard: HealthDashboard) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Projected deficit", style = MaterialTheme.typography.titleLarge)
+            val deficit = dashboard.projectedDeficitCalories
+            Text(
+                when {
+                    deficit == null -> "Unavailable"
+                    deficit >= 0.0 -> "${formatDecimal(deficit)} kcal deficit"
+                    else -> "${formatDecimal(-deficit)} kcal surplus"
+                },
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            MetricRow("Projected final burn", dashboard.projectedBurnCalories?.let { "${formatDecimal(it)} kcal" } ?: "Unavailable")
+            MetricRow("Logged intake", if (dashboard.intakePresent) "${formatDecimal(dashboard.intakeCalories)} kcal" else "Unavailable")
+            MetricRow("Desired deficit", "${formatDecimal(dashboard.desiredDeficitCalories)} kcal")
+            MetricRow("Remaining gap", dashboard.remainingDeficitGap?.let { "${formatDecimal(it)} kcal" } ?: "Unavailable")
+        }
+    }
+}
+
+@Composable
+private fun WeightProjectionCard(dashboard: HealthDashboard) {
+    val projection = dashboard.projection
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Expected weight change", style = MaterialTheme.typography.titleLarge)
+            if (projection.weeklyChangeKg == null) {
+                Text("More valid burn, intake, or weight history is needed.")
+            } else {
+                fun displayKg(value: Double) = "${formatDecimal(dashboard.profile.weightUnit.fromKg(value))} ${dashboard.profile.weightUnit.label}"
+                fun change(value: Double) = when {
+                    value > 0.0 -> "${displayKg(value)} loss"
+                    value < 0.0 -> "${displayKg(-value)} gain"
+                    else -> "No expected change"
+                }
+                MetricRow("Per week", change(projection.weeklyChangeKg))
+                MetricRow("Weekly range", "${displayKg(projection.weeklyLowKg ?: 0.0)} to ${displayKg(projection.weeklyHighKg ?: 0.0)}")
+                MetricRow("Four weeks", change(projection.fourWeekChangeKg ?: 0.0))
+                MetricRow("Four-week range", "${displayKg(projection.fourWeekLowKg ?: 0.0)} to ${displayKg(projection.fourWeekHighKg ?: 0.0)}")
+                Text("Range values use positive numbers for loss and negative numbers for gain.", style = MaterialTheme.typography.bodySmall)
+                when {
+                    projection.targetReached -> Text("Target weight reached.", color = MaterialTheme.colorScheme.primary)
+                    projection.targetDateEarly != null -> Text(
+                        "Estimated target range: ${projection.targetDateEarly}" +
+                            (projection.targetDateLate?.let { " to $it" } ?: " or later")
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WalkingGuidanceCard(dashboard: HealthDashboard) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Close today’s gap", style = MaterialTheme.typography.titleLarge)
+            when {
+                dashboard.selectedDate != LocalDate.now() -> Text("Walking guidance is available only for today.")
+                dashboard.remainingDeficitGap == null -> Text("Burn and intake data are needed before estimating a walk.")
+                dashboard.remainingDeficitGap <= 0.0 -> Text("Your desired deficit is already met. No additional walk suggested.")
+                dashboard.walkingEstimate == null -> Text("Add a body weight or at least three complete walking sessions to estimate a walk.")
+                else -> with(dashboard.walkingEstimate) {
+                    Text("Walk ${formatDecimal(distanceKm)} km", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    MetricRow("Time", "${minutes.roundToInt()} min")
+                    MetricRow("Steps", formatInteger(steps))
+                    MetricRow("Estimated burn", "${formatDecimal(estimatedBurn)} kcal")
+                    if (capped && remainingGap > 0.0) Text("Capped at 90 minutes; about ${formatDecimal(remainingGap)} kcal would remain.")
+                    Text("Estimate source: ${source.name.lowercase().replace('_', ' ')}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HealthTrendChart(points: List<HealthTrendPoint>) {
+    val validDeficits = points.mapNotNull(HealthTrendPoint::deficitCalories)
+    val validWeights = points.mapNotNull(HealthTrendPoint::weightKg)
+    Canvas(Modifier.fillMaxWidth().height(180.dp)) {
+        if (points.size < 2) return@Canvas
+        val xStep = size.width / (points.size - 1).coerceAtLeast(1)
+        val maxDeficit = validDeficits.maxOfOrNull { abs(it) }?.coerceAtLeast(1.0) ?: 1.0
+        var previousDeficit: Pair<Float, Float>? = null
+        points.forEachIndexed { index, point ->
+            point.deficitCalories?.let { value ->
+                val current = index * xStep to (size.height * 0.5f - (value / maxDeficit * size.height * 0.42f).toFloat())
+                previousDeficit?.let { drawLine(Color.Yellow, androidx.compose.ui.geometry.Offset(it.first, it.second), androidx.compose.ui.geometry.Offset(current.first, current.second), 3.dp.toPx()) }
+                previousDeficit = current
+            } ?: run { previousDeficit = null }
+        }
+        if (validWeights.isNotEmpty()) {
+            val minWeight = validWeights.minOrNull() ?: 0.0
+            val range = ((validWeights.maxOrNull() ?: minWeight) - minWeight).coerceAtLeast(0.5)
+            var previousWeight: Pair<Float, Float>? = null
+            points.forEachIndexed { index, point ->
+                point.weightKg?.let { value ->
+                    val current = index * xStep to (size.height - ((value - minWeight) / range * size.height * 0.8 + size.height * 0.1).toFloat())
+                    previousWeight?.let { drawLine(Color(0xFF70D680), androidx.compose.ui.geometry.Offset(it.first, it.second), androidx.compose.ui.geometry.Offset(current.first, current.second), 3.dp.toPx()) }
+                    previousWeight = current
+                }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun SettingsScreen(
     selectedDate: LocalDate,
     viewModel: SettingsViewModel,
     onMessage: (String) -> Unit,
     onGrantCorePermissions: () -> Unit,
     onGrantNutritionPermission: () -> Unit,
-    onGrantNutritionWritePermission: () -> Unit
+    onGrantNutritionWritePermission: () -> Unit,
+    onGrantWeightPermission: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -780,6 +996,13 @@ internal fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (state.nutritionWritePermissionGranted) "Automatic nutrition sync enabled" else "Enable automatic nutrition sync") }
                     state.nutritionSyncStatus?.let { Text("Nutrition sync: $it", style = MaterialTheme.typography.bodySmall) }
+                    Text(if (state.weightPermissionGranted) "Optional weight permission granted" else "Optional weight permission not granted")
+                    OutlinedButton(
+                        onClick = onGrantWeightPermission,
+                        enabled = state.healthAvailable && !state.weightPermissionGranted,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.weightPermissionGranted) "Weight import enabled" else "Enable weight import") }
+                    state.healthHistoryStatus?.let { Text("28-day history: $it", style = MaterialTheme.typography.bodySmall) }
                 }
             }
         }
@@ -815,7 +1038,7 @@ internal fun SettingsScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 5 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 6 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -980,78 +1203,55 @@ private fun QuantityDialog(
 
 @Composable
 private fun ProductEditorDialog(
-    initialBarcode: String?,
-    existing: ProductWithExtras?,
-    saveTarget: ProductSaveTarget,
-    ocrDraft: OcrNutritionDraft?,
+    draft: ProductEditorDraft,
     currencyCode: String,
+    onDraftChange: (ProductEditorDraft) -> Unit,
     onScanNutrition: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (ProductEntity, List<ProductExtraNutrientEntity>, Double) -> Unit
 ) {
-    val product = existing?.product
-    var barcode by remember(initialBarcode, existing) { mutableStateOf(product?.barcode ?: initialBarcode.orEmpty()) }
-    var name by remember(existing) { mutableStateOf(product?.name.orEmpty()) }
-    var brand by remember(existing) { mutableStateOf(product?.brand.orEmpty()) }
-    var serving by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.servingLabel ?: product?.servingLabel ?: "1 serving") }
-    var calories by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.CALORIES)?.toInput() ?: product?.calories?.toInput().orEmpty()) }
-    var protein by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.PROTEIN)?.toInput() ?: product?.proteinG?.toInput().orEmpty()) }
-    var sodium by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.SODIUM)?.toInput() ?: product?.sodiumMg?.toInput().orEmpty()) }
-    var carbs by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.CARBS)?.toInput() ?: product?.carbsG?.toInput().orEmpty()) }
-    var fat by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.FAT)?.toInput() ?: product?.fatG?.toInput().orEmpty()) }
-    var sugar by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.SUGAR)?.toInput() ?: product?.sugarG?.toInput().orEmpty()) }
-    var fiber by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.FIBER)?.toInput() ?: product?.fiberG?.toInput().orEmpty()) }
-    var saturated by remember(existing, ocrDraft) { mutableStateOf(ocrDraft?.values?.get(OcrField.SATURATED_FAT)?.toInput() ?: product?.saturatedFatG?.toInput().orEmpty()) }
-    var purchasePrice by remember(existing) { mutableStateOf(product?.purchasePriceMicros?.toMoneyInput().orEmpty()) }
-    var purchaseServings by remember(existing) { mutableStateOf(product?.purchaseUnitServings?.toInput() ?: "1") }
-    var includeInPlanner by remember(existing) { mutableStateOf(product?.includeInPlanner ?: true) }
-    var plannerItemType by remember(existing) {
-        mutableStateOf(PlannerItemType.entries.firstOrNull { it.name == product?.plannerItemType } ?: PlannerItemType.FOOD)
-    }
-    var alwaysIncludeInPlanner by remember(existing) { mutableStateOf(product?.alwaysIncludeInPlanner ?: false) }
-    var extras by remember(existing) { mutableStateOf(existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()) }
-    val nutrientInputs = listOf(calories, protein, sodium, carbs, fat, sugar, fiber, saturated)
-    val parsedPrice = runCatching { parseMoneyMicros(purchasePrice) }.getOrNull()
-    val parsedPurchaseServings = purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
-    val valid = name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
-        (purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null
+    val product = draft.existing?.product
+    val nutrientInputs = listOf(draft.calories, draft.protein, draft.sodium, draft.carbs, draft.fat, draft.sugar, draft.fiber, draft.saturatedFat)
+    val parsedPrice = runCatching { parseMoneyMicros(draft.purchasePrice) }.getOrNull()
+    val parsedPurchaseServings = draft.purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
+    val valid = draft.name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
+        (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (product == null) "New product" else "Edit product") },
         text = {
             Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(barcode, { barcode = it }, label = { Text("Barcode (optional)") })
-                OutlinedTextField(name, { name = it }, label = { Text("Product name") })
-                OutlinedTextField(brand, { brand = it }, label = { Text("Brand") })
-                OutlinedTextField(serving, { serving = it }, label = { Text("Serving label") })
+                OutlinedTextField(draft.barcode, { onDraftChange(draft.copy(barcode = it)) }, label = { Text("Barcode (optional)") })
+                OutlinedTextField(draft.name, { onDraftChange(draft.copy(name = it)) }, label = { Text("Product name") })
+                OutlinedTextField(draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") })
+                OutlinedTextField(draft.servingLabel, { onDraftChange(draft.copy(servingLabel = it)) }, label = { Text("Serving label") })
                 OutlinedButton(onClick = onScanNutrition, modifier = Modifier.fillMaxWidth()) { Text("Scan nutrition label") }
-                ocrDraft?.let { Text("OCR values: ${it.basis.label}. Review before saving.", style = MaterialTheme.typography.bodySmall) }
-                DecimalField("Calories", calories) { calories = it }
-                DecimalField("Protein g", protein) { protein = it }
-                DecimalField("Sodium mg", sodium) { sodium = it }
-                DecimalField("Carbs g", carbs) { carbs = it }
-                DecimalField("Fat g", fat) { fat = it }
-                DecimalField("Sugar g", sugar) { sugar = it }
-                DecimalField("Fiber g", fiber) { fiber = it }
-                DecimalField("Saturated fat g", saturated) { saturated = it }
-                DecimalField("Purchase price ($currencyCode, optional)", purchasePrice) { purchasePrice = it }
-                DecimalField("Minimum purchase servings", purchaseServings) { purchaseServings = it }
-                ToggleRow("Include in daily planning", includeInPlanner) {
-                    includeInPlanner = it
-                    if (!it) alwaysIncludeInPlanner = false
+                draft.ocrDraft?.let { Text("OCR values: ${it.basis.label}. Review before saving.", style = MaterialTheme.typography.bodySmall) }
+                DecimalField("Calories", draft.calories) { onDraftChange(draft.copy(calories = it)) }
+                DecimalField("Protein g", draft.protein) { onDraftChange(draft.copy(protein = it)) }
+                DecimalField("Sodium mg", draft.sodium) { onDraftChange(draft.copy(sodium = it)) }
+                DecimalField("Carbs g", draft.carbs) { onDraftChange(draft.copy(carbs = it)) }
+                DecimalField("Fat g", draft.fat) { onDraftChange(draft.copy(fat = it)) }
+                DecimalField("Sugar g", draft.sugar) { onDraftChange(draft.copy(sugar = it)) }
+                DecimalField("Fiber g", draft.fiber) { onDraftChange(draft.copy(fiber = it)) }
+                DecimalField("Saturated fat g", draft.saturatedFat) { onDraftChange(draft.copy(saturatedFat = it)) }
+                DecimalField("Purchase price ($currencyCode, optional)", draft.purchasePrice) { onDraftChange(draft.copy(purchasePrice = it)) }
+                DecimalField("Minimum purchase servings", draft.purchaseServings) { onDraftChange(draft.copy(purchaseServings = it)) }
+                ToggleRow("Include in daily planning", draft.includeInPlanner) {
+                    onDraftChange(draft.copy(includeInPlanner = it, alwaysIncludeInPlanner = if (it) draft.alwaysIncludeInPlanner else false))
                 }
                 Text("Planner item type", style = MaterialTheme.typography.labelLarge)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = plannerItemType == PlannerItemType.FOOD, onClick = { plannerItemType = PlannerItemType.FOOD })
+                    RadioButton(selected = draft.plannerItemType == PlannerItemType.FOOD, onClick = { onDraftChange(draft.copy(plannerItemType = PlannerItemType.FOOD)) })
                     Text("Solid food", Modifier.weight(1f))
-                    RadioButton(selected = plannerItemType == PlannerItemType.DRINK, onClick = { plannerItemType = PlannerItemType.DRINK })
+                    RadioButton(selected = draft.plannerItemType == PlannerItemType.DRINK, onClick = { onDraftChange(draft.copy(plannerItemType = PlannerItemType.DRINK)) })
                     Text("Drink")
                 }
-                ToggleRow("Always include one purchase unit in plans", alwaysIncludeInPlanner, enabled = includeInPlanner) {
-                    alwaysIncludeInPlanner = it
+                ToggleRow("Always include one purchase unit in plans", draft.alwaysIncludeInPlanner, enabled = draft.includeInPlanner) {
+                    onDraftChange(draft.copy(alwaysIncludeInPlanner = it))
                 }
-                OutlinedTextField(extras, { extras = it }, label = { Text("Extra nutrients: Name=12 unit") })
+                OutlinedTextField(draft.extras, { onDraftChange(draft.copy(extras = it)) }, label = { Text("Extra nutrients: Name=12 unit") })
             }
         },
         confirmButton = {
@@ -1059,29 +1259,29 @@ private fun ProductEditorDialog(
                 val productId = product?.productId ?: UUID.randomUUID().toString()
                 val entity = ProductEntity(
                     productId = productId,
-                    barcode = barcode.trim().ifBlank { null },
-                    name = name.trim(),
-                    brand = brand.trim(),
-                    servingLabel = serving.ifBlank { "1 serving" },
-                    calories = calories.number(),
-                    proteinG = protein.number(),
-                    sodiumMg = sodium.number(),
-                    carbsG = carbs.number(),
-                    fatG = fat.number(),
-                    sugarG = sugar.number(),
-                    fiberG = fiber.number(),
-                    saturatedFatG = saturated.number(),
+                    barcode = draft.barcode.trim().ifBlank { null },
+                    name = draft.name.trim(),
+                    brand = draft.brand.trim(),
+                    servingLabel = draft.servingLabel.ifBlank { "1 serving" },
+                    calories = draft.calories.number(),
+                    proteinG = draft.protein.number(),
+                    sodiumMg = draft.sodium.number(),
+                    carbsG = draft.carbs.number(),
+                    fatG = draft.fat.number(),
+                    sugarG = draft.sugar.number(),
+                    fiberG = draft.fiber.number(),
+                    saturatedFatG = draft.saturatedFat.number(),
                     purchasePriceMicros = parsedPrice,
                     purchaseUnitServings = parsedPurchaseServings ?: 1.0,
-                    includeInPlanner = includeInPlanner,
-                    plannerItemType = plannerItemType.name,
-                    alwaysIncludeInPlanner = alwaysIncludeInPlanner,
+                    includeInPlanner = draft.includeInPlanner,
+                    plannerItemType = draft.plannerItemType.name,
+                    alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner,
                     notes = product?.notes.orEmpty(),
                     createdAt = product?.createdAt ?: System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
-                onSave(entity, parseExtras(productId, extras), 1.0)
-            }) { Text(if (saveTarget == ProductSaveTarget.CATALOG_ONLY) "Save" else "Save and continue") }
+                onSave(entity, parseExtras(productId, draft.extras), 1.0)
+            }) { Text(if (draft.saveTarget == ProductSaveTarget.CATALOG_ONLY) "Save" else "Save and continue") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
@@ -1142,7 +1342,7 @@ private fun String.numberOrNull(): Double? = trim().replace(',', '.').takeIf { i
 private fun String.number(): Double = numberOrNull() ?: 0.0
 private fun Double.toInput(): String = if (this == 0.0) "" else toString()
 private fun Double.toReviewInput(): String = if (this == 0.0) "0" else toString()
-internal fun Double.toDisplay(): String = if (this == toLong().toDouble()) toLong().toString() else toString()
+internal fun Double.toDisplay(): String = formatDecimal(this)
 private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
     EnergyBalance.Unavailable -> "Add Health Connect burn data"
     is EnergyBalance.Cut -> "−${balance.calories.roundToInt()} kcal"

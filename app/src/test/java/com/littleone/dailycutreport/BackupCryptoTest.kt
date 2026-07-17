@@ -45,6 +45,19 @@ class BackupCryptoTest {
         assertEquals("JPY", decoded.goals.currencyCode)
     }
 
+    @Test fun schemaThreeRoundTripIncludesHealthProfileWeightsAndWalking() {
+        val payload = BackupPayload(
+            emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
+            healthProfile = HealthProfile(WeightUnit.LB, 70.0).toEntity(),
+            weights = listOf(WeightEntry("manual-2026-07-17", java.time.LocalDate.of(2026, 7, 17), 1L, 75.0, WeightSource.MANUAL).toEntity()),
+            walkingSessions = listOf(WalkingSessionSample("walk", java.time.LocalDate.of(2026, 7, 17), 2L, 30.0, 3500, 2.5, 140.0).toEntity())
+        )
+        val decoded = BackupJson.decode(BackupJson.encode(payload))
+        assertEquals("LB", decoded.healthProfile.weightUnit)
+        assertEquals(75.0, decoded.weights.single().weightKg, 0.0)
+        assertEquals(3500L, decoded.walkingSessions.single().steps)
+    }
+
     @Test fun schemaOneBackupUsesSafeGoalAndPriceDefaults() {
         val decoded = BackupJson.decode("""{"schemaVersion":1,"products":[],"productExtras":[],"dailyReports":[],"foodLogs":[],"dailyExtras":[],"settings":{}}""")
         assertEquals(UserGoalsEntity(), decoded.goals)

@@ -11,13 +11,9 @@ import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import java.io.File
-import java.text.DecimalFormat
 import java.time.format.DateTimeFormatter
-import kotlin.math.roundToInt
 
 class ReportImageExporter(private val context: Context) {
-    private val whole = DecimalFormat("#,##0")
-    private val one = DecimalFormat("#,##0.0")
     private val dateFmt = DateTimeFormatter.ofPattern("dd MMM yyyy")
 
     fun saveReportToPictures(report: DailyReport, goals: UserGoals = UserGoals(), spending: DailySpending = DailySpending()): Uri? {
@@ -95,25 +91,25 @@ class ReportImageExporter(private val context: Context) {
         y += 84f
 
         text("Activity", 72f, y, 31f, accent, true); y += 48f
-        metric("Steps", whole.format(report.health.steps), 72f, y)
-        metric("Distance", "${one.format(report.health.distanceKm)} km", 570f, y); y += 110f
-        metric("Final burn", "${whole.format(report.finalBurnCalories)} kcal", 72f, y)
-        metric("Active burn", "${whole.format(report.health.activeCalories)} kcal", 570f, y); y += 110f
-        metric("Total burn", "${whole.format(report.health.totalCalories)} kcal", 72f, y)
+        metric("Steps", formatInteger(report.health.steps), 72f, y)
+        metric("Distance", "${formatDecimal(report.health.distanceKm)} km", 570f, y); y += 110f
+        metric("Final burn", "${formatDecimal(report.finalBurnCalories)} kcal", 72f, y)
+        metric("Active burn", "${formatDecimal(report.health.activeCalories)} kcal", 570f, y); y += 110f
+        metric("Total burn", "${formatDecimal(report.health.totalCalories)} kcal", 72f, y)
         metric("Exercises", "${report.health.exerciseSessions} · ${report.health.exerciseMinutes} min", 570f, y)
         y += 96f; rule(y); y += 56f
 
         val nutrition = report.nutrition
         text("Nutrition", 72f, y, 31f, accent, true); y += 48f
-        metric("Food", "${whole.format(report.finalFoodCalories)} kcal", 72f, y)
+        metric("Food", "${formatDecimal(report.finalFoodCalories)} kcal", 72f, y)
         metric("Entries", nutrition.entries.toString(), 570f, y); y += 110f
-        metric("Protein", "${whole.format(report.finalProteinG)} g", 72f, y)
-        metric("Sodium", "${whole.format(report.finalSodiumMg)} mg", 570f, y); y += 110f
-        metric("Carbs", "${whole.format(nutrition.carbsG)} g", 72f, y)
-        metric("Fat", "${whole.format(nutrition.fatG)} g", 570f, y); y += 110f
-        metric("Sugar", "${whole.format(nutrition.sugarG)} g", 72f, y)
-        metric("Fiber", "${whole.format(nutrition.fiberG)} g", 570f, y); y += 110f
-        metric("Saturated fat", "${whole.format(nutrition.saturatedFatG)} g", 72f, y)
+        metric("Protein", "${formatDecimal(report.finalProteinG)} g", 72f, y)
+        metric("Sodium", "${formatDecimal(report.finalSodiumMg)} mg", 570f, y); y += 110f
+        metric("Carbs", "${formatDecimal(nutrition.carbsG)} g", 72f, y)
+        metric("Fat", "${formatDecimal(nutrition.fatG)} g", 570f, y); y += 110f
+        metric("Sugar", "${formatDecimal(nutrition.sugarG)} g", 72f, y)
+        metric("Fiber", "${formatDecimal(nutrition.fiberG)} g", 570f, y); y += 110f
+        metric("Saturated fat", "${formatDecimal(nutrition.saturatedFatG)} g", 72f, y)
         metric("Source", report.nutritionSource, 570f, y); y += 96f
 
         rule(y); y += 54f
@@ -121,7 +117,7 @@ class ReportImageExporter(private val context: Context) {
         val calorieAllowance = goals.calorieAllowance(report.projectedBurnCalories)
         metric(
             if (goals.mode == GoalMode.DEFICIT) "Deficit allowance" else "Calorie target",
-            calorieAllowance?.let { "${whole.format(it)} kcal" } ?: "Unavailable", 72f, y
+            calorieAllowance?.let { "${formatDecimal(it)} kcal" } ?: "Unavailable", 72f, y
         )
         metric("Known spending", formatMoney(spending.knownTotalMicros, goals.currencyCode), 570f, y); y += 110f
         metric("Catalog estimate", formatMoney(spending.catalogEstimatedMicros, goals.currencyCode), 72f, y)
@@ -133,7 +129,7 @@ class ReportImageExporter(private val context: Context) {
             rule(y); y += 54f
             text("Extra nutrients", 72f, y, 31f, accent, true); y += 42f
             nutrition.extras.entries.take(12).forEach { (name, amount) ->
-                text("$name: ${one.format(amount.value)} ${amount.unit}", 72f, y, 26f)
+                text("$name: ${formatDecimal(amount.value)} ${amount.unit}", 72f, y, 26f)
                 y += 42f
             }
         }
@@ -171,11 +167,11 @@ class ReportImageExporter(private val context: Context) {
 
     private fun EnergyBalance.exportLabel(): String = when (this) {
         EnergyBalance.Unavailable -> "Burn data unavailable"
-        is EnergyBalance.Cut -> "−${whole.format(calories.roundToInt())} kcal"
-        is EnergyBalance.Surplus -> "+${whole.format(calories.roundToInt())} kcal"
+        is EnergyBalance.Cut -> "−${formatDecimal(calories)} kcal"
+        is EnergyBalance.Surplus -> "+${formatDecimal(calories)} kcal"
         is EnergyBalance.Maintenance -> when {
-            calories > 0 -> "−${whole.format(calories.roundToInt())} kcal"
-            calories < 0 -> "+${whole.format(-calories.roundToInt())} kcal"
+            calories > 0 -> "−${formatDecimal(calories)} kcal"
+            calories < 0 -> "+${formatDecimal(-calories)} kcal"
             else -> "0 kcal"
         }
     }

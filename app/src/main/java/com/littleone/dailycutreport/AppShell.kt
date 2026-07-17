@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 private enum class Destination(val route: String, val label: String, val icon: Int) {
     TODAY("today", "Today", R.drawable.ic_today),
     FOODS("foods", "Foods", R.drawable.ic_foods),
+    HEALTH("health", "Health", R.drawable.ic_health),
     SETTINGS("settings", "Settings", R.drawable.ic_settings)
 }
 
@@ -42,6 +43,7 @@ fun DailyCutApp(
     dateViewModel: ReportDateViewModel,
     todayViewModel: TodayViewModel,
     foodsViewModel: FoodsViewModel,
+    healthViewModel: HealthViewModel,
     settingsViewModel: SettingsViewModel,
     ocrViewModel: OcrViewModel,
     scannerLaunchRequests: State<Int>? = null
@@ -142,7 +144,16 @@ fun DailyCutApp(
                         onMessage = showMessage,
                         onGrantCorePermissions = { healthPermissionLauncher.launch(HealthConnectManager.CORE_PERMISSIONS) },
                         onGrantNutritionPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_PERMISSION)) },
-                        onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) }
+                        onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) },
+                        onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) }
+                    )
+                }
+                composable(Destination.HEALTH.route) {
+                    HealthScreen(
+                        selectedDate = selectedDate,
+                        dateViewModel = dateViewModel,
+                        viewModel = healthViewModel,
+                        onMessage = showMessage
                     )
                 }
                 composable("scanner") {

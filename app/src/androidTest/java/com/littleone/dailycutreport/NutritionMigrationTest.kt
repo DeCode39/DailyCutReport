@@ -75,5 +75,24 @@ class NutritionMigrationTest {
         migrated.close()
     }
 
+    @Test fun migrationFiveToSixAddsHealthTablesWithoutChangingExistingData() {
+        helper.createDatabase("migration-5-6", 5).apply {
+            execSQL("INSERT INTO daily_reports (date,steps,distanceKm,activeCalories,totalCalories,exerciseSessions,exerciseMinutes,nutritionCalories,nutritionProteinG,nutritionSodiumMg,nutritionRecords,healthConnectStatus,manualFoodCalories,manualProteinG,manualSodiumMg,manualBurnCalories,notes,savedAtEpochMs) VALUES ('2026-07-17',1234,1.2,100,2200,1,30,0,0,0,0,'loaded',NULL,NULL,NULL,NULL,'',1)")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate("migration-5-6", 6, true, NutritionDatabase.MIGRATION_5_6)
+        migrated.query("SELECT steps,totalCalories FROM daily_reports WHERE date='2026-07-17'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1234L, cursor.getLong(0))
+            assertEquals(2200.0, cursor.getDouble(1), 0.0)
+        }
+        migrated.query("SELECT weightUnit,targetWeightKg FROM health_profile WHERE id=1").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("KG", cursor.getString(0))
+            assertEquals(true, cursor.isNull(1))
+        }
+        migrated.close()
+    }
+
     private companion object { const val DATABASE_NAME = "migration-3-4" }
 }

@@ -5,7 +5,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.widget.RemoteViews
 import java.time.LocalDate
-import kotlin.math.roundToInt
 
 object DailyCutWidgetUpdater {
     suspend fun updateAll(context: Context) {
@@ -34,12 +33,12 @@ object DailyCutWidgetUpdater {
             ?: report?.nutritionCalories?.takeIf { report.nutritionRecords > 0 }
             ?: 0.0
         if (goals.mode == GoalMode.CALORIE) {
-            return "${food.roundToInt()} / ${goals.calories.roundToInt()} kcal"
+            return "${formatDecimal(food)} / ${formatDecimal(goals.calories)} kcal"
         }
         return when (val balance = calculateEnergyBalance(burn, food)) {
             EnergyBalance.Unavailable -> "Open app to load burn"
-            is EnergyBalance.Cut -> "−${balance.calories.roundToInt()} / ${goals.desiredDeficitCalories.roundToInt()} kcal"
-            is EnergyBalance.Surplus -> "+${balance.calories.roundToInt()} kcal surplus"
+            is EnergyBalance.Cut -> "−${formatDecimal(balance.calories)} / ${formatDecimal(goals.desiredDeficitCalories)} kcal"
+            is EnergyBalance.Surplus -> "+${formatDecimal(balance.calories)} kcal surplus"
             is EnergyBalance.Maintenance -> "Maintenance"
         }
     }

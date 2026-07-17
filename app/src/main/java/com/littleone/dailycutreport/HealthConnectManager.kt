@@ -10,6 +10,7 @@ import androidx.health.connect.client.records.MealType
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
+import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
@@ -42,7 +43,10 @@ interface HealthDataSource {
     suspend fun hasCorePermissions(): Boolean
     suspend fun hasNutritionPermission(): Boolean
     suspend fun hasNutritionWritePermission(): Boolean
+    suspend fun hasWeightPermission(): Boolean = false
     suspend fun readDailySummary(date: LocalDate): HealthSummary
+    suspend fun readHealthHistory(startDate: LocalDate, endDate: LocalDate): HealthHistoryImport =
+        HealthHistoryImport(emptyMap(), emptyList(), emptyList())
     suspend fun writeNutrition(
         date: LocalDate,
         logs: List<FoodLogSnapshot>,
@@ -50,6 +54,12 @@ interface HealthDataSource {
         clientRecordVersion: Long
     ): HealthWriteSummary
 }
+
+data class HealthHistoryImport(
+    val dailySummaries: Map<LocalDate, HealthSummary>,
+    val weights: List<WeightEntry>,
+    val walkingSessions: List<WalkingSessionSample>
+)
 
 class HealthConnectManager(private val context: Context) : HealthDataSource {
     companion object {
@@ -62,6 +72,7 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
         )
         val NUTRITION_PERMISSION: String = HealthPermission.getReadPermission(NutritionRecord::class)
         val NUTRITION_WRITE_PERMISSION: String = HealthPermission.getWritePermission(NutritionRecord::class)
+        val WEIGHT_PERMISSION: String = HealthPermission.getReadPermission(WeightRecord::class)
         val PERMISSIONS: Set<String> = CORE_PERMISSIONS + NUTRITION_PERMISSION
     }
 
@@ -88,6 +99,9 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
 
     override suspend fun hasNutritionWritePermission(): Boolean = client?.permissionController
         ?.getGrantedPermissions()?.contains(NUTRITION_WRITE_PERMISSION) == true
+
+    override suspend fun hasWeightPermission(): Boolean = client?.permissionController
+        ?.getGrantedPermissions()?.contains(WEIGHT_PERMISSION) == true
 
     override suspend fun readDailySummary(date: LocalDate): HealthSummary {
         val hc = client ?: return HealthSummary(healthConnectStatus = availabilityMessage())
@@ -137,6 +151,87 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
             nutritionRecords = nutritionRecords.size,
             healthConnectStatus = nutritionStatus
         )
+    }
+
+    override suspend fun readHealthHistory(startDate: LocalDate, endDate: LocalDate): HealthHistoryImport {
+        require(!endDate.isBefore(startDate)) { "History end date must not precede its start date." }
+        val hc = client ?: error(availabilityMessage())
+        val granted = hc.permissionController.getGrantedPermissions()
+        require(granted.containsAll(CORE_PERMISSIONS)) { "Health Connect activity permission not granted" }
+        val zone = ZoneId.systemDefault()
+        val range = TimeRangeFilter.between(
+            startDate.atStartOfDay(zone).toInstant(),
+            endDate.plusDays(1).atStartOfDay(zone).toInstant()
+        )
+        val sessions = readAllExerciseSessions(hc, range)
+        val daily = generateSequence(startDate) { current ->
+            current.plusDays(1).takeIf { !it.isAfter(endDate) }
+        }.associateWith { date ->
+            val dayStart = date.atStartOfDay(zone).toInstant()
+            val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant()
+            val aggregate = hc.aggregate(
+                AggregateRequest(
+                    metrics = setOf(
+                        StepsRecord.COUNT_TOTAL,
+                        DistanceRecord.DISTANCE_TOTAL,
+                        ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
+                        TotalCaloriesBurnedRecord.ENERGY_TOTAL
+                    ),
+                    timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
+                )
+            )
+            val daySessions = sessions.filter { it.startTime >= dayStart && it.startTime < dayEnd }
+            HealthSummary(
+                steps = aggregate[StepsRecord.COUNT_TOTAL] ?: 0L,
+                distanceKm = aggregate[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0,
+                activeCalories = aggregate[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0,
+                totalCalories = aggregate[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0,
+                exerciseSessions = daySessions.size,
+                exerciseMinutes = daySessions.sumOf {
+                    Duration.between(it.startTime, it.endTime).toMinutes().coerceAtLeast(0)
+                },
+                healthConnectStatus = "Activity history loaded from Health Connect"
+            )
+        }
+        val weights = if (WEIGHT_PERMISSION in granted) {
+            readAllWeights(hc, range).map { record ->
+                val offset = record.zoneOffset ?: zone.rules.getOffset(record.time)
+                WeightEntry(
+                    entryId = "health-connect-${record.metadata.id}",
+                    date = record.time.atOffset(offset).toLocalDate(),
+                    recordedAtEpochMs = record.time.toEpochMilli(),
+                    weightKg = record.weight.inKilograms,
+                    source = WeightSource.HEALTH_CONNECT
+                )
+            }
+        } else emptyList()
+        val walking = buildList {
+            sessions.filter { it.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_WALKING }.forEach { session ->
+                val durationMinutes = Duration.between(session.startTime, session.endTime).toMillis() / 60_000.0
+                if (durationMinutes <= 0.0) return@forEach
+                val aggregate = hc.aggregate(
+                    AggregateRequest(
+                        metrics = setOf(
+                            StepsRecord.COUNT_TOTAL,
+                            DistanceRecord.DISTANCE_TOTAL,
+                            ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
+                        ),
+                        timeRangeFilter = TimeRangeFilter.between(session.startTime, session.endTime)
+                    )
+                )
+                val offset = session.startZoneOffset ?: zone.rules.getOffset(session.startTime)
+                add(WalkingSessionSample(
+                    sessionId = "health-connect-${session.metadata.id}",
+                    date = session.startTime.atOffset(offset).toLocalDate(),
+                    startEpochMs = session.startTime.toEpochMilli(),
+                    durationMinutes = durationMinutes,
+                    steps = aggregate[StepsRecord.COUNT_TOTAL] ?: 0L,
+                    distanceKm = aggregate[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0,
+                    activeCalories = aggregate[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0
+                ))
+            }
+        }
+        return HealthHistoryImport(daily, weights, walking)
     }
 
     override suspend fun writeNutrition(
@@ -195,6 +290,28 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                     recordType = NutritionRecord::class,
                     timeRangeFilter = timeRange,
                     ascendingOrder = false,
+                    pageSize = 200,
+                    pageToken = pageToken
+                )
+            )
+            records += page.records
+            pageToken = page.pageToken
+        } while (pageToken != null)
+        return records
+    }
+
+    private suspend fun readAllWeights(
+        hc: HealthConnectClient,
+        timeRange: TimeRangeFilter
+    ): List<WeightRecord> {
+        val records = mutableListOf<WeightRecord>()
+        var pageToken: String? = null
+        do {
+            val page = hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = WeightRecord::class,
+                    timeRangeFilter = timeRange,
+                    ascendingOrder = true,
                     pageSize = 200,
                     pageToken = pageToken
                 )

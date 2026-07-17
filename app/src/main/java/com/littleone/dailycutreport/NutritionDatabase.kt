@@ -102,6 +102,33 @@ data class UserGoalsEntity(
     val dailyBudgetMicros: Long = 0L
 )
 
+@Entity(tableName = "health_profile")
+data class HealthProfileEntity(
+    @PrimaryKey val id: Int = 1,
+    val weightUnit: String = WeightUnit.KG.name,
+    val targetWeightKg: Double? = null
+)
+
+@Entity(tableName = "weight_entries", indices = [Index("date"), Index("recordedAtEpochMs")])
+data class WeightEntryEntity(
+    @PrimaryKey val entryId: String,
+    val date: String,
+    val recordedAtEpochMs: Long,
+    val weightKg: Double,
+    val source: String
+)
+
+@Entity(tableName = "walking_session_samples", indices = [Index("date"), Index("startEpochMs")])
+data class WalkingSessionSampleEntity(
+    @PrimaryKey val sessionId: String,
+    val date: String,
+    val startEpochMs: Long,
+    val durationMinutes: Double,
+    val steps: Long,
+    val distanceKm: Double,
+    val activeCalories: Double
+)
+
 @Entity(
     tableName = "daily_food_logs",
     indices = [Index("date"), Index("productId"), Index("barcode"), Index("mealId")]
@@ -172,6 +199,12 @@ data class DailySpendingTotals(
     val actualPaidEntries: Int = 0
 )
 
+data class DailyNutritionHistoryRow(
+    val date: String,
+    val calories: Double,
+    val entries: Int
+)
+
 data class ExtraNutrientTotal(val name: String, val unit: String, val value: Double)
 
 data class DeletedFoodLogEntity(
@@ -221,6 +254,23 @@ interface NutritionDao {
     @Query("SELECT * FROM user_goals WHERE id = 1") fun observeUserGoals(): Flow<UserGoalsEntity?>
     @Query("SELECT * FROM user_goals WHERE id = 1") suspend fun userGoals(): UserGoalsEntity?
     @Upsert suspend fun upsertUserGoals(goals: UserGoalsEntity)
+    @Query("SELECT * FROM health_profile WHERE id = 1") fun observeHealthProfile(): Flow<HealthProfileEntity?>
+    @Query("SELECT * FROM health_profile WHERE id = 1") suspend fun healthProfile(): HealthProfileEntity?
+    @Upsert suspend fun upsertHealthProfile(profile: HealthProfileEntity)
+    @Query("SELECT * FROM weight_entries WHERE date BETWEEN :startDate AND :endDate ORDER BY recordedAtEpochMs")
+    fun observeWeightEntries(startDate: String, endDate: String): Flow<List<WeightEntryEntity>>
+    @Query("SELECT * FROM weight_entries ORDER BY recordedAtEpochMs") suspend fun allWeightEntries(): List<WeightEntryEntity>
+    @Upsert suspend fun upsertWeightEntry(entry: WeightEntryEntity)
+    @Upsert suspend fun upsertWeightEntries(entries: List<WeightEntryEntity>)
+    @Query("DELETE FROM weight_entries WHERE entryId = :entryId") suspend fun deleteWeightEntry(entryId: String)
+    @Query("DELETE FROM weight_entries WHERE source = 'HEALTH_CONNECT' AND date BETWEEN :startDate AND :endDate")
+    suspend fun clearImportedWeights(startDate: String, endDate: String)
+    @Query("SELECT * FROM walking_session_samples WHERE date BETWEEN :startDate AND :endDate ORDER BY startEpochMs")
+    fun observeWalkingSamples(startDate: String, endDate: String): Flow<List<WalkingSessionSampleEntity>>
+    @Query("SELECT * FROM walking_session_samples ORDER BY startEpochMs") suspend fun allWalkingSamples(): List<WalkingSessionSampleEntity>
+    @Upsert suspend fun upsertWalkingSamples(samples: List<WalkingSessionSampleEntity>)
+    @Query("DELETE FROM walking_session_samples WHERE date BETWEEN :startDate AND :endDate")
+    suspend fun clearWalkingSamples(startDate: String, endDate: String)
     @Upsert suspend fun upsertProduct(product: ProductEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertProductIfMissing(product: ProductEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertExtraNutrients(nutrients: List<ProductExtraNutrientEntity>)
@@ -249,6 +299,13 @@ interface NutritionDao {
     @Query("SELECT * FROM daily_reports ORDER BY date") suspend fun allDailyReports(): List<DailyReportEntity>
     @Query("SELECT * FROM daily_food_logs ORDER BY id") suspend fun allFoodLogs(): List<DailyFoodLogEntity>
     @Query("SELECT * FROM daily_extra_nutrient_logs ORDER BY id") suspend fun allDailyExtras(): List<DailyExtraNutrientLogEntity>
+    @Query("SELECT * FROM daily_reports WHERE date BETWEEN :startDate AND :endDate ORDER BY date")
+    fun observeDailyReports(startDate: String, endDate: String): Flow<List<DailyReportEntity>>
+    @Query("""
+        SELECT date, COALESCE(SUM(caloriesPerServing * quantity), 0.0) AS calories, COUNT(*) AS entries
+        FROM daily_food_logs WHERE date BETWEEN :startDate AND :endDate GROUP BY date ORDER BY date
+    """)
+    fun observeNutritionHistory(startDate: String, endDate: String): Flow<List<DailyNutritionHistoryRow>>
 
     @Transaction
     suspend fun saveProductWithExtras(product: ProductEntity, extras: List<ProductExtraNutrientEntity>) {
@@ -494,7 +551,23 @@ interface NutritionDao {
     @Upsert suspend fun upsertDailyReport(report: DailyReportEntity)
     @Insert suspend fun insertDailyReports(reports: List<DailyReportEntity>)
 
+    @Transaction
+    suspend fun replaceImportedHealthHistory(
+        startDate: String,
+        endDate: String,
+        reports: List<DailyReportEntity>,
+        weights: List<WeightEntryEntity>,
+        walking: List<WalkingSessionSampleEntity>
+    ) {
+        reports.forEach { upsertDailyReport(it) }
+        clearImportedWeights(startDate, endDate)
+        if (weights.isNotEmpty()) upsertWeightEntries(weights)
+        clearWalkingSamples(startDate, endDate)
+        if (walking.isNotEmpty()) upsertWalkingSamples(walking)
+    }
+
     @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1") suspend fun metadata(key: String): String?
+    @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1") fun observeMetadata(key: String): Flow<String?>
     @Upsert suspend fun upsertMetadata(metadata: AppMetadataEntity)
     @Query("""
         UPDATE daily_reports
@@ -523,6 +596,9 @@ interface NutritionDao {
     @Query("DELETE FROM product_extra_nutrients") suspend fun clearProductExtras()
     @Query("DELETE FROM products") suspend fun clearProducts()
     @Query("DELETE FROM user_goals") suspend fun clearUserGoals()
+    @Query("DELETE FROM health_profile") suspend fun clearHealthProfile()
+    @Query("DELETE FROM weight_entries") suspend fun clearWeightEntries()
+    @Query("DELETE FROM walking_session_samples") suspend fun clearWalkingSamples()
 
     @Transaction
     suspend fun replaceUserData(
@@ -531,23 +607,31 @@ interface NutritionDao {
         reports: List<DailyReportEntity>,
         foodLogs: List<DailyFoodLogEntity>,
         dailyExtras: List<DailyExtraNutrientLogEntity>,
-        goals: UserGoalsEntity
+        goals: UserGoalsEntity,
+        healthProfile: HealthProfileEntity = HealthProfileEntity(),
+        weights: List<WeightEntryEntity> = emptyList(),
+        walking: List<WalkingSessionSampleEntity> = emptyList()
     ) {
         clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts(); clearUserGoals()
+        clearWeightEntries(); clearWalkingSamples(); clearHealthProfile()
         products.forEach { upsertProduct(it) }
         if (productExtras.isNotEmpty()) upsertExtraNutrients(productExtras)
         if (reports.isNotEmpty()) insertDailyReports(reports)
         if (foodLogs.isNotEmpty()) insertFoodLogs(foodLogs)
         if (dailyExtras.isNotEmpty()) insertDailyExtraLogs(dailyExtras)
         upsertUserGoals(goals)
+        upsertHealthProfile(healthProfile)
+        if (weights.isNotEmpty()) upsertWeightEntries(weights)
+        if (walking.isNotEmpty()) upsertWalkingSamples(walking)
     }
 }
 
 @Database(
     entities = [ProductEntity::class, ProductExtraNutrientEntity::class, DailyReportEntity::class,
         DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class,
-        UserGoalsEntity::class],
-    version = 5,
+        UserGoalsEntity::class, HealthProfileEntity::class, WeightEntryEntity::class,
+        WalkingSessionSampleEntity::class],
+    version = 6,
     exportSchema = true
 )
 abstract class NutritionDatabase : RoomDatabase() {
@@ -621,9 +705,22 @@ abstract class NutritionDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `health_profile` (`id` INTEGER NOT NULL, `weightUnit` TEXT NOT NULL, `targetWeightKg` REAL, PRIMARY KEY(`id`))""")
+                db.execSQL("INSERT OR IGNORE INTO `health_profile` (`id`,`weightUnit`,`targetWeightKg`) VALUES (1,'KG',NULL)")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `weight_entries` (`entryId` TEXT NOT NULL, `date` TEXT NOT NULL, `recordedAtEpochMs` INTEGER NOT NULL, `weightKg` REAL NOT NULL, `source` TEXT NOT NULL, PRIMARY KEY(`entryId`))""")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_weight_entries_date` ON `weight_entries` (`date`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_weight_entries_recordedAtEpochMs` ON `weight_entries` (`recordedAtEpochMs`)")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `walking_session_samples` (`sessionId` TEXT NOT NULL, `date` TEXT NOT NULL, `startEpochMs` INTEGER NOT NULL, `durationMinutes` REAL NOT NULL, `steps` INTEGER NOT NULL, `distanceKm` REAL NOT NULL, `activeCalories` REAL NOT NULL, PRIMARY KEY(`sessionId`))""")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_walking_session_samples_date` ON `walking_session_samples` (`date`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_walking_session_samples_startEpochMs` ON `walking_session_samples` (`startEpochMs`)")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { INSTANCE = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { INSTANCE = it }
         }
     }
 }

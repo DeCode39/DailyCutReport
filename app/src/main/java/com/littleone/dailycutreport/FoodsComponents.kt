@@ -175,8 +175,8 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                                 "${plan.unknownCostItems} suggested item(s) have unknown cost; budget compliance is not evaluated.",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            MetricRow("Projected calories", "${plan.nutrition.calories.roundToInt()} kcal")
-                            MetricRow("Projected protein", "${plan.nutrition.proteinG.roundToInt()} g")
+                            MetricRow("Projected calories", "${formatDecimal(plan.nutrition.calories)} kcal")
+                            MetricRow("Projected protein", "${formatDecimal(plan.nutrition.proteinG)} g")
                             Text(plan.explanation, style = MaterialTheme.typography.bodySmall)
                             (plan.unmetMinimums + plan.impacts.filterNot { it.withinTolerance })
                                 .distinctBy { it.label }
@@ -203,15 +203,15 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
 
 private fun constraintValue(label: String, value: Double, currencyCode: String): String = when (label) {
     "Budget" -> formatMoney((value * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${value.roundToInt()} kcal"
-    "Sodium" -> "${value.roundToInt()} mg"
+    "Calories" -> "${formatDecimal(value)} kcal"
+    "Sodium" -> "${formatDecimal(value)} mg"
     else -> "${value.toDisplay()} g"
 }
 
 private fun constraintTarget(impact: ConstraintImpact, currencyCode: String): String = when (impact.label) {
     "Budget" -> formatMoney((impact.target * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${impact.target.roundToInt()} kcal"
-    "Sodium" -> "${impact.target.roundToInt()} mg"
+    "Calories" -> "${formatDecimal(impact.target)} kcal"
+    "Sodium" -> "${formatDecimal(impact.target)} mg"
     else -> "${impact.target.toDisplay()} g"
 }
 

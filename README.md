@@ -1,12 +1,13 @@
-# Daily Cut Report 0.9.7
+# Daily Cut Report 0.10.0
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
 ## Features
 
-- Material 3 Jetpack Compose UI with Today, Foods, and Settings destinations.
+- Material 3 Jetpack Compose UI with Today, Foods, Health, and Settings destinations.
 - Shared historical date navigation with a calendar capped at today.
 - One process-level Health Connect refresh on app foreground, plus manual selected-date refresh from Settings; rotation does not refresh again.
+- A deficit-focused Health dashboard with optional Health Connect weight import, manual kg/lb weights, robust 28-day weight-change ranges, an optional target weight, and capped walking guidance derived from personal sessions or body weight.
 - Scan access from Today and Foods, with the daily food log shown on Today.
 - Custom fixed-calorie or dynamic-deficit goals, editable macro targets, one ISO currency, and a daily food budget. Deficit mode requires only the desired deficit and derives its allowance from Health Connect projected burn for the selected date.
 - The idle Foods catalog shows only the 10 most recently logged unique products; typing in search queries the complete catalog.
@@ -22,6 +23,8 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Quick Scan home-screen widget showing the current local deficit/surplus above the scanner button.
 - On-device CameraX + bundled ML Kit barcode recognition.
 - Guided crop/rotation and on-device English, Chinese, and Japanese nutrition-label OCR from up to three camera or gallery images, with local quality warnings, image variants, source-row review, and explicit conflict selection.
+- Unsaved product drafts survive the complete OCR workflow; OCR only replaces explicitly accepted nutrient fields and never discards identity, pricing, extras, or planner settings.
+- Locale-aware numeric presentation rounds to at most two decimal places and removes floating-point display noise without rewriting active editor text.
 - Room product catalog with linked-log nutrient corrections: editing a saved source updates its linked nutrition history while preserving quantity, time, and paid cost.
 - Optional product barcodes and 17 additive preloaded foods that never overwrite user edits.
 - Password-encrypted full backups compatible with the tablet preview.
@@ -80,9 +83,9 @@ Public 0.8.5 APKs used the old debug certificate, so Android cannot install a pr
 
 ## Data upgrades
 
-Database version 5 adds optional one-time bulk-log grouping fields. Version 4 added goals, pricing, purchase units, and logged costs; version 3 migrated barcode-keyed products to stable internal IDs. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
+Database version 6 adds a health profile, manual/imported weight entries, and privacy-limited walking-session summaries. Version 5 added optional one-time bulk-log grouping fields. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
 
-The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Backup schema 2 includes goals and cost data while accepting schema 1. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered.
+The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Backup schema 3 includes health profile, weights, and walking summaries while accepting schemas 1 and 2. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered.
 
 Catalog schema 2 uses a stable ID and an optional physical barcode:
 
@@ -112,11 +115,12 @@ Catalog schema 2 uses a stable ID and an optional physical barcode:
 ## Main components
 
 - `AppShell.kt`: Compose navigation, shared workflow host, and app-level snackbars.
-- `DailyCutApp.kt`: Today, Foods, Settings, OCR, and shared dialog components.
+- `DailyCutApp.kt`: Today, Foods, Health, Settings, OCR, and shared dialog components.
 - `FoodsComponents.kt`: isolated inline bulk cart, product catalog, search editor, and planner-result UI.
 - `ViewModels.kt`: shared date and screen state.
 - `DailyCutRepository.kt`: application data boundary.
-- `NutritionDatabase.kt`: Room schema, DAO, and v1→v2→v3→v4 migrations.
+- `NutritionDatabase.kt`: Room schema, DAO, and v1→v2→v3→v4→v5→v6 migrations.
+- `HealthAnalytics.kt`: robust deficit, weight projection, and walking-estimate calculations.
 - `BarcodeScanner.kt`: lifecycle-safe on-device scanner.
 - `NutritionImagePreprocessor.kt`, `NutritionLabelOcr.kt`, and `NutritionLabelParser.kt`: guided local image preparation, bundled multilingual OCR, deterministic nutrient extraction, and review candidates.
 - `AppBackupManager.kt`: authenticated cross-platform backup format.

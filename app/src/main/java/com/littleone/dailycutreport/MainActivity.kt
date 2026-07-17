@@ -29,10 +29,11 @@ class MainActivity : ComponentActivity() {
         )
         val todayViewModel = ViewModelProvider(this, screenFactory)[TodayViewModel::class.java]
         val foodsViewModel = ViewModelProvider(this, screenFactory)[FoodsViewModel::class.java]
+        val healthViewModel = ViewModelProvider(this, screenFactory)[HealthViewModel::class.java]
         val settingsViewModel = ViewModelProvider(this, screenFactory)[SettingsViewModel::class.java]
         val ocrViewModel = ViewModelProvider(this, screenFactory)[OcrViewModel::class.java]
         setContent {
-            DailyCutApp(dateViewModel, todayViewModel, foodsViewModel, settingsViewModel, ocrViewModel, scannerLaunchRequests)
+            DailyCutApp(dateViewModel, todayViewModel, foodsViewModel, healthViewModel, settingsViewModel, ocrViewModel, scannerLaunchRequests)
         }
     }
 
