@@ -49,6 +49,7 @@ jobs:
 
       - name: Test and lint
         run: |
+          node scripts/validate-landing-page.mjs
           node --test tablet-preview/model.test.js
           gradle --no-daemon testDebugUnitTest lintDebug
 

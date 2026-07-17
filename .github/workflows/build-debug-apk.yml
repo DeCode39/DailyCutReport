@@ -29,6 +29,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Validate GitHub Pages landing page
+        run: node scripts/validate-landing-page.mjs
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 

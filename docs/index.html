@@ -1,0 +1,1213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Daily Cut Report — a private, offline-first fitness and nutrition journal for Android.">
+  <meta name="theme-color" content="#080806">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <link rel="canonical" href="https://decode39.github.io/DailyCutReport/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Daily Cut Report">
+  <meta property="og:title" content="Daily Cut Report — Know your real deficit">
+  <meta property="og:description" content="A private, offline-first fitness and nutrition journal for Android.">
+  <meta property="og:url" content="https://decode39.github.io/DailyCutReport/">
+  <meta name="twitter:card" content="summary">
+  <title>Daily Cut Report — Know your real deficit</title>
+  <style>
+    :root {
+      --ink: #080806;
+      --surface: #11110e;
+      --surface-2: #191914;
+      --line: #303027;
+      --muted: #aaa58f;
+      --cream: #f7f1d0;
+      --yellow: #ffd84d;
+      --yellow-2: #ffe991;
+      --red: #ff8a80;
+      --green: #98d997;
+      --max: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--cream);
+      background:
+        radial-gradient(circle at 72% 10%, rgba(255, 216, 77, .12), transparent 27rem),
+        var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { font: inherit; }
+    .wrap { width: min(calc(100% - 40px), var(--max)); margin-inline: auto; }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      background: rgba(8, 8, 6, .78);
+      backdrop-filter: blur(18px);
+    }
+
+    .nav-inner {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 760; letter-spacing: -.02em; }
+    .app-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 12px;
+      color: var(--ink);
+      background: var(--yellow);
+      box-shadow: inset 0 0 0 4px #000, 0 0 0 1px var(--yellow);
+    }
+
+    .report-glyph { width: 18px; height: 16px; position: relative; }
+    .report-glyph::before {
+      content: "";
+      position: absolute;
+      inset: 1px 3px 1px 0;
+      background:
+        linear-gradient(#000 0 0) 2px 2px / 12px 2px no-repeat,
+        linear-gradient(#000 0 0) 2px 7px / 9px 2px no-repeat,
+        linear-gradient(#000 0 0) 2px 12px / 6px 2px no-repeat;
+    }
+    .report-glyph::after {
+      content: "↓";
+      position: absolute;
+      right: -2px;
+      bottom: -6px;
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .nav-links { display: flex; align-items: center; gap: 26px; color: #c9c4ab; font-size: 14px; }
+    .nav-links a:hover { color: var(--cream); }
+
+    .btn {
+      min-height: 46px;
+      padding: 0 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font-weight: 760;
+      font-size: 14px;
+      transition: transform .2s ease, background .2s ease, border-color .2s ease;
+      cursor: pointer;
+    }
+    .btn:hover { transform: translateY(-2px); }
+    .btn-primary { background: var(--yellow); color: #111; box-shadow: 0 8px 30px rgba(255,216,77,.16); }
+    .btn-primary:hover { background: var(--yellow-2); }
+    .btn-ghost { border-color: var(--line); color: var(--cream); background: rgba(255,255,255,.02); }
+    .btn-ghost:hover { border-color: #676354; background: rgba(255,255,255,.05); }
+    .arrow { font-size: 17px; }
+
+    .hero {
+      min-height: 760px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.04fr) minmax(370px, .96fr);
+      align-items: center;
+      gap: 64px;
+      padding: 78px 0 88px;
+    }
+
+    .eyebrow {
+      width: fit-content;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 24px;
+      padding: 7px 11px 7px 8px;
+      border: 1px solid #3a382d;
+      border-radius: 999px;
+      color: #d5d0b7;
+      font-size: 12px;
+      font-weight: 720;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      background: rgba(255,255,255,.025);
+    }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 0 5px rgba(255,216,77,.1); }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 680px;
+      margin-bottom: 22px;
+      font-size: clamp(58px, 7vw, 92px);
+      line-height: .94;
+      letter-spacing: -.065em;
+      font-weight: 820;
+    }
+    .accent { color: var(--yellow); }
+    .hero-copy > p {
+      max-width: 590px;
+      margin-bottom: 30px;
+      color: #c6c0a5;
+      font-size: clamp(17px, 1.8vw, 20px);
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 23px; color: #827e6e; font-size: 12px; }
+    .meta-row span { display: flex; align-items: center; gap: 7px; }
+    .meta-row i { width: 5px; height: 5px; border-radius: 50%; background: #5d594d; }
+
+    .device-stage { position: relative; min-height: 610px; display: grid; place-items: center; }
+    .device-stage::before {
+      content: "";
+      position: absolute;
+      width: min(100%, 530px);
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: var(--yellow);
+      filter: saturate(.88);
+      box-shadow: 0 0 80px rgba(255,216,77,.1);
+    }
+    .device-stage::after {
+      content: "OFFLINE";
+      position: absolute;
+      right: 0;
+      bottom: 70px;
+      padding: 10px 16px;
+      transform: rotate(-6deg);
+      border: 2px solid var(--ink);
+      border-radius: 999px;
+      color: var(--ink);
+      background: var(--cream);
+      font: 850 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .14em;
+    }
+
+    .phone {
+      position: relative;
+      z-index: 2;
+      width: 286px;
+      height: 586px;
+      overflow: hidden;
+      border: 8px solid #1c1c19;
+      border-radius: 42px;
+      background: #000;
+      box-shadow: 0 34px 75px rgba(0,0,0,.45), inset 0 0 0 1px #48483f;
+      transform: rotate(4deg);
+    }
+    .phone::before {
+      content: "";
+      position: absolute;
+      z-index: 5;
+      top: 9px;
+      left: 50%;
+      width: 76px;
+      height: 22px;
+      transform: translateX(-50%);
+      border-radius: 20px;
+      background: #141412;
+    }
+    .phone-screen {
+      height: 100%;
+      padding: 41px 15px 68px;
+      color: var(--cream);
+      background: linear-gradient(180deg, #080806, #020202);
+    }
+    .app-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
+    .app-top strong { font-size: 15px; letter-spacing: -.02em; }
+    .app-top span { color: var(--yellow); font-size: 16px; }
+    .date-controls {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 10px;
+      color: #c9c2a7;
+      font-size: 8px;
+    }
+    .date-controls span {
+      min-width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #524e35;
+      border-radius: 999px;
+      color: var(--yellow);
+    }
+    .date-controls b {
+      height: 28px;
+      display: grid;
+      place-items: center;
+      flex: 1;
+      border: 1px solid #524e35;
+      border-radius: 999px;
+      font-size: 8px;
+    }
+    .date-controls .date-action {
+      min-width: 28px;
+      color: #0c0c09;
+      border-color: var(--yellow);
+      background: var(--yellow);
+      font-size: 10px;
+    }
+    .metric-card {
+      padding: 13px;
+      border: 0;
+      border-radius: 16px;
+      background: #37343b;
+    }
+    .metric-card .label { color: var(--yellow); font-size: 13px; font-weight: 700; }
+    .metric-card .metric { margin: 2px 0 8px; color: var(--cream); font-size: 29px; line-height: 1; font-weight: 800; letter-spacing: -.04em; }
+    .metric-card .metric small { font-size: 10px; font-weight: 650; letter-spacing: 0; }
+    .phone-row { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 8px; }
+    .phone-row b { font-weight: 750; }
+    .phone-note { margin-top: 5px; color: #c2bca6; font-size: 7px; }
+    .phone-card { margin-top: 8px; padding: 12px; border: 0; border-radius: 16px; background: #37343b; }
+    .phone-card h4 { margin: 0 0 4px; font-size: 11px; }
+    .phone-card p { margin: 0 0 8px; color: #8f8a78; font-size: 7px; line-height: 1.4; }
+    .phone-target { margin-top: 7px; }
+    .phone-target > div { display: flex; justify-content: space-between; font-size: 7px; }
+    .phone-target > div b { font-size: 7px; }
+    .phone-target i { height: 3px; display: block; margin-top: 3px; overflow: hidden; border-radius: 4px; background: #343329; }
+    .phone-target i::after { content: ""; display: block; width: 66%; height: 100%; background: var(--yellow); }
+    .phone-card .phone-button { margin-top: 8px; padding: 7px 8px; border-radius: 999px; color: #111; background: var(--yellow); text-align: center; font-size: 7px; font-weight: 800; }
+    .bottom-nav {
+      position: absolute;
+      z-index: 3;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      height: 62px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      align-items: center;
+      border-top: 1px solid #24241f;
+      background: #201f25;
+    }
+    .bottom-nav span { text-align: center; color: #757266; font-size: 8px; }
+    .bottom-nav b { display: block; margin-bottom: 2px; color: inherit; font-size: 15px; }
+    .bottom-nav .active { color: var(--yellow); }
+    .bottom-nav .active b { width: 42px; margin-inline: auto; border-radius: 999px; background: #5c536d; }
+    .scan-fab {
+      position: absolute;
+      z-index: 4;
+      right: 14px;
+      bottom: 77px;
+      width: 58px;
+      height: 49px;
+      display: grid;
+      place-items: center;
+      border-radius: 16px;
+      color: var(--cream);
+      background: #5a32a4;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .proof {
+      border-block: 1px solid var(--line);
+      background: #0c0c0a;
+    }
+    .proof-row {
+      min-height: 104px;
+      display: grid;
+      grid-template-columns: 1.25fr repeat(3, 1fr);
+      align-items: center;
+      gap: 28px;
+    }
+    .proof-intro { color: #7f7b6c; font-size: 12px; line-height: 1.4; text-transform: uppercase; letter-spacing: .11em; }
+    .proof-item { display: flex; align-items: center; gap: 12px; }
+    .proof-icon {
+      width: 39px;
+      height: 39px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border: 1px solid #3b392f;
+      border-radius: 13px;
+      color: var(--yellow);
+      background: #171713;
+      font-size: 17px;
+    }
+    .proof-item strong { display: block; font-size: 13px; }
+    .proof-item span { display: block; color: #777467; font-size: 10px; }
+
+    section { padding: 88px 0; scroll-margin-top: 72px; }
+    .section-kicker { margin-bottom: 12px; color: var(--yellow); font: 750 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+    h2 { max-width: 800px; margin-bottom: 18px; font-size: clamp(40px, 5vw, 66px); line-height: 1; letter-spacing: -.05em; }
+    .section-lede { max-width: 680px; margin-bottom: 44px; color: #aaa58f; font-size: 18px; }
+
+    .bento { display: grid; grid-template-columns: 1.2fr .8fr; align-items: start; gap: 16px; }
+    .feature {
+      position: relative;
+      min-height: 340px;
+      overflow: hidden;
+      padding: 34px;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--surface);
+    }
+    .feature > h3, .feature > p, .feature > .feature-tag { position: relative; z-index: 2; }
+    .feature h3 { margin-bottom: 10px; font-size: 26px; letter-spacing: -.035em; }
+    .feature p { max-width: 480px; color: #9e9a87; }
+    .feature:not(.feature-wide) > h3,
+    .feature:not(.feature-wide) > p { max-width: calc(100% - 185px); }
+    .feature:first-child > h3,
+    .feature:first-child > p { max-width: 52%; }
+    .feature-manual > h3,
+    .feature-manual > p,
+    .feature-json > h3,
+    .feature-json > p { max-width: 100%; }
+    .feature-manual,
+    .feature-json {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .feature-manual .feature-tag,
+    .feature-json .feature-tag { margin-bottom: 28px; }
+    .feature-wide > h3,
+    .feature-wide > p { max-width: 52%; }
+    .feature-wide { grid-column: 1 / -1; min-height: 390px; }
+    .feature-tag { display: inline-flex; margin-bottom: 38px; padding: 6px 9px; border-radius: 8px; color: #aaa58f; background: #21211c; font: 700 10px/1 ui-monospace, monospace; text-transform: uppercase; }
+
+    .balance-viz { position: absolute; right: 28px; bottom: 25px; width: 43%; height: 180px; }
+    .chart-bars { height: 130px; display: flex; align-items: flex-end; gap: 7px; border-bottom: 1px solid #3c3a31; }
+    .chart-bars i { flex: 1; border-radius: 5px 5px 0 0; background: #3f3e35; }
+    .chart-bars i:nth-child(1) { height: 54%; }
+    .chart-bars i:nth-child(2) { height: 71%; }
+    .chart-bars i:nth-child(3) { height: 63%; }
+    .chart-bars i:nth-child(4) { height: 89%; background: var(--yellow); }
+    .chart-bars i:nth-child(5) { height: 77%; }
+    .chart-bars i:nth-child(6) { height: 94%; }
+    .chart-labels { display: flex; justify-content: space-between; margin-top: 8px; color: #68665b; font-size: 9px; }
+
+    .scan-viz { position: absolute; right: 22px; bottom: 22px; width: 180px; height: 180px; border-radius: 28px; background: var(--yellow); color: #111; transform: rotate(-3deg); }
+    .scan-box { position: absolute; inset: 42px; border: 4px solid #111; border-radius: 18px; }
+    .scan-line { position: absolute; left: 30px; right: 30px; top: 104px; height: 4px; border-radius: 9px; background: #111; box-shadow: 0 0 15px rgba(0,0,0,.28); }
+    .scan-bars { position: absolute; inset: 63px 58px; background: repeating-linear-gradient(90deg, #111 0 3px, transparent 3px 7px); }
+
+    .manual-viz {
+      position: relative;
+      right: auto;
+      bottom: auto;
+      width: 100%;
+      margin-top: 22px;
+      padding: 14px;
+      border: 1px solid #3b392f;
+      border-radius: 17px;
+      background: #181815;
+      transform: none;
+    }
+    .manual-field { margin-bottom: 8px; }
+    .manual-field:last-child { margin-bottom: 0; }
+    .manual-field span { display: block; margin-bottom: 3px; color: #777467; font-size: 8px; }
+    .manual-field i { height: 27px; display: block; padding: 6px 8px; border: 1px solid #4a4737; border-radius: 8px; color: #d2cbb0; font: normal 8px/1.6 ui-monospace, monospace; }
+    .manual-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .manual-save { margin-top: 9px; padding: 7px; border-radius: 999px; color: #111; background: var(--yellow); text-align: center; font-size: 8px; font-weight: 800; }
+
+    .json-viz {
+      position: relative;
+      right: auto;
+      bottom: auto;
+      width: 100%;
+      margin-top: 22px;
+      padding: 15px;
+      border: 1px solid #39372e;
+      border-radius: 16px;
+      color: #817d6f;
+      background: #090907;
+      font: 8px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+      transform: none;
+    }
+    .json-viz b { color: var(--yellow); font-weight: 600; }
+    .json-viz em { color: #e2dabc; font-style: normal; }
+    .json-valid {
+      width: fit-content;
+      margin-top: 8px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: #10100d;
+      background: var(--green);
+      font: 800 7px/1 ui-monospace, monospace;
+      letter-spacing: .05em;
+    }
+    .ai-boundary {
+      width: fit-content;
+      margin: 2px 0 20px;
+      padding: 6px 9px;
+      border: 1px solid #55513d;
+      border-radius: 999px;
+      color: var(--yellow);
+      background: #1b1a14;
+      font: 800 9px/1 ui-monospace, monospace;
+      letter-spacing: .08em;
+    }
+
+    .planner-viz { position: absolute; right: 32px; bottom: 28px; width: 42%; display: grid; gap: 8px; }
+    .plan-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 11px; padding: 12px; border: 1px solid #37362e; border-radius: 14px; background: #191916; font-size: 11px; }
+    .plan-row > b:first-child { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: #111; background: var(--yellow); }
+    .plan-row span { display: block; color: #817e70; font-size: 9px; }
+    .plan-row > b:last-child { color: var(--yellow); }
+
+    .experience { background: var(--cream); color: #14130f; }
+    .experience .section-kicker { color: #6f5b00; }
+    .experience .section-lede { color: #5c5849; }
+    .demo-grid { display: grid; grid-template-columns: .72fr 1.28fr; gap: 28px; align-items: start; }
+    .demo-tabs { display: grid; gap: 10px; }
+    .mobile-demo-panel { display: none; }
+    .demo-tab {
+      width: 100%;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 15px;
+      border: 1px solid #d7cfaa;
+      border-radius: 18px;
+      color: #555144;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      transition: color .28s ease, border-color .28s ease, background .28s ease, box-shadow .28s ease, transform .28s ease;
+    }
+    .demo-tab:hover, .demo-tab.active { color: #111; border-color: #111; background: #fffdf0; box-shadow: 0 10px 24px rgba(35,30,10,.06); }
+    .tab-num { font: 800 12px/1.2 ui-monospace, monospace; }
+    .demo-tab strong { display: block; margin-bottom: 3px; font-size: 17px; }
+    .demo-tab span:last-child { display: block; font-size: 13px; }
+    .demo-panel {
+      min-height: 470px;
+      overflow: hidden;
+      padding: 34px;
+      border-radius: 30px;
+      color: var(--cream);
+      background: #0d0d0b;
+      box-shadow: 0 22px 50px rgba(25,22,10,.18);
+    }
+    .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 36px; }
+    .panel-head small { color: #8e8a78; }
+    .panel-head h3 { margin: 5px 0 0; font-size: 30px; letter-spacing: -.04em; }
+    .panel-chip { padding: 8px 10px; border: 1px solid #343329; border-radius: 999px; color: var(--yellow); font: 700 10px/1 monospace; }
+    .panel-content { min-height: 315px; }
+    .compose-stack { display: grid; gap: 10px; }
+    .compose-date { display: grid; grid-template-columns: 38px 1fr 38px; gap: 7px; }
+    .compose-date span {
+      min-height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #514d37;
+      border-radius: 999px;
+      color: var(--yellow);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .compose-card { padding: 16px; border: 0; border-radius: 14px; background: #37343b; }
+    .compose-card h4 { margin: 0 0 8px; color: var(--cream); font-size: 17px; }
+    .compose-card .compose-verdict { color: var(--yellow); font-size: 18px; font-weight: 730; }
+    .compose-card .compose-balance { margin: 0 0 9px; font-size: 31px; line-height: 1.1; font-weight: 820; letter-spacing: -.04em; }
+    .compose-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; color: #d8d2b7; font-size: 12px; }
+    .compose-row b { color: var(--cream); white-space: nowrap; }
+    .compose-note { margin: 6px 0 0; color: #c0baa5; font-size: 10px; }
+    .compose-progress { margin-top: 8px; }
+    .compose-progress > div { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; }
+    .compose-progress i { height: 5px; display: block; margin-top: 4px; overflow: hidden; border-radius: 10px; background: #39372c; }
+    .compose-progress i::after { content: ""; display: block; width: 68%; height: 100%; border-radius: inherit; background: var(--yellow); }
+    .compose-search { padding: 12px 14px; border: 1px solid #9a969e; border-radius: 6px; color: #eee8cb; font-size: 12px; }
+    .compose-list { display: grid; gap: 8px; }
+    .compose-list .compose-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; padding: 13px 15px; }
+    .compose-list strong { display: block; font-size: 13px; }
+    .compose-list small { display: block; color: #d0cab2; font-size: 9px; }
+    .compose-action { padding: 7px 12px; border-radius: 999px; color: #111; background: var(--yellow); font-size: 10px; font-weight: 800; }
+    .compose-link { color: var(--yellow); font-size: 12px; font-weight: 720; }
+    .compose-switch { width: 38px; height: 22px; display: inline-flex; align-items: center; padding: 3px; border: 1px solid #9f9aa4; border-radius: 999px; background: #57545d; }
+    .compose-switch::after { content: ""; width: 14px; height: 14px; border-radius: 50%; background: #aaa6b0; }
+    .compose-button { display: block; margin-top: 9px; padding: 8px 12px; border-radius: 999px; color: #111; background: var(--yellow); text-align: center; font-size: 10px; font-weight: 800; }
+    .compose-chart { height: 92px; display: flex; align-items: flex-end; gap: 5px; margin-top: 8px; padding: 9px; border-radius: 8px; background: #302d34; }
+    .compose-chart i { flex: 1; min-width: 3px; border-radius: 2px 2px 0 0; background: var(--yellow); }
+    .compose-chart i:nth-child(1) { height: 35%; } .compose-chart i:nth-child(2) { height: 62%; }
+    .compose-chart i:nth-child(3) { height: 44%; } .compose-chart i:nth-child(4) { height: 78%; }
+    .compose-chart i:nth-child(5) { height: 28%; } .compose-chart i:nth-child(6) { height: 68%; }
+    .compose-chart i:nth-child(7) { height: 92%; } .compose-chart i:nth-child(8) { height: 51%; }
+    .summary-cards { display: grid; grid-template-columns: 1.25fr repeat(2, 1fr); gap: 10px; }
+    .summary-card { padding: 18px; border: 1px solid #323128; border-radius: 17px; background: #181815; }
+    .summary-card:first-child { background: var(--yellow); color: #111; }
+    .summary-card small { display: block; color: #8f8a78; }
+    .summary-card:first-child small { color: #5f520e; }
+    .summary-card b { display: block; margin-top: 8px; font-size: 27px; letter-spacing: -.04em; }
+    .day-graph { height: 160px; margin-top: 16px; padding: 16px; display: flex; align-items: flex-end; gap: 10px; border-radius: 17px; background: #181815; }
+    .day-graph i { flex: 1; border-radius: 6px 6px 2px 2px; background: #414036; }
+    .day-graph i:nth-child(1) { height: 41%; } .day-graph i:nth-child(2) { height: 57%; }
+    .day-graph i:nth-child(3) { height: 75%; } .day-graph i:nth-child(4) { height: 62%; }
+    .day-graph i:nth-child(5) { height: 89%; background: var(--yellow); } .day-graph i:nth-child(6) { height: 78%; }
+    .day-graph i:nth-child(7) { height: 98%; }
+
+    .privacy { text-align: center; }
+    .privacy-mark {
+      width: 96px;
+      height: 96px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 28px;
+      border: 1px solid #474436;
+      border-radius: 28px;
+      color: var(--yellow);
+      background: #141411;
+      font-size: 39px;
+      transform: rotate(-4deg);
+    }
+    .privacy h2 { margin-inline: auto; }
+    .privacy .section-lede { margin-inline: auto; }
+    .privacy-grid { max-width: 920px; margin: 50px auto 0; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 24px; background: var(--surface); }
+    .privacy-item { padding: 28px; text-align: left; }
+    .privacy-item + .privacy-item { border-left: 1px solid var(--line); }
+    .privacy-item b { display: block; margin-bottom: 5px; color: var(--yellow); font-size: 14px; }
+    .privacy-item span { color: #8e8a78; font-size: 12px; }
+
+    .source-card {
+      min-height: 350px;
+      padding: 48px;
+      display: grid;
+      grid-template-columns: 1.25fr .75fr;
+      align-items: center;
+      gap: 60px;
+      border: 1px solid #454235;
+      border-radius: 32px;
+      background:
+        linear-gradient(115deg, rgba(255,216,77,.09), transparent 38%),
+        #12120f;
+    }
+    .source-card h2 { font-size: clamp(38px, 4.4vw, 60px); }
+    .source-card p { max-width: 610px; color: #9c9885; }
+    .code-window { overflow: hidden; border: 1px solid #36352d; border-radius: 17px; background: #090907; box-shadow: 0 25px 55px rgba(0,0,0,.3); transform: rotate(2deg); }
+    .code-top { height: 34px; display: flex; align-items: center; gap: 5px; padding: 0 12px; border-bottom: 1px solid #2b2a24; }
+    .code-top i { width: 7px; height: 7px; border-radius: 50%; background: #4b4940; }
+    .code-body { padding: 18px; color: #7d796b; font: 10px/1.9 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .code-body b { color: var(--yellow); font-weight: 600; }
+    .code-body em { color: #ded7b9; font-style: normal; }
+
+    .final-cta { padding-top: 40px; text-align: center; }
+    .final-cta-box {
+      padding: 90px 28px;
+      overflow: hidden;
+      position: relative;
+      border-radius: 34px;
+      color: #111;
+      background: var(--yellow);
+    }
+    .final-cta-box::before, .final-cta-box::after {
+      content: "";
+      position: absolute;
+      width: 280px;
+      height: 280px;
+      border: 2px solid rgba(0,0,0,.13);
+      border-radius: 50%;
+    }
+    .final-cta-box::before { left: -130px; top: -100px; }
+    .final-cta-box::after { right: -110px; bottom: -160px; }
+    .final-cta h2 { position: relative; z-index: 1; margin-inline: auto; }
+    .final-cta p { position: relative; z-index: 1; max-width: 600px; margin: 0 auto 28px; color: #5b501a; font-size: 17px; }
+    .final-cta .btn { position: relative; z-index: 1; background: #111; color: var(--cream); }
+
+    footer { padding: 36px 0 46px; }
+    .footer-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; color: #767365; font-size: 12px; }
+    .footer-links { display: flex; gap: 22px; }
+    .footer-links a:hover { color: var(--cream); }
+
+    .reveal { opacity: 0; transform: translateY(18px); transition: opacity .55s ease, transform .55s ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    @media (max-width: 880px) {
+      .nav-links a:not(.nav-cta) { display: none; }
+      .hero { grid-template-columns: 1fr; gap: 24px; padding-top: 64px; text-align: center; }
+      .hero-copy { display: grid; justify-items: center; }
+      .device-stage { min-height: 630px; }
+      .proof-row { grid-template-columns: repeat(3, 1fr); padding-block: 24px; }
+      .proof-intro { grid-column: 1 / -1; text-align: center; }
+      .bento, .demo-grid, .source-card { grid-template-columns: 1fr; }
+      .feature-wide { grid-column: auto; }
+      .feature { min-height: 390px; }
+      .feature:not(.feature-wide) > h3,
+      .feature:not(.feature-wide) > p,
+      .feature-wide > h3,
+      .feature-wide > p { max-width: 42%; }
+      .balance-viz, .planner-viz { width: 45%; }
+      .source-card { padding: 36px; }
+      .code-window { max-width: 450px; transform: none; }
+    }
+
+    @media (max-width: 620px) {
+      .wrap { width: min(calc(100% - 24px), var(--max)); }
+      .brand > span:not(.app-icon) { display: none; }
+      .nav-inner { min-height: 64px; }
+      .nav .btn { min-height: 40px; padding-inline: 15px; }
+      h1 { font-size: clamp(48px, 17vw, 72px); }
+      .hero { min-height: auto; padding-top: 54px; }
+      .hero-copy > p { font-size: 17px; }
+      .hero-actions { width: 100%; }
+      .hero-actions .btn { flex: 1; }
+      .meta-row { justify-content: center; }
+      .device-stage::before { width: 100%; }
+      .device-stage::after { right: 6px; }
+      .phone { transform: rotate(2deg); }
+      .proof-row { grid-template-columns: 1fr; align-items: start; }
+      .proof-intro { text-align: left; }
+      section { padding: 88px 0; }
+      .feature { min-height: 500px; padding: 26px 26px 245px; }
+      .feature-tag { margin-bottom: 35px; }
+      .feature:not(.feature-wide) > h3,
+      .feature:not(.feature-wide) > p,
+      .feature-wide > h3,
+      .feature-wide > p { max-width: 100%; }
+      .balance-viz, .planner-viz { right: 22px; width: calc(100% - 44px); }
+      .feature-manual,
+      .feature-json { min-height: auto; padding-bottom: 26px; }
+      .manual-viz,
+      .json-viz { margin-top: 24px; }
+      .scan-viz { right: 22px; bottom: 22px; width: 180px; height: 180px; }
+      .demo-panel { min-height: 430px; padding: 24px; }
+      .demo-grid > .demo-panel { display: none; }
+      .demo-tabs { gap: 0; }
+      .demo-tab { margin-bottom: 10px; }
+      .demo-tab.active { margin-bottom: 7px; transform: translateY(-1px); }
+      .mobile-demo-panel {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 0fr;
+        margin: 0;
+        padding: 0 20px;
+        visibility: hidden;
+        opacity: 0;
+        overflow: hidden;
+        pointer-events: none;
+        transform: translateY(-7px);
+        border-radius: 22px;
+        color: var(--cream);
+        background: #0d0d0b;
+        box-shadow: 0 0 0 rgba(25,22,10,0);
+        transition:
+          grid-template-rows .46s cubic-bezier(.22, 1, .36, 1),
+          padding .46s cubic-bezier(.22, 1, .36, 1),
+          margin .46s cubic-bezier(.22, 1, .36, 1),
+          opacity .28s ease,
+          transform .46s cubic-bezier(.22, 1, .36, 1),
+          box-shadow .46s ease,
+          visibility 0s linear .46s;
+      }
+      .mobile-demo-panel-inner { min-height: 0; overflow: hidden; }
+      .demo-tab.active + .mobile-demo-panel {
+        grid-template-rows: 1fr;
+        margin: 0 0 10px;
+        padding: 20px;
+        visibility: visible;
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
+        box-shadow: 0 16px 36px rgba(25,22,10,.16);
+        transition-delay: 0s;
+      }
+      .mobile-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+      .mobile-panel-head small { color: #8e8a78; font-size: 10px; }
+      .mobile-panel-head h3 { margin: 3px 0 0; font-size: 23px; letter-spacing: -.04em; }
+      .mobile-demo-panel .panel-chip { flex: 0 0 auto; }
+      .summary-cards { grid-template-columns: 1fr 1fr; }
+      .summary-card:first-child { grid-column: 1 / -1; }
+      .privacy-grid { grid-template-columns: 1fr; }
+      .privacy-item + .privacy-item { border-left: 0; border-top: 1px solid var(--line); }
+      .source-card { padding: 28px; gap: 34px; }
+      .footer-row { align-items: flex-start; flex-direction: column; }
+      .footer-links { flex-wrap: wrap; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; transition-delay: 0ms !important; animation-duration: .01ms !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+  <noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
+</head>
+<body>
+  <nav class="nav" aria-label="Primary navigation">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="Daily Cut Report home">
+        <span class="app-icon" aria-hidden="true"><span class="report-glyph"></span></span>
+        <span>Daily Cut Report</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#source">Source</a>
+        <a class="btn btn-primary nav-cta" href="https://github.com/DeCode39/DailyCutReport/releases" target="_blank" rel="noreferrer">
+          Get the app <span class="arrow">↗</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <div class="wrap hero">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="pulse"></span> Android · Version 0.10.1</div>
+        <h1>Know your <span class="accent">real deficit.</span></h1>
+        <p>Daily Cut Report brings activity, food, weight and budget into one focused daily view—without sending your life to the cloud.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/DeCode39/DailyCutReport/releases" target="_blank" rel="noreferrer">
+            Download for Android <span class="arrow">↓</span>
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/DeCode39/DailyCutReport" target="_blank" rel="noreferrer">
+            View on GitHub <span class="arrow">↗</span>
+          </a>
+        </div>
+        <div class="meta-row" aria-label="App details">
+          <span>Android 9+ <i></i></span>
+          <span>Strictly offline <i></i></span>
+          <span>No account required <i></i></span>
+          <span>No built-in AI</span>
+        </div>
+      </div>
+
+      <div class="device-stage" aria-label="Daily Cut Report app preview">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="date-controls"><span>‹</span><b>Fri, 17 Jul 2026</b><span>›</span><span class="date-action">↗</span><span class="date-action">↓</span></div>
+            <div class="metric-card">
+              <span class="label">Maintenance-ish</span>
+              <div class="metric">−261 <small>kcal</small></div>
+              <div class="phone-row"><span>Burn</span><b>2,188.18 kcal</b></div>
+              <div class="phone-row"><span>Food</span><b>1,927.51 kcal</b></div>
+              <div class="phone-row"><span>Protein</span><b>126.33 g</b></div>
+              <div class="phone-row"><span>Sodium</span><b>2,541.3 mg</b></div>
+              <div class="phone-note">Health data updated 17 Jul, 22:48</div>
+            </div>
+            <div class="phone-card">
+              <h4>Dynamic deficit goal</h4>
+              <p>2,188 projected burn − 400 deficit = 1,788 kcal allowance</p>
+              <div class="phone-target"><div><span>Calories</span><b>1,927.51 / 1,788 kcal</b></div><i></i></div>
+              <div class="phone-target"><div><span>Protein</span><b>52 / 146 g</b></div><i></i></div>
+              <div class="phone-target"><div><span>Sodium</span><b>2,541.3 / 2,000 mg</b></div><i></i></div>
+            </div>
+            <div class="phone-card">
+              <h4>Daily spending</h4>
+              <div class="phone-row"><span>Known spending</span><b>TWD 359.50</b></div>
+              <div class="phone-row"><span>Catalog estimate</span><b>TWD 299.00</b></div>
+              <div class="phone-row"><span>Budget</span><b>TWD 350.00</b></div>
+              <div class="phone-button">Plan remaining day</div>
+            </div>
+          </div>
+          <div class="scan-fab" title="Scan barcode">Scan</div>
+          <div class="bottom-nav" aria-hidden="true">
+            <span class="active"><b>●</b>Today</span>
+            <span><b>□</b>Foods</span>
+            <span><b>⌁</b>Health</span>
+            <span><b>⚙</b>Settings</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="proof">
+      <div class="wrap proof-row">
+        <div class="proof-intro">Built for the daily decisions<br>that move the trend</div>
+        <div class="proof-item"><div class="proof-icon">⌁</div><div><strong>Health Connect</strong><span>Activity & weight</span></div></div>
+        <div class="proof-item"><div class="proof-icon">⌗</div><div><strong>On-device scan</strong><span>Barcode & label OCR</span></div></div>
+        <div class="proof-item"><div class="proof-icon">⇩</div><div><strong>Portable data</strong><span>Encrypted backups</span></div></div>
+      </div>
+    </div>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="section-kicker">One honest daily picture</div>
+        <h2>Less logging. Better decisions.</h2>
+        <p class="section-lede">Daily Cut Report turns the numbers you already generate into a practical plan for the rest of your day.</p>
+
+        <div class="bento">
+          <article class="feature reveal">
+            <span class="feature-tag">01 · Balance</span>
+            <h3>Your burn, intake and goal—together.</h3>
+            <p>Health Connect activity meets your local food log to calculate a real daily energy balance, with history and weight trends in context.</p>
+            <div class="balance-viz" aria-hidden="true">
+              <div class="chart-bars"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="chart-labels"><span>MON</span><span>TODAY</span><span>SAT</span></div>
+            </div>
+          </article>
+
+          <article class="feature reveal">
+            <span class="feature-tag">02 · Capture</span>
+            <h3>Scan it. Check it. Log it.</h3>
+            <p>Use barcodes or multilingual nutrition-label OCR. Recognition happens on your device, and you approve every value.</p>
+            <div class="scan-viz" aria-hidden="true"><div class="scan-box"></div><div class="scan-bars"></div><div class="scan-line"></div></div>
+          </article>
+
+          <article class="feature feature-manual reveal">
+            <span class="feature-tag">03 · Create</span>
+            <h3>Build a product from scratch.</h3>
+            <p>Enter identity, serving size, nutrition, price and planner behavior yourself. Every field stays editable before and after saving.</p>
+            <div class="manual-viz" aria-hidden="true">
+              <div class="manual-field"><span>Product name</span><i>Greek yoghurt</i></div>
+              <div class="manual-fields">
+                <div class="manual-field"><span>Calories</span><i>142</i></div>
+                <div class="manual-field"><span>Protein g</span><i>18</i></div>
+              </div>
+              <div class="manual-fields">
+                <div class="manual-field"><span>Purchase price</span><i>1.60</i></div>
+                <div class="manual-field"><span>Serving</span><i>1 tub</i></div>
+              </div>
+              <div class="manual-save">Save product</div>
+            </div>
+          </article>
+
+          <article class="feature feature-json reveal">
+            <span class="feature-tag">04 · Photo to JSON</span>
+            <h3>Log from photos, all at once.</h3>
+            <p>Photograph the product or nutrition label, ask your preferred external AI to estimate the values, then paste the result using Daily Cut Report’s JSON format. Review the filled draft before saving.</p>
+            <div class="ai-boundary">EXTERNAL AI OPTIONAL · NOT INCLUDED</div>
+            <div class="json-viz" aria-hidden="true">
+              <div>{</div>
+              <div>&nbsp; <b>"schemaVersion"</b>: <em>1</em>,</div>
+              <div>&nbsp; <b>"name"</b>: <em>"Greek yoghurt"</em>,</div>
+              <div>&nbsp; <b>"calories"</b>: <em>142</em>,</div>
+              <div>&nbsp; <b>"proteinG"</b>: <em>18</em></div>
+              <div>}</div>
+              <div class="json-valid">✓ VALID DRAFT</div>
+            </div>
+          </article>
+
+          <article class="feature feature-wide reveal">
+            <span class="feature-tag">05 · Plan</span>
+            <h3>A remaining-day planner<br>with its feet on the ground.</h3>
+            <p>Get up to three deterministic suggestions that respect macros, calories, purchase units, drinks and your daily food budget. No magic. Just useful constraints.</p>
+            <div class="planner-viz" aria-hidden="true">
+              <div class="plan-row"><b>1</b><div><strong>Chicken + yoghurt</strong><span>High protein · within budget</span></div><b>92%</b></div>
+              <div class="plan-row"><b>2</b><div><strong>Tuna + rice</strong><span>Balanced recovery</span></div><b>87%</b></div>
+              <div class="plan-row"><b>3</b><div><strong>Eggs + milk</strong><span>Lowest estimated cost</span></div><b>81%</b></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="experience" aria-labelledby="experience-title">
+      <div class="wrap">
+        <div class="section-kicker">Four focused destinations</div>
+        <h2 id="experience-title">Everything has a place.</h2>
+        <p class="section-lede">A Material 3 interface keeps the daily workflow direct. Explore the product model below.</p>
+
+        <div class="demo-grid">
+          <div class="demo-tabs" role="tablist" aria-label="App destinations">
+            <button class="demo-tab active" role="tab" aria-selected="true" aria-controls="demo-panel" data-view="today">
+              <span class="tab-num">01</span><span><strong>Today</strong>Balance, targets, food log and quick scan.</span>
+            </button>
+            <div class="mobile-demo-panel" data-mobile-view="today" role="tabpanel"></div>
+            <button class="demo-tab" role="tab" aria-selected="false" aria-controls="demo-panel" data-view="foods">
+              <span class="tab-num">02</span><span><strong>Foods</strong>Catalog, search, OCR and bulk purchase logging.</span>
+            </button>
+            <div class="mobile-demo-panel" data-mobile-view="foods" role="tabpanel"></div>
+            <button class="demo-tab" role="tab" aria-selected="false" aria-controls="demo-panel" data-view="health">
+              <span class="tab-num">03</span><span><strong>Health</strong>Deficit, weight and walking trends.</span>
+            </button>
+            <div class="mobile-demo-panel" data-mobile-view="health" role="tabpanel"></div>
+            <button class="demo-tab" role="tab" aria-selected="false" aria-controls="demo-panel" data-view="settings">
+              <span class="tab-num">04</span><span><strong>Settings</strong>Goals, permissions and encrypted backups.</span>
+            </button>
+            <div class="mobile-demo-panel" data-mobile-view="settings" role="tabpanel"></div>
+          </div>
+
+          <div class="demo-panel" id="demo-panel" role="tabpanel" aria-live="polite">
+            <div class="panel-head">
+              <div><small id="panel-kicker">Friday · 17 July</small><h3 id="panel-title">Today</h3></div>
+              <span class="panel-chip" id="panel-chip">TODAY</span>
+            </div>
+            <div class="panel-content" id="panel-content">
+              <div class="compose-stack">
+                <div class="compose-date"><span>‹</span><span>Fri, 17 Jul 2026</span><span>›</span></div>
+                <div class="compose-card">
+                  <div class="compose-verdict">On track</div>
+                  <div class="compose-balance">−612 kcal</div>
+                  <div class="compose-row"><span>Burn</span><b>2,354 kcal</b></div>
+                  <div class="compose-row"><span>Food</span><b>1,742 kcal</b></div>
+                  <div class="compose-row"><span>Protein</span><b>126 g</b></div>
+                  <div class="compose-row"><span>Sodium</span><b>1,680 mg</b></div>
+                  <p class="compose-note">Health data updated 17 Jul, 12:42</p>
+                </div>
+                <div class="compose-card">
+                  <h4>Dynamic deficit goal</h4>
+                  <p class="compose-note">2,354 projected burn − 600 deficit = 1,754 kcal allowance</p>
+                  <div class="compose-progress"><div><span>Calories</span><b>1,742 / 1,754 kcal</b></div><i></i></div>
+                  <div class="compose-progress"><div><span>Protein</span><b>126 / 160 g</b></div><i></i></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="privacy" id="privacy">
+      <div class="wrap">
+        <div class="privacy-mark" aria-hidden="true">⌁</div>
+        <div class="section-kicker">Privacy is the architecture</div>
+        <h2>Your data doesn’t need an audience.</h2>
+        <p class="section-lede">No internet permission. No account. No telemetry. Your food, photos and health records stay on the device you chose to trust.</p>
+        <div class="privacy-grid reveal">
+          <div class="privacy-item"><b>Zero network access</b><span>The build is verified to exclude internet and network-state permissions.</span></div>
+          <div class="privacy-item"><b>On-device recognition</b><span>Barcode recognition and English, Chinese and Japanese OCR run locally. No generative AI is built in.</span></div>
+          <div class="privacy-item"><b>Encrypted portability</b><span>Password-protected backups let you move or restore your data on your terms.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="wrap source-card reveal">
+        <div>
+          <div class="section-kicker">Built in the open</div>
+          <h2>Read the code.<br>Run the checks.</h2>
+          <p>Daily Cut Report is a native Kotlin and Jetpack Compose project. Explore its architecture, offline verification, deterministic planner and release history on GitHub.</p>
+          <a class="btn btn-ghost" href="https://github.com/DeCode39/DailyCutReport" target="_blank" rel="noreferrer">Explore the repository <span class="arrow">↗</span></a>
+        </div>
+        <div class="code-window" aria-label="Sample project facts">
+          <div class="code-top"><i></i><i></i><i></i></div>
+          <div class="code-body">
+            <div><b>platform</b> = <em>"Android"</em></div>
+            <div><b>language</b> = <em>"Kotlin"</em></div>
+            <div><b>ui</b> = <em>"Jetpack Compose"</em></div>
+            <div><b>database</b> = <em>"Room"</em></div>
+            <div><b>health</b> = <em>"Health Connect"</em></div>
+            <div><b>network</b> = <em>false</em></div>
+            <div><b>min_android</b> = <em>9</em></div>
+            <div><b>release</b> = <em>"0.10.1"</em></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="wrap final-cta-box">
+        <h2>Make today’s cut visible.</h2>
+        <p>Bring activity, nutrition and budget into one private daily report.</p>
+        <a class="btn" href="https://github.com/DeCode39/DailyCutReport/releases" target="_blank" rel="noreferrer">Get Daily Cut Report <span class="arrow">↓</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap footer-row">
+      <div class="brand">
+        <span class="app-icon" aria-hidden="true"><span class="report-glyph"></span></span>
+        <span>Daily Cut Report</span>
+      </div>
+      <span>Private by design. Useful by default.</span>
+      <div class="footer-links">
+        <a href="https://github.com/DeCode39/DailyCutReport" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="https://github.com/DeCode39/DailyCutReport/releases" target="_blank" rel="noreferrer">Releases</a>
+        <a href="#top">Back to top ↑</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const panels = {
+      today: {
+        kicker: "Friday · 17 July",
+        title: "Today",
+        chip: "TODAY",
+        html: `<div class="compose-stack">
+          <div class="compose-date"><span>‹</span><span>Fri, 17 Jul 2026</span><span>›</span></div>
+          <div class="compose-card">
+            <div class="compose-verdict">Maintenance-ish</div>
+            <div class="compose-balance">−261 kcal</div>
+            <div class="compose-row"><span>Burn</span><b>2,188.18 kcal</b></div>
+            <div class="compose-row"><span>Food</span><b>1,927.51 kcal</b></div>
+            <div class="compose-row"><span>Protein</span><b>126.33 g</b></div>
+            <div class="compose-row"><span>Sodium</span><b>2,541.3 mg</b></div>
+            <p class="compose-note">Health data updated 17 Jul, 22:48</p>
+          </div>
+          <div class="compose-card">
+            <h4>Dynamic deficit goal</h4>
+            <p class="compose-note">2,188 projected burn − 400 deficit = 1,788 kcal allowance</p>
+            <div class="compose-progress"><div><span>Calories</span><b>1,927.51 / 1,788.18 kcal</b></div><i></i></div>
+            <div class="compose-progress"><div><span>Protein</span><b>52 / 146 g</b></div><i></i></div>
+            <div class="compose-progress"><div><span>Sodium</span><b>2,541.3 / 2,000 mg</b></div><i></i></div>
+          </div>
+          <div class="compose-card">
+            <h4>Daily spending</h4>
+            <div class="compose-row"><span>Known spending</span><b>TWD 359.50</b></div>
+            <div class="compose-row"><span>Catalog estimate</span><b>TWD 299.00</b></div>
+            <div class="compose-row"><span>Budget</span><b>TWD 350.00</b></div>
+            <span class="compose-button">Plan remaining day</span>
+          </div>
+        </div>`
+      },
+      foods: {
+        kicker: "Adding to Fri, 17 Jul",
+        title: "Foods",
+        chip: "FOODS",
+        html: `<div class="compose-stack">
+          <div class="compose-date"><span>‹</span><span>Fri, 17 Jul 2026</span><span>›</span></div>
+          <div class="compose-row"><span>Bulk purchase mode</span><span class="compose-switch"></span></div>
+          <div class="compose-search">Search saved products</div>
+          <div class="compose-link">Manual options</div>
+          <div class="compose-row"><b>Recently used</b><span></span></div>
+          <div class="compose-list">
+            <div class="compose-card"><div><strong>FIBER</strong><small>in · 4710035350082</small><small>TWD 42.00 / 1 serving(s)</small><small>drink · fixed in plans</small></div><span class="compose-action">Add</span></div>
+            <div class="compose-card"><div><strong>Spicy Chicken Filet Burger</strong><small>McDonald’s Taiwan</small><small>TWD 78.00 / 1 serving(s)</small></div><span class="compose-action">Add</span></div>
+          </div>
+        </div>`
+      },
+      health: {
+        kicker: "Friday · 17 July",
+        title: "Health",
+        chip: "HEALTH",
+        html: `<div class="compose-stack">
+          <div class="compose-date"><span>‹</span><span>Fri, 17 Jul 2026</span><span>›</span></div>
+          <div class="compose-card">
+            <h4>Projected deficit</h4>
+            <div class="compose-verdict">260.67 kcal deficit</div>
+            <div class="compose-row"><span>Projected final burn</span><b>2,188.18 kcal</b></div>
+            <div class="compose-row"><span>Logged intake</span><b>1,927.51 kcal</b></div>
+            <div class="compose-row"><span>Desired deficit</span><b>400 kcal</b></div>
+            <div class="compose-row"><span>Remaining gap</span><b>139.33 kcal</b></div>
+          </div>
+          <div class="compose-card">
+            <h4>Weight</h4>
+            <div class="compose-row"><span>Current</span><b>80.3 kg · manual</b></div>
+            <p class="compose-note">Manual entries take precedence over Health Connect weight for the same date.</p>
+          </div>
+          <div class="compose-card">
+            <h4>Expected weight change</h4>
+            <div class="compose-row"><span>Per week</span><b>0.5 kg loss</b></div>
+            <div class="compose-row"><span>Weekly range</span><b>0.14–0.85 kg</b></div>
+            <div class="compose-row"><span>Four weeks</span><b>1.99 kg loss</b></div>
+          </div>
+          <div class="compose-card">
+            <h4>Close today’s gap</h4>
+            <div class="compose-verdict">Walk 3.21 km</div>
+            <div class="compose-row"><span>Time</span><b>50 min</b></div>
+            <div class="compose-row"><span>Steps</span><b>4,408</b></div>
+            <div class="compose-row"><span>Estimated burn</span><b>139.33 kcal</b></div>
+          </div>
+          <div class="compose-card">
+            <h4>28 day trend</h4>
+            <div class="compose-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </div>`
+      },
+      settings: {
+        kicker: "Configuration · Local data",
+        title: "Settings",
+        chip: "SETTINGS",
+        html: `<div class="compose-stack">
+          <div class="compose-card">
+            <h4>Goals and daily budget</h4>
+            <div class="compose-row"><span>Goal mode</span><b>Deficit goal</b></div>
+            <div class="compose-row"><span>Desired deficit</span><b>400 kcal</b></div>
+            <div class="compose-row"><span>Protein minimum</span><b>146 g</b></div>
+            <div class="compose-row"><span>Sodium maximum</span><b>2,000 mg</b></div>
+            <div class="compose-row"><span>Currency</span><b>TWD</b></div>
+            <div class="compose-row"><span>Daily budget</span><b>350</b></div>
+            <span class="compose-button">Save goals</span>
+          </div>
+          <div class="compose-card">
+            <h4>Health Connect</h4>
+            <div class="compose-row"><span>Status</span><b>Available</b></div>
+            <p class="compose-note">Activity permissions granted. Optional nutrition and weight permissions are controlled separately.</p>
+            <span class="compose-button">Refresh selected date</span>
+          </div>
+          <div class="compose-card">
+            <h4>Product JSON</h4>
+            <p class="compose-note">Copy the schema when asking an external AI tool to estimate nutrition from photos, then import its response in the product editor.</p>
+            <span class="compose-button">Copy product JSON schema</span>
+          </div>
+          <div class="compose-card">
+            <h4>Encrypted local backup</h4>
+            <p class="compose-note">System cloud backup is disabled. Export a password-protected file for device migration.</p>
+            <span class="compose-button">Export full backup</span>
+          </div>
+          <div class="compose-card">
+            <h4>Strictly offline</h4>
+            <p class="compose-note">No Internet or network-state permission. Barcode recognition and multilingual label OCR run on device.</p>
+          </div>
+        </div>`
+      }
+    };
+
+    const tabs = document.querySelectorAll(".demo-tab");
+    const mobilePanels = document.querySelectorAll(".mobile-demo-panel");
+    const title = document.getElementById("panel-title");
+    const kicker = document.getElementById("panel-kicker");
+    const chip = document.getElementById("panel-chip");
+    const content = document.getElementById("panel-content");
+
+    content.innerHTML = panels.today.html;
+
+    mobilePanels.forEach((mobilePanel) => {
+      const panel = panels[mobilePanel.dataset.mobileView];
+      mobilePanel.innerHTML = '<div class="mobile-demo-panel-inner"><div class="mobile-panel-head"><div><small>' + panel.kicker +
+        '</small><h3>' + panel.title + '</h3></div><span class="panel-chip">' + panel.chip +
+        '</span></div>' + panel.html + '</div>';
+      mobilePanel.setAttribute("aria-hidden", panel.chip === "TODAY" ? "false" : "true");
+    });
+
+    const activateTab = (tab) => {
+      const panel = panels[tab.dataset.view];
+      tabs.forEach((item) => {
+        const selected = item === tab;
+        item.classList.toggle("active", selected);
+        item.setAttribute("aria-selected", selected);
+        item.setAttribute("aria-expanded", selected);
+        item.setAttribute("tabindex", selected ? "0" : "-1");
+      });
+      mobilePanels.forEach((item) => {
+        item.setAttribute("aria-hidden", item.dataset.mobileView === tab.dataset.view ? "false" : "true");
+      });
+      title.textContent = panel.title;
+      kicker.textContent = panel.kicker;
+      chip.textContent = panel.chip;
+      content.innerHTML = panel.html;
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.setAttribute("aria-expanded", tab.classList.contains("active") ? "true" : "false");
+      tab.setAttribute("tabindex", tab.classList.contains("active") ? "0" : "-1");
+      tab.addEventListener("click", () => activateTab(tab));
+      tab.addEventListener("keydown", (event) => {
+        const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 :
+          event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
+        const targetIndex = event.key === "Home" ? 0 :
+          event.key === "End" ? tabs.length - 1 :
+          direction ? (index + direction + tabs.length) % tabs.length : null;
+        if (targetIndex !== null) {
+          event.preventDefault();
+          tabs[targetIndex].focus();
+          activateTab(tabs[targetIndex]);
+        }
+      });
+    });
+
+    const revealItems = document.querySelectorAll(".reveal");
+    if ("IntersectionObserver" in window) {
+      const reveal = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("visible");
+            reveal.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 });
+      revealItems.forEach((item) => reveal.observe(item));
+    } else {
+      revealItems.forEach((item) => item.classList.add("visible"));
+    }
+  </script>
+</body>
+</html>
