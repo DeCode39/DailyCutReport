@@ -67,7 +67,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -147,10 +149,15 @@ internal fun TodayScreen(
         state.message?.let { onMessage(it); viewModel.clearMessage() }
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(onClick = onScan) { Text("Scan") }
+        }
+    ) { inner ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         item {
             DateHeader(selectedDate, dateViewModel) {
                 FilledIconButton(
@@ -195,7 +202,6 @@ internal fun TodayScreen(
                         } else "Health burn data has not been loaded",
                         style = MaterialTheme.typography.bodySmall
                     )
-                    Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan food") }
                 }
             }
         }
@@ -253,7 +259,8 @@ internal fun TodayScreen(
         items(state.logs, key = { it.id }) { log ->
             FoodLogCard(log, state.goals.currencyCode, onEdit = { onEditLog(log) }, onDelete = { onDeleteLog(log.id) })
         }
-        item { Spacer(Modifier.height(16.dp)) }
+            item { Spacer(Modifier.height(80.dp)) }
+        }
     }
     state.recommendations?.let { RecommendationDialog(it, state.goals.currencyCode, viewModel::clearRecommendations) }
 }
@@ -730,18 +737,20 @@ internal fun HealthScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val dashboard = state.dashboard
-    var weightInput by remember(selectedDate, dashboard?.profile?.weightUnit) { mutableStateOf("") }
-    var targetInput by remember(dashboard?.profile?.targetWeightKg, dashboard?.profile?.weightUnit) {
-        mutableStateOf(dashboard?.profile?.targetWeightKg?.let { dashboard.profile.weightUnit.fromKg(it) }?.let(::formatDecimal).orEmpty())
-    }
+    var showWeightEntry by remember { mutableStateOf(false) }
     var explanationExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(state.message) {
         state.message?.let { onMessage(it); viewModel.clearMessage() }
     }
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showWeightEntry = true }) { Text("Weight") }
+        }
+    ) { inner ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         item {
             Text("Health", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             DateHeader(selectedDate, dateViewModel)
@@ -770,22 +779,7 @@ internal fun HealthScreen(
                                 Text(unit.label, Modifier.padding(end = 12.dp))
                             }
                         }
-                        DecimalField("Weight for $selectedDate (${dashboard.profile.weightUnit.label})", weightInput) { weightInput = it }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                enabled = weightInput.numberOrNull()?.let { it > 0.0 } == true,
-                                onClick = { weightInput.numberOrNull()?.let(viewModel::saveManualWeight) }
-                            ) { Text("Save weight") }
-                            if (projection.currentWeightSource == WeightSource.MANUAL && projection.currentWeightDate == selectedDate) {
-                                TextButton(onClick = viewModel::deleteManualWeight) { Text("Remove manual") }
-                            }
-                        }
-                        DecimalField("Target weight (${dashboard.profile.weightUnit.label}, optional)", targetInput) { targetInput = it }
-                        OutlinedButton(
-                            enabled = targetInput.isBlank() || targetInput.numberOrNull()?.let { it > 0.0 } == true,
-                            onClick = { viewModel.setTargetWeight(targetInput.numberOrNull()) }
-                        ) { Text(if (targetInput.isBlank()) "Clear target" else "Save target") }
-                        Text("Manual entries take precedence over imported weight for the same date.", style = MaterialTheme.typography.bodySmall)
+                        Text("Use the Weight action to add or replace this date's manual measurement.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -795,8 +789,8 @@ internal fun HealthScreen(
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("28-day trend", style = MaterialTheme.typography.titleLarge)
-                        HealthTrendChart(dashboard.trends)
-                        Text("Yellow: daily deficit. Green: smoothed weight samples.", style = MaterialTheme.typography.bodySmall)
+                        HealthTrendChart(dashboard.trends, dashboard.profile.weightUnit)
+                        Text("Each series uses its own scale so calorie and weight changes remain readable.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -824,8 +818,58 @@ internal fun HealthScreen(
                 }
             }
         }
-        item { Spacer(Modifier.height(24.dp)) }
+            item { Spacer(Modifier.height(80.dp)) }
+        }
     }
+    if (showWeightEntry && dashboard != null) {
+        WeightEntryDialog(
+            selectedDate = selectedDate,
+            dashboard = dashboard,
+            onDismiss = { showWeightEntry = false },
+            onSave = {
+                viewModel.saveManualWeight(it)
+                showWeightEntry = false
+            },
+            onDelete = {
+                viewModel.deleteManualWeight()
+                showWeightEntry = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun WeightEntryDialog(
+    selectedDate: LocalDate,
+    dashboard: HealthDashboard,
+    onDismiss: () -> Unit,
+    onSave: (Double) -> Unit,
+    onDelete: () -> Unit
+) {
+    val projection = dashboard.projection
+    val existingManual = projection.currentWeightSource == WeightSource.MANUAL &&
+        projection.currentWeightDate == selectedDate
+    var weightInput by remember(selectedDate, dashboard.profile.weightUnit, projection.currentWeightKg) {
+        mutableStateOf(
+            if (existingManual) {
+                projection.currentWeightKg?.let(dashboard.profile.weightUnit::fromKg)?.let(::formatDecimal).orEmpty()
+            } else ""
+        )
+    }
+    val parsed = weightInput.numberOrNull()?.takeIf { it > 0.0 }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Weight for $selectedDate") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DecimalField("Weight (${dashboard.profile.weightUnit.label})", weightInput) { weightInput = it }
+                Text("Manual entries take precedence over Health Connect weight for the same date.", style = MaterialTheme.typography.bodySmall)
+                if (existingManual) TextButton(onClick = onDelete) { Text("Remove manual weight") }
+            }
+        },
+        confirmButton = { Button(enabled = parsed != null, onClick = { parsed?.let(onSave) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -908,32 +952,80 @@ private fun WalkingGuidanceCard(dashboard: HealthDashboard) {
 }
 
 @Composable
-private fun HealthTrendChart(points: List<HealthTrendPoint>) {
+private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightUnit) {
     val validDeficits = points.mapNotNull(HealthTrendPoint::deficitCalories)
-    val validWeights = points.mapNotNull(HealthTrendPoint::weightKg)
-    Canvas(Modifier.fillMaxWidth().height(180.dp)) {
-        if (points.size < 2) return@Canvas
-        val xStep = size.width / (points.size - 1).coerceAtLeast(1)
-        val maxDeficit = validDeficits.maxOfOrNull { abs(it) }?.coerceAtLeast(1.0) ?: 1.0
-        var previousDeficit: Pair<Float, Float>? = null
-        points.forEachIndexed { index, point ->
-            point.deficitCalories?.let { value ->
-                val current = index * xStep to (size.height * 0.5f - (value / maxDeficit * size.height * 0.42f).toFloat())
-                previousDeficit?.let { drawLine(Color.Yellow, androidx.compose.ui.geometry.Offset(it.first, it.second), androidx.compose.ui.geometry.Offset(current.first, current.second), 3.dp.toPx()) }
-                previousDeficit = current
-            } ?: run { previousDeficit = null }
+    val validWeights = points.mapNotNull(HealthTrendPoint::weightKg).map(weightUnit::fromKg)
+    if (points.size < 2 || validDeficits.isEmpty() && validWeights.isEmpty()) {
+        Text("More history is needed to draw a trend.", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    val gridColor = MaterialTheme.colorScheme.onSurface
+    val deficitColor = MaterialTheme.colorScheme.primary
+    val surplusColor = MaterialTheme.colorScheme.error
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (validDeficits.isNotEmpty()) {
+            val maxDeficit = validDeficits.maxOfOrNull { abs(it) }?.coerceAtLeast(1.0) ?: 1.0
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Daily deficit / surplus", fontWeight = FontWeight.Bold)
+                Text("±${formatDecimal(maxDeficit)} kcal", style = MaterialTheme.typography.bodySmall)
+            }
+            Canvas(Modifier.fillMaxWidth().height(112.dp)) {
+                val middle = size.height / 2f
+                drawLine(gridColor.copy(alpha = 0.35f),
+                    androidx.compose.ui.geometry.Offset(0f, middle),
+                    androidx.compose.ui.geometry.Offset(size.width, middle), 1.dp.toPx())
+                val slot = size.width / points.size.coerceAtLeast(1)
+                val barWidth = (slot * 0.58f).coerceAtLeast(2.dp.toPx())
+                points.forEachIndexed { index, point ->
+                    point.deficitCalories?.let { value ->
+                        val height = (abs(value) / maxDeficit * middle * 0.88).toFloat().coerceAtLeast(1.dp.toPx())
+                        val top = if (value >= 0.0) middle - height else middle
+                        drawRect(
+                            color = if (value >= 0.0) deficitColor else surplusColor,
+                            topLeft = androidx.compose.ui.geometry.Offset(index * slot + (slot - barWidth) / 2f, top),
+                            size = androidx.compose.ui.geometry.Size(barWidth, height)
+                        )
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Deficit", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+                Text("Surplus", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+            }
         }
         if (validWeights.isNotEmpty()) {
             val minWeight = validWeights.minOrNull() ?: 0.0
-            val range = ((validWeights.maxOrNull() ?: minWeight) - minWeight).coerceAtLeast(0.5)
-            var previousWeight: Pair<Float, Float>? = null
-            points.forEachIndexed { index, point ->
-                point.weightKg?.let { value ->
-                    val current = index * xStep to (size.height - ((value - minWeight) / range * size.height * 0.8 + size.height * 0.1).toFloat())
-                    previousWeight?.let { drawLine(Color(0xFF70D680), androidx.compose.ui.geometry.Offset(it.first, it.second), androidx.compose.ui.geometry.Offset(current.first, current.second), 3.dp.toPx()) }
-                    previousWeight = current
+            val maxWeight = validWeights.maxOrNull() ?: minWeight
+            val range = (maxWeight - minWeight).coerceAtLeast(0.5)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Smoothed weight", fontWeight = FontWeight.Bold)
+                Text("${formatDecimal(minWeight)}–${formatDecimal(maxWeight)} ${weightUnit.label}", style = MaterialTheme.typography.bodySmall)
+            }
+            Canvas(Modifier.fillMaxWidth().height(112.dp)) {
+                val xStep = size.width / (points.size - 1).coerceAtLeast(1)
+                repeat(3) { line ->
+                    val y = size.height * (line + 1) / 4f
+                    drawLine(gridColor.copy(alpha = 0.12f),
+                        androidx.compose.ui.geometry.Offset(0f, y),
+                        androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
+                }
+                var previous: androidx.compose.ui.geometry.Offset? = null
+                points.forEachIndexed { index, point ->
+                    point.weightKg?.let(weightUnit::fromKg)?.let { value ->
+                        val current = androidx.compose.ui.geometry.Offset(
+                            index * xStep,
+                            size.height - ((value - minWeight) / range * size.height * 0.75 + size.height * 0.125).toFloat()
+                        )
+                        previous?.let { drawLine(Color(0xFF70D680), it, current, 3.dp.toPx()) }
+                        drawCircle(Color(0xFF70D680), 2.5.dp.toPx(), current)
+                        previous = current
+                    } ?: run { previous = null }
                 }
             }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(points.first().date.format(DateTimeFormatter.ofPattern("dd MMM")), style = MaterialTheme.typography.labelSmall)
+            Text(points.last().date.format(DateTimeFormatter.ofPattern("dd MMM")), style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -966,7 +1058,7 @@ internal fun SettingsScreen(
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-        item { GoalsSettingsCard(state.goals, viewModel::saveGoals) }
+        item { GoalsSettingsCard(state.goals, state.healthProfile, viewModel::saveGoalsAndProfile) }
         item {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1003,6 +1095,22 @@ internal fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (state.weightPermissionGranted) "Weight import enabled" else "Enable weight import") }
                     state.healthHistoryStatus?.let { Text("28-day history: $it", style = MaterialTheme.typography.bodySmall) }
+                }
+            }
+        }
+        item {
+            val clipboard = LocalClipboardManager.current
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Product JSON", style = MaterialTheme.typography.titleLarge)
+                    Text("Copy this schema when asking an AI tool to estimate nutrition from a photo, then import its response in the manual product editor.")
+                    OutlinedButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(PRODUCT_JSON_TEMPLATE))
+                            onMessage("Product JSON schema copied.")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Copy product JSON schema") }
                 }
             }
         }
@@ -1056,7 +1164,11 @@ internal fun SettingsScreen(
 }
 
 @Composable
-private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
+private fun GoalsSettingsCard(
+    goals: UserGoals,
+    profile: HealthProfile,
+    onSave: (UserGoals, HealthProfile) -> Unit
+) {
     var mode by remember(goals) { mutableStateOf(goals.mode) }
     var calories by remember(goals) { mutableStateOf(goals.calories.toInput()) }
     var deficit by remember(goals) { mutableStateOf(goals.desiredDeficitCalories.toInput()) }
@@ -1069,6 +1181,10 @@ private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
     var saturated by remember(goals) { mutableStateOf(goals.saturatedFatG.toInput()) }
     var currency by remember(goals) { mutableStateOf(goals.currencyCode) }
     var budget by remember(goals) { mutableStateOf(goals.dailyBudgetMicros.toMoneyInput()) }
+    var weightUnit by remember(profile) { mutableStateOf(profile.weightUnit) }
+    var targetWeight by remember(profile) {
+        mutableStateOf(profile.targetWeightKg?.let(profile.weightUnit::fromKg)?.let(::formatDecimal).orEmpty())
+    }
     val numbers = listOf(calories, deficit, protein, sodium, carbs, fat, sugar, fiber, saturated)
     val budgetMicros = runCatching { parseMoneyMicros(budget) }.getOrNull()
     val candidate = runCatching {
@@ -1088,6 +1204,11 @@ private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
             dailyBudgetMicros = budgetMicros ?: error("Enter budget")
         ).requireValid()
     }.getOrNull()
+    val targetWeightValue = targetWeight.numberOrNull()
+    val targetWeightValid = targetWeight.isBlank() || targetWeightValue?.let { it > 0.0 } == true
+    val profileCandidate = if (targetWeightValid) {
+        HealthProfile(weightUnit, targetWeightValue?.let(weightUnit::toKg))
+    } else null
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Goals and daily budget", style = MaterialTheme.typography.titleLarge)
@@ -1112,6 +1233,24 @@ private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
             DecimalField("Sugar maximum g", sugar) { sugar = it }
             DecimalField("Fiber minimum g", fiber) { fiber = it }
             DecimalField("Saturated fat maximum g", saturated) { saturated = it }
+            Text("Weight goal", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                WeightUnit.entries.forEach { unit ->
+                    RadioButton(
+                        selected = weightUnit == unit,
+                        onClick = {
+                            if (weightUnit != unit) {
+                                targetWeight.numberOrNull()?.let { value ->
+                                    targetWeight = formatDecimal(unit.fromKg(weightUnit.toKg(value)))
+                                }
+                                weightUnit = unit
+                            }
+                        }
+                    )
+                    Text(unit.label, Modifier.padding(end = 12.dp))
+                }
+            }
+            DecimalField("Target weight (${weightUnit.label}, optional)", targetWeight) { targetWeight = it }
             OutlinedTextField(
                 value = currency,
                 onValueChange = { currency = it.take(3).uppercase() },
@@ -1120,7 +1259,11 @@ private fun GoalsSettingsCard(goals: UserGoals, onSave: (UserGoals) -> Unit) {
             )
             DecimalField("Daily budget", budget) { budget = it }
             Text("Targets allow 10% planning tolerance; plans up to 10% over budget rank lower.", style = MaterialTheme.typography.bodySmall)
-            Button(enabled = candidate != null && numbers.all { it.isNotBlank() }, onClick = { candidate?.let(onSave) }, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                enabled = candidate != null && profileCandidate != null && numbers.all { it.isNotBlank() },
+                onClick = { candidate?.let { goalsValue -> profileCandidate?.let { onSave(goalsValue, it) } } },
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text("Save goals")
             }
         }
@@ -1211,6 +1354,9 @@ private fun ProductEditorDialog(
     onSave: (ProductEntity, List<ProductExtraNutrientEntity>, Double) -> Unit
 ) {
     val product = draft.existing?.product
+    var showJsonImport by remember { mutableStateOf(false) }
+    var jsonInput by remember { mutableStateOf("") }
+    var jsonError by remember { mutableStateOf<String?>(null) }
     val nutrientInputs = listOf(draft.calories, draft.protein, draft.sodium, draft.carbs, draft.fat, draft.sugar, draft.fiber, draft.saturatedFat)
     val parsedPrice = runCatching { parseMoneyMicros(draft.purchasePrice) }.getOrNull()
     val parsedPurchaseServings = draft.purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
@@ -1226,6 +1372,11 @@ private fun ProductEditorDialog(
                 OutlinedTextField(draft.name, { onDraftChange(draft.copy(name = it)) }, label = { Text("Product name") })
                 OutlinedTextField(draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") })
                 OutlinedTextField(draft.servingLabel, { onDraftChange(draft.copy(servingLabel = it)) }, label = { Text("Serving label") })
+                if (product == null) {
+                    OutlinedButton(onClick = { showJsonImport = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Import product JSON")
+                    }
+                }
                 OutlinedButton(onClick = onScanNutrition, modifier = Modifier.fillMaxWidth()) { Text("Scan nutrition label") }
                 draft.ocrDraft?.let { Text("OCR values: ${it.basis.label}. Review before saving.", style = MaterialTheme.typography.bodySmall) }
                 DecimalField("Calories", draft.calories) { onDraftChange(draft.copy(calories = it)) }
@@ -1285,6 +1436,41 @@ private fun ProductEditorDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+    if (showJsonImport) {
+        AlertDialog(
+            onDismissRequest = { showJsonImport = false },
+            title = { Text("Import product JSON") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Paste JSON using the schema available in Settings. Existing draft fields are updated only after validation.")
+                    OutlinedTextField(
+                        value = jsonInput,
+                        onValueChange = { jsonInput = it; jsonError = null },
+                        label = { Text("Product JSON") },
+                        minLines = 8,
+                        maxLines = 14,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    jsonError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = jsonInput.isNotBlank(),
+                    onClick = {
+                        runCatching { draft.withProductJson(jsonInput) }
+                            .onSuccess {
+                                onDraftChange(it)
+                                showJsonImport = false
+                                jsonError = null
+                            }
+                            .onFailure { jsonError = it.message ?: "Invalid product JSON." }
+                    }
+                ) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = { showJsonImport = false }) { Text("Cancel") } }
+        )
+    }
 }
 
 @Composable

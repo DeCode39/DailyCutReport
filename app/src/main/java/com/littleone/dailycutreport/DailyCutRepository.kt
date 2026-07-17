@@ -24,6 +24,7 @@ interface DailyCutRepository {
     fun observeProducts(query: String): Flow<List<ProductEntity>>
     fun observeRecentProducts(): Flow<List<ProductEntity>>
     fun observeGoals(): Flow<UserGoals>
+    fun observeHealthProfile(): Flow<HealthProfile>
     fun observeSpending(date: LocalDate): Flow<DailySpending>
     fun observeHealthDashboard(date: LocalDate): Flow<HealthDashboard>
     suspend fun updateGoals(goals: UserGoals)
@@ -131,6 +132,10 @@ class DefaultDailyCutRepository(
 
     override fun observeGoals(): Flow<UserGoals> = dao.observeUserGoals()
         .map { (it ?: UserGoalsEntity()).toDomain().sanitized() }
+        .flowOn(Dispatchers.IO)
+
+    override fun observeHealthProfile(): Flow<HealthProfile> = dao.observeHealthProfile()
+        .map { (it ?: HealthProfileEntity()).toDomain() }
         .flowOn(Dispatchers.IO)
 
     override fun observeSpending(date: LocalDate): Flow<DailySpending> = combine(

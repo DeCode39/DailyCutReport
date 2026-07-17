@@ -528,6 +528,7 @@ data class SettingsUiState(
     val nutritionSyncStatus: String? = null,
     val healthHistoryStatus: String? = null,
     val goals: UserGoals = UserGoals(),
+    val healthProfile: HealthProfile = HealthProfile(),
     val isRefreshingHealth: Boolean = false,
     val message: String? = null
 )
@@ -542,6 +543,11 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
         viewModelScope.launch {
             repository.observeGoals().collect { goals -> _uiState.value = _uiState.value.copy(goals = goals) }
         }
+        viewModelScope.launch {
+            repository.observeHealthProfile().collect { profile ->
+                _uiState.value = _uiState.value.copy(healthProfile = profile)
+            }
+        }
     }
 
     fun refresh() {
@@ -555,6 +561,7 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
                 nutritionSyncStatus = repository.nutritionSyncStatus(),
                 healthHistoryStatus = repository.healthHistoryStatus(),
                 goals = _uiState.value.goals,
+                healthProfile = _uiState.value.healthProfile,
                 isRefreshingHealth = _uiState.value.isRefreshingHealth,
                 message = _uiState.value.message
             )
@@ -566,6 +573,23 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
             runCatching { repository.updateGoals(goals) }
                 .onSuccess { _uiState.value = _uiState.value.copy(goals = goals, message = "Goals and budget saved.") }
                 .onFailure { _uiState.value = _uiState.value.copy(message = it.message ?: "Could not save goals.") }
+        }
+    }
+
+    fun saveGoalsAndProfile(goals: UserGoals, profile: HealthProfile) {
+        viewModelScope.launch {
+            runCatching {
+                repository.updateGoals(goals)
+                repository.updateHealthProfile(profile)
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(
+                    goals = goals,
+                    healthProfile = profile,
+                    message = "Goals, budget, and weight target saved."
+                )
+            }.onFailure {
+                _uiState.value = _uiState.value.copy(message = it.message ?: "Could not save goals.")
+            }
         }
     }
 

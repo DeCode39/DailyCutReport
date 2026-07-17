@@ -17,8 +17,8 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.10.0"
+        versionCode = 28
+        versionName = "0.10.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         providers.gradleProperty("dcrAbi").orNull?.let { requestedAbi ->
             require(requestedAbi == "arm64-v8a") { "Unsupported dcrAbi: $requestedAbi" }

@@ -1,4 +1,4 @@
-# Daily Cut Report 0.10.0
+# Daily Cut Report 0.10.1
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -7,8 +7,8 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Material 3 Jetpack Compose UI with Today, Foods, Health, and Settings destinations.
 - Shared historical date navigation with a calendar capped at today.
 - One process-level Health Connect refresh on app foreground, plus manual selected-date refresh from Settings; rotation does not refresh again.
-- A deficit-focused Health dashboard with optional Health Connect weight import, manual kg/lb weights, robust 28-day weight-change ranges, an optional target weight, and capped walking guidance derived from personal sessions or body weight.
-- Scan access from Today and Foods, with the daily food log shown on Today.
+- A deficit-focused Health dashboard with optional Health Connect weight import, quick floating manual-weight entry, separately scaled deficit/weight trend plots, robust 28-day weight-change ranges, and capped walking guidance derived from personal sessions or body weight.
+- Matching floating Scan actions on Today and Foods, with the daily food log shown on Today.
 - Custom fixed-calorie or dynamic-deficit goals, editable macro targets, one ISO currency, and a daily food budget. Deficit mode requires only the desired deficit and derives its allowance from Health Connect projected burn for the selected date.
 - The idle Foods catalog shows only the 10 most recently logged unique products; typing in search queries the complete catalog.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
@@ -24,6 +24,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - On-device CameraX + bundled ML Kit barcode recognition.
 - Guided crop/rotation and on-device English, Chinese, and Japanese nutrition-label OCR from up to three camera or gallery images, with local quality warnings, image variants, source-row review, and explicit conflict selection.
 - Unsaved product drafts survive the complete OCR workflow; OCR only replaces explicitly accepted nutrient fields and never discards identity, pricing, extras, or planner settings.
+- Manual product creation accepts a validated versioned JSON document for fast AI-assisted photo estimates; Settings provides a copyable schema.
 - Locale-aware numeric presentation rounds to at most two decimal places and removes floating-point display noise without rewriting active editor text.
 - Room product catalog with linked-log nutrient corrections: editing a saved source updates its linked nutrition history while preserving quantity, time, and paid cost.
 - Optional product barcodes and 17 additive preloaded foods that never overwrite user edits.

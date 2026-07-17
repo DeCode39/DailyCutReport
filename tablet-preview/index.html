@@ -65,7 +65,7 @@
           <label><input id="productFixedPlanner" type="checkbox"> Always include one purchase unit</label>
         </div>
         <p class="muted">Nutrition-label OCR is available in the Android app only.</p>
-        <div class="actions"><button id="saveProduct">Save product</button><button id="saveAndAddProduct">Save and add</button></div>
+        <div class="actions"><button id="importProductJson">Import product JSON</button><button id="saveProduct">Save product</button><button id="saveAndAddProduct">Save and add</button></div>
       </article>
       <article class="card">
         <h2>Saved products</h2>
@@ -91,12 +91,11 @@
       <article class="card"><h2>Weight</h2><div class="grid">
         <label>Display unit<select id="weightUnit"><option value="KG">kg</option><option value="LB">lb</option></select></label>
         <label>Weight for selected date<input id="manualWeight" inputmode="decimal"></label>
-        <label>Target weight (optional)<input id="targetWeight" inputmode="decimal"></label>
-      </div><div class="actions"><button id="saveWeight">Save weight</button><button id="removeWeight" class="danger">Remove manual weight</button><button id="saveTargetWeight">Save target</button></div>
+      </div><div class="actions"><button id="saveWeight">Save weight</button><button id="removeWeight" class="danger">Remove manual weight</button></div>
       <p class="muted">Health Connect weight and walking import are Android-only. Browser weights are manual and stay in dcr_v5 local storage.</p></article>
       <article id="weightProjection" class="card"></article>
       <article id="walkingGuidance" class="card"></article>
-      <article class="card"><h2>28-day trend</h2><canvas id="healthChart" width="900" height="280"></canvas><p class="muted">Yellow: daily deficit. Green: weight. Estimates are for planning, not medical predictions.</p></article>
+      <article class="card"><h2>28-day trend</h2><canvas id="healthChart" width="900" height="280"></canvas><p class="muted">Deficit/surplus and smoothed weight use separate scales. Estimates are for planning, not medical predictions.</p></article>
     </section>
 
     <section id="settingsTab" class="tab-panel hidden">
@@ -111,9 +110,12 @@
         <label>Sugar maximum g<input id="goalSugar" inputmode="decimal"></label>
         <label>Fiber minimum g<input id="goalFiber" inputmode="decimal"></label>
         <label>Saturated fat maximum g<input id="goalSaturated" inputmode="decimal"></label>
+        <label>Weight unit<select id="goalWeightUnit"><option value="KG">kg</option><option value="LB">lb</option></select></label>
+        <label>Target weight (optional)<input id="targetWeight" inputmode="decimal"></label>
         <label>Currency code<input id="currencyCode" maxlength="3"></label>
         <label>Daily budget<input id="dailyBudget" inputmode="decimal"></label>
       </div><p class="muted">Deficit mode calculates its allowance from the selected date's projected burn minus the desired deficit. Expected burn is no longer entered manually.</p><button id="saveGoals">Save goals</button></article>
+      <article class="card"><h2>Product JSON</h2><p>Copy the schema for an AI/photo nutrition estimate, then import the completed JSON in the product editor.</p><button id="copyProductSchema">Copy product JSON schema</button></article>
       <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
       <article class="card"><h2>Native capabilities</h2><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK. All manual report, product, log, date, and export workflows are available here.</p></article>
       <article class="card"><h2>Encrypted backup</h2><p>Export or restore the same password-protected backup format used by Android.</p><div class="actions"><button id="exportBackup">Export backup</button><button id="importBackup">Restore backup</button></div><input id="backupFile" type="file" accept=".dcrbackup,application/octet-stream" class="hidden"></article>
