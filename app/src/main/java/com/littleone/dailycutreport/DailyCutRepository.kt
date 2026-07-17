@@ -137,17 +137,23 @@ class DefaultDailyCutRepository(
     }
 
     override suspend fun recommendations(date: LocalDate): RecommendationResult = withContext(Dispatchers.Default) {
-        val goals = withContext(Dispatchers.IO) { (dao.userGoals() ?: UserGoalsEntity()).toDomain() }
-        val nutrition = withContext(Dispatchers.IO) { dao.totalsForDate(date.toString()).toSummary(emptyMap()) }
-        val rawSpending = withContext(Dispatchers.IO) { dao.spendingForDate(date.toString()) }
-        val projectedBurn = withContext(Dispatchers.IO) {
-            dao.dailyReport(date.toString())?.totalCalories?.takeIf { it.isFinite() && it > 0.0 }
+        val dateKey = date.toString()
+        val input = withContext(Dispatchers.IO) {
+            val goals = (dao.userGoals() ?: UserGoalsEntity()).toDomain()
+            val nutrition = dao.totalsForDate(dateKey).toSummary(emptyMap())
+            val rawSpending = dao.spendingForDate(dateKey)
+            val projectedBurn = dao.dailyReport(dateKey)?.totalCalories?.takeIf { it.isFinite() && it > 0.0 }
+            val loggedServings = dao.foodLogsForDate(dateKey)
+                .mapNotNull { log -> log.productId?.let { it to log.quantity } }
+                .groupBy(keySelector = Pair<String, Double>::first, valueTransform = Pair<String, Double>::second)
+                .mapValues { (_, quantities) -> quantities.sum() }
+            PlannerRepositoryInput(goals, nutrition, rawSpending, projectedBurn, loggedServings)
         }
-        val planningGoals = goals.forPlanning(projectedBurn) ?: return@withContext RecommendationResult(
+        val planningGoals = input.goals.forPlanning(input.projectedBurn) ?: return@withContext RecommendationResult(
             plans = emptyList(),
             unpricedProducts = 0,
-            spendingIncomplete = rawSpending.unknownEntries > 0,
-            message = if (projectedBurn == null) {
+            spendingIncomplete = input.spending.unknownEntries > 0,
+            message = if (input.projectedBurn == null) {
                 "Refresh Health Connect to load projected burn before planning in deficit mode."
             } else {
                 "Projected burn must exceed the desired deficit before calories can be planned."
@@ -155,10 +161,15 @@ class DefaultDailyCutRepository(
         )
         val products = withContext(Dispatchers.IO) { dao.allProducts() }
         mealPlanner.generate(
-            products, nutrition,
-            DailySpending(
-                rawSpending.knownTotalMicros, rawSpending.unknownEntries, goals.dailyBudgetMicros,
-                rawSpending.catalogEstimatedMicros, rawSpending.actualPaidMicros, rawSpending.actualPaidEntries
+            products,
+            PlannerDayContext(
+                consumed = input.nutrition,
+                spending = DailySpending(
+                    input.spending.knownTotalMicros, input.spending.unknownEntries, input.goals.dailyBudgetMicros,
+                    input.spending.catalogEstimatedMicros, input.spending.actualPaidMicros,
+                    input.spending.actualPaidEntries
+                ),
+                loggedServingsByProductId = input.loggedServings
             ),
             planningGoals
         )
@@ -337,6 +348,14 @@ class DefaultDailyCutRepository(
         const val CLEAR_OVERRIDES_KEY = "manual_overrides_cleared_0_8_5"
     }
 }
+
+private data class PlannerRepositoryInput(
+    val goals: UserGoals,
+    val nutrition: NutritionSummary,
+    val spending: DailySpendingTotals,
+    val projectedBurn: Double?,
+    val loggedServings: Map<String, Double>
+)
 
 private fun DailyReportEntity.toDomain(nutrition: NutritionSummary) = DailyReport(
     date = LocalDate.parse(date),

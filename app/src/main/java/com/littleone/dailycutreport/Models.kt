@@ -397,9 +397,16 @@ data class ProductMutationResult(
     val affectedDates: Set<LocalDate>
 )
 
-data class ConstraintDelta(
+data class PlannerDayContext(
+    val consumed: NutritionSummary,
+    val spending: DailySpending,
+    val loggedServingsByProductId: Map<String, Double> = emptyMap()
+)
+
+data class ConstraintImpact(
     val label: String,
-    val actual: Double,
+    val baseline: Double,
+    val projected: Double,
     val target: Double,
     val percentDifference: Double,
     val withinTolerance: Boolean
@@ -416,7 +423,7 @@ data class RecommendationItem(
     val fixed: Boolean = false
 )
 
-enum class RecommendationMode { STRICT, UNRESTRICTED_MINIMUM }
+enum class RecommendationMode { STRICT, BALANCED_FALLBACK }
 
 data class RecommendationPlan(
     val items: List<RecommendationItem>,
@@ -425,13 +432,14 @@ data class RecommendationPlan(
     val projectedSpendingMicros: Long,
     val withinBudget: Boolean,
     val completeFit: Boolean,
-    val deltas: List<ConstraintDelta>,
+    val impacts: List<ConstraintImpact>,
     val explanation: String,
     val unknownCostItems: Int = 0,
     val mode: RecommendationMode = RecommendationMode.STRICT,
-    val unmetMinimums: List<ConstraintDelta> = emptyList()
+    val unmetMinimums: List<ConstraintImpact> = emptyList()
 ) {
-    val minimumTargetFallback: Boolean get() = mode == RecommendationMode.UNRESTRICTED_MINIMUM
+    val balancedFallback: Boolean get() = mode == RecommendationMode.BALANCED_FALLBACK
+    val minimumTargetFallback: Boolean get() = balancedFallback
     val spendingComplete: Boolean get() = unknownCostItems == 0
 }
 
@@ -441,7 +449,7 @@ data class RecommendationResult(
     val spendingIncomplete: Boolean,
     val message: String? = null,
     val excludedFromPlanningProducts: Int = 0,
-    val blockingViolations: List<ConstraintDelta> = emptyList()
+    val existingViolations: List<ConstraintImpact> = emptyList()
 )
 
 sealed interface ScannerResult {

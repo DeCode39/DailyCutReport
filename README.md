@@ -1,4 +1,4 @@
-# Daily Cut Report 0.9.6
+# Daily Cut Report 0.9.7
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -11,7 +11,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Custom fixed-calorie or dynamic-deficit goals, editable macro targets, one ISO currency, and a daily food budget. Deficit mode requires only the desired deficit and derives its allowance from Health Connect projected burn for the selected date.
 - The idle Foods catalog shows only the 10 most recently logged unique products; typing in search queries the complete catalog.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
-- A deterministic offline remaining-day planner that ranks up to three strict purchase-unit suggestions. If strict planning fails, it names the blocking values and returns one best minimum-target fallback from planner-enabled products. That fallback may ignore fixed-item, two-drink, budget, upper-nutrient, and strict quantity limits, while still respecting each product's physical purchase unit.
+- A deterministic offline remaining-day planner that ranks up to three strict purchase-unit suggestions. Already-logged fixed items count toward their requirement, and pre-existing target violations produce one baseline-aware balanced recovery option instead of a minimums-at-any-cost fallback.
 - Per-product planning controls: exclude an item, classify it as solid food or drink, or require one fixed purchase unit in every plan; recommendations allow at most two drink units.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
 - Inline bulk purchase mode on Foods keeps normal search and barcode scanning available while building a date-locked cart. It atomically adds several products with one final paid total, so multi-buy and whole-order discounts require no per-item arithmetic. The exact total is allocated internally using catalog estimates or quantity fallback and can be excluded from budget calculations as one group.

@@ -6,7 +6,7 @@ import kotlin.math.floor
 
 class OfflineMealPlanner(
     private val beamWidth: Int = 24,
-    private val fallbackBeamWidth: Int = 48,
+    private val fallbackBeamWidth: Int = 96,
     private val maxUnitsPerProduct: Int = 6,
     private val maxTotalUnits: Int = 20,
     private val maxDrinkUnits: Int = 2
@@ -16,47 +16,62 @@ class OfflineMealPlanner(
         consumed: NutritionSummary,
         spending: DailySpending,
         goals: UserGoals
+    ): RecommendationResult = generate(products, PlannerDayContext(consumed, spending), goals)
+
+    fun generate(
+        products: List<ProductEntity>,
+        context: PlannerDayContext,
+        goals: UserGoals
     ): RecommendationResult {
         goals.requireValid()
         require(goals.mode == GoalMode.CALORIE) { "Planner requires a resolved calorie allowance." }
         val eligible = products.filter(ProductEntity::includeInPlanner).sortedBy(ProductEntity::productId)
         val excludedFromPlanning = products.size - eligible.size
         val unpriced = eligible.count { it.purchasePriceMicros == null }
+        val requiredFixed = eligible.filter { product ->
+            product.alwaysIncludeInPlanner && !fixedRequirementSatisfied(product, context.loggedServingsByProductId)
+        }
+        val existingViolations = existingUpperViolations(context, goals)
 
-        val strictBlock = strictSetupBlock(eligible, spending, goals)
-        if (strictBlock == null) {
-            val strict = strictPlans(eligible, consumed, spending, goals)
-            if (strict.plans.isNotEmpty()) {
-                return RecommendationResult(
-                    plans = strict.plans,
-                    unpricedProducts = unpriced,
-                    spendingIncomplete = spending.unknownEntries > 0,
-                    excludedFromPlanningProducts = excludedFromPlanning
-                )
+        var fallbackReason: String
+        if (existingViolations.isEmpty()) {
+            val strictBlock = strictSetupBlock(requiredFixed, context.spending, goals)
+            if (strictBlock == null) {
+                val strict = strictPlans(eligible, requiredFixed, context, goals)
+                if (strict.plans.isNotEmpty()) {
+                    return RecommendationResult(
+                        plans = strict.plans,
+                        unpricedProducts = unpriced,
+                        spendingIncomplete = context.spending.unknownEntries > 0,
+                        excludedFromPlanningProducts = excludedFromPlanning
+                    )
+                }
+                fallbackReason = strict.reason ?: "No complete strict plan fits the current values and limits."
+            } else {
+                fallbackReason = strictBlock
             }
-            return fallbackResult(
-                eligible, consumed, spending, goals, unpriced, excludedFromPlanning,
-                strict.reason ?: "No complete strict plan fits the current values and limits.",
-                strict.violations
-            )
+        } else {
+            fallbackReason = "The current log already exceeds ${existingViolations.joinToString { it.label }}."
         }
 
         return fallbackResult(
-            eligible, consumed, spending, goals, unpriced, excludedFromPlanning,
-            strictBlock, emptyList()
+            eligible, context, goals, unpriced, excludedFromPlanning,
+            fallbackReason, existingViolations
         )
     }
 
+    private fun fixedRequirementSatisfied(product: ProductEntity, loggedServings: Map<String, Double>): Boolean =
+        (loggedServings[product.productId] ?: 0.0) + FIXED_EPSILON >= product.purchaseUnitServings
+
     private fun strictSetupBlock(
-        eligible: List<ProductEntity>,
+        requiredFixed: List<ProductEntity>,
         spending: DailySpending,
         goals: UserGoals
     ): String? {
         if (goals.dailyBudgetMicros <= 0L) return "Strict planning requires a daily budget."
-        val fixed = eligible.filter(ProductEntity::alwaysIncludeInPlanner)
-        if (fixed.any { it.purchasePriceMicros == null }) return "Strict planning requires prices for fixed items."
-        if (fixed.size > maxTotalUnits) return "Strict planning allows at most $maxTotalUnits fixed purchase units."
-        if (fixed.count { it.plannerType == PlannerItemType.DRINK } > maxDrinkUnits) {
+        if (requiredFixed.any { it.purchasePriceMicros == null }) return "Strict planning requires prices for fixed items."
+        if (requiredFixed.size > maxTotalUnits) return "Strict planning allows at most $maxTotalUnits fixed purchase units."
+        if (requiredFixed.count { it.plannerType == PlannerItemType.DRINK } > maxDrinkUnits) {
             return "Strict planning allows at most $maxDrinkUnits fixed drinks."
         }
         if (spending.knownTotalMicros > (goals.dailyBudgetMicros * 1.1).toLong()) {
@@ -67,30 +82,26 @@ class OfflineMealPlanner(
 
     private fun strictPlans(
         eligible: List<ProductEntity>,
-        consumed: NutritionSummary,
-        spending: DailySpending,
+        requiredFixed: List<ProductEntity>,
+        context: PlannerDayContext,
         goals: UserGoals
     ): StrictOutcome {
-        val fixedProducts = eligible.filter(ProductEntity::alwaysIncludeInPlanner)
         val allCandidates = eligible.asSequence()
             .filterNot(ProductEntity::alwaysIncludeInPlanner)
             .filter { it.purchasePriceMicros != null && it.purchasePriceMicros >= 0L && it.purchaseUnitServings > 0.0 }
             .toList()
-        val fixedState = fixedProducts.fold(PlanState()) { state, product -> state.add(product, 1, fixed = true) }
-        if (!withinHardCeilings(fixedState, consumed, spending, goals)) {
-            return StrictOutcome(
-                reason = "Current values or fixed items exceed a strict nutrition or budget ceiling.",
-                violations = hardViolations(consumed + fixedState.nutrition, spending.knownTotalMicros + fixedState.knownCostMicros, goals)
-            )
+        val fixedState = requiredFixed.fold(PlanState()) { state, product -> state.add(product, 1, fixed = true) }
+        if (!withinHardCeilings(fixedState, context.consumed, context.spending, goals)) {
+            return StrictOutcome(reason = "Required fixed items exceed a strict nutrition or budget ceiling.")
         }
-        if (allCandidates.isEmpty() && fixedProducts.isEmpty()) {
+        if (allCandidates.isEmpty() && requiredFixed.isEmpty()) {
             return StrictOutcome(reason = "Strict planning has no priced eligible products.")
         }
 
         var beam = listOf(fixedState)
-        shortlist(allCandidates, consumed, goals).forEach { product ->
+        shortlist(allCandidates, context.consumed, goals).forEach { product ->
             val price = requireNotNull(product.purchasePriceMicros)
-            val budgetHeadroom = (goals.dailyBudgetMicros * 1.1).toLong() - spending.knownTotalMicros
+            val budgetHeadroom = (goals.dailyBudgetMicros * 1.1).toLong() - context.spending.knownTotalMicros
             val affordable = if (price == 0L) maxUnitsPerProduct
             else floor(budgetHeadroom.coerceAtLeast(0).toDouble() / price).toInt()
             val perProductLimit = if (product.plannerType == PlannerItemType.DRINK) maxDrinkUnits else maxUnitsPerProduct
@@ -101,11 +112,11 @@ class OfflineMealPlanner(
                     if (state.totalUnits + units > maxTotalUnits) break
                     if (product.plannerType == PlannerItemType.DRINK && state.drinkUnits + units > maxDrinkUnits) break
                     val next = if (units == 0) state else state.add(product, units)
-                    if (withinHardCeilings(next, consumed, spending, goals)) expanded += next
+                    if (withinHardCeilings(next, context.consumed, context.spending, goals)) expanded += next
                 }
             }
             beam = expanded.distinctBy(PlanState::signature)
-                .map { ScoredState(it, evaluateStrict(it, consumed, spending, goals)) }
+                .map { ScoredState(it, evaluateStrict(it, context.consumed, context.spending, goals)) }
                 .sortedWith(strictComparator)
                 .take(beamWidth)
                 .map(ScoredState::state)
@@ -114,55 +125,53 @@ class OfflineMealPlanner(
         val plans = beam.asSequence()
             .filter { it.items.isNotEmpty() }
             .distinctBy(PlanState::signature)
-            .map { ScoredState(it, evaluateStrict(it, consumed, spending, goals)) }
+            .map { ScoredState(it, evaluateStrict(it, context.consumed, context.spending, goals)) }
             .filter { it.evaluation.complete }
             .sortedWith(strictComparator)
             .take(3)
-            .map { it.state.toRecommendation(consumed, spending, goals, RecommendationMode.STRICT) }
+            .map { it.state.toRecommendation(context, goals, RecommendationMode.STRICT) }
             .toList()
         return StrictOutcome(plans, reason = if (plans.isEmpty()) "No complete strict plan fits the current values and limits." else null)
     }
 
     private fun fallbackResult(
         eligible: List<ProductEntity>,
-        consumed: NutritionSummary,
-        spending: DailySpending,
+        context: PlannerDayContext,
         goals: UserGoals,
         unpriced: Int,
         excludedFromPlanning: Int,
         strictReason: String,
-        strictViolations: List<ConstraintDelta>
+        existingViolations: List<ConstraintImpact>
     ): RecommendationResult {
-        val fallback = unrestrictedMinimumFallback(eligible, consumed, spending, goals)
-        val message = if (fallback == null) {
-            "$strictReason No eligible product can improve an unmet protein or fiber minimum."
-        } else {
-            "$strictReason Showing one unrestricted minimum-target option; fixed-item, drink, budget, calorie, upper-nutrient, and strict quantity limits are ignored."
+        val needsMinimum = needsMinimum(context.consumed, goals)
+        val fallback = balancedFallback(eligible, context, goals)
+        val message = when {
+            fallback != null -> "$strictReason Showing one best balanced option; strict fixed-item, drink, budget, upper-limit, and quantity limits are treated as penalties rather than hard blocks."
+            !needsMinimum -> "$strictReason Protein and fiber minimums are already satisfied; no recovery suggestion is needed."
+            else -> "$strictReason No eligible product can improve an unmet protein or fiber minimum."
         }
-        val fallbackViolations = fallback?.let { plan ->
-            (plan.unmetMinimums + plan.deltas.filterNot(ConstraintDelta::withinTolerance)).distinctBy(ConstraintDelta::label)
-        }.orEmpty()
         return RecommendationResult(
             plans = listOfNotNull(fallback),
             unpricedProducts = unpriced,
-            spendingIncomplete = spending.unknownEntries > 0 || (fallback?.unknownCostItems ?: 0) > 0,
+            spendingIncomplete = context.spending.unknownEntries > 0 || (fallback?.unknownCostItems ?: 0) > 0,
             message = message,
             excludedFromPlanningProducts = excludedFromPlanning,
-            blockingViolations = (strictViolations + fallbackViolations).distinctBy(ConstraintDelta::label)
+            existingViolations = existingViolations
         )
     }
 
-    private fun unrestrictedMinimumFallback(
+    private fun balancedFallback(
         eligible: List<ProductEntity>,
-        consumed: NutritionSummary,
-        spending: DailySpending,
+        context: PlannerDayContext,
         goals: UserGoals
     ): RecommendationPlan? {
-        val needsProtein = goals.proteinG > 0.0 && consumed.proteinG < goals.proteinG
-        val needsFiber = goals.fiberG > 0.0 && consumed.fiberG < goals.fiberG
+        val needsProtein = goals.proteinG > 0.0 && context.consumed.proteinG < goals.proteinG
+        val needsFiber = goals.fiberG > 0.0 && context.consumed.fiberG < goals.fiberG
         if (!needsProtein && !needsFiber) return null
         val candidates = eligible.filter { product ->
             product.purchaseUnitServings > 0.0 &&
+                (!product.alwaysIncludeInPlanner ||
+                    !fixedRequirementSatisfied(product, context.loggedServingsByProductId)) &&
                 ((needsProtein && product.proteinG > 0.0) || (needsFiber && product.fiberG > 0.0))
         }
         if (candidates.isEmpty()) return null
@@ -171,30 +180,30 @@ class OfflineMealPlanner(
         candidates.forEach { product ->
             val expanded = ArrayList<PlanState>(beam.size * 8)
             beam.forEach { state ->
-                fallbackQuantityOptions(state, product, consumed, goals).forEach { units ->
+                fallbackQuantityOptions(state, product, context.consumed, goals).forEach { units ->
                     expanded += if (units == 0) state else state.add(product, units)
                 }
             }
             beam = expanded.distinctBy(PlanState::signature)
-                .map { MinimumScoredState(it, evaluateMinimum(it, consumed, goals)) }
-                .sortedWith(minimumComparator)
+                .map { BalancedScoredState(it, evaluateBalanced(it, context, goals)) }
+                .sortedWith(balancedComparator)
                 .take(fallbackBeamWidth)
-                .map(MinimumScoredState::state)
+                .map(BalancedScoredState::state)
         }
 
         return beam.asSequence()
             .filter { it.items.isNotEmpty() }
             .filter {
-                val projected = consumed + it.nutrition
-                (needsProtein && projected.proteinG > consumed.proteinG) ||
-                    (needsFiber && projected.fiberG > consumed.fiberG)
+                val projected = context.consumed + it.nutrition
+                (needsProtein && projected.proteinG > context.consumed.proteinG) ||
+                    (needsFiber && projected.fiberG > context.consumed.fiberG)
             }
             .distinctBy(PlanState::signature)
-            .map { MinimumScoredState(it, evaluateMinimum(it, consumed, goals)) }
-            .sortedWith(minimumComparator)
+            .map { BalancedScoredState(it, evaluateBalanced(it, context, goals)) }
+            .sortedWith(balancedComparator)
             .firstOrNull()
             ?.state
-            ?.toRecommendation(consumed, spending, goals, RecommendationMode.UNRESTRICTED_MINIMUM)
+            ?.toRecommendation(context, goals, RecommendationMode.BALANCED_FALLBACK)
     }
 
     private fun fallbackQuantityOptions(
@@ -258,7 +267,12 @@ class OfflineMealPlanner(
         return (balanced + cheapest + proteinDense + fiberDense).distinctBy(ProductEntity::productId).sortedBy(ProductEntity::productId)
     }
 
-    private fun withinHardCeilings(state: PlanState, consumed: NutritionSummary, spending: DailySpending, goals: UserGoals): Boolean {
+    private fun withinHardCeilings(
+        state: PlanState,
+        consumed: NutritionSummary,
+        spending: DailySpending,
+        goals: UserGoals
+    ): Boolean {
         val total = consumed + state.nutrition
         val targets = goals.targetsFor(null)
         return state.totalUnits <= maxTotalUnits && state.drinkUnits <= maxDrinkUnits &&
@@ -276,16 +290,18 @@ class OfflineMealPlanner(
         .thenBy { it.state.items.size }
         .thenBy { it.state.signature() }
 
-    private val minimumComparator = compareBy<MinimumScoredState> { it.evaluation.unmetMinimums }
-        .thenBy { it.evaluation.minimumShortfall }
-        .thenBy { it.state.nutrition.calories }
-        .thenBy { it.evaluation.upperDamage }
-        .thenBy { it.state.unknownCostItems > 0 }
+    private val balancedComparator = compareBy<BalancedScoredState> { it.evaluation.score }
         .thenBy { it.state.knownCostMicros }
+        .thenBy { it.state.totalUnits }
         .thenBy { it.state.items.size }
         .thenBy { it.state.signature() }
 
-    private fun evaluateStrict(state: PlanState, consumed: NutritionSummary, spending: DailySpending, goals: UserGoals): Evaluation {
+    private fun evaluateStrict(
+        state: PlanState,
+        consumed: NutritionSummary,
+        spending: DailySpending,
+        goals: UserGoals
+    ): Evaluation {
         val n = consumed + state.nutrition
         val t = goals.targetsFor(null)
         val calorieDeviation = normalizedDifference(n.calories, t.calories)
@@ -300,42 +316,46 @@ class OfflineMealPlanner(
         val misses = (if (calorieDeviation > 0.1) 1 else 0) + (if (proteinShortfall > 0.1) 1 else 0) +
             (if (fiberShortfall > 0.1) 1 else 0) + overages.count { it > 0.1 } +
             (if (budgetOverage > 0.1) 1 else 0)
-        return Evaluation(misses == 0, projected <= goals.dailyBudgetMicros, misses,
-            calorieDeviation + proteinShortfall + fiberShortfall + overages.sum() + budgetOverage * 2.0)
+        return Evaluation(
+            misses == 0, projected <= goals.dailyBudgetMicros, misses,
+            calorieDeviation + proteinShortfall + fiberShortfall + overages.sum() + budgetOverage * 2.0
+        )
     }
 
-    private fun evaluateMinimum(state: PlanState, consumed: NutritionSummary, goals: UserGoals): MinimumEvaluation {
-        val n = consumed + state.nutrition
-        val t = goals.targetsFor(null)
-        val proteinShortfall = shortfall(n.proteinG, t.proteinG)
-        val fiberShortfall = shortfall(n.fiberG, t.fiberG)
-        val unmet = (if (proteinShortfall > 0.0) 1 else 0) + (if (fiberShortfall > 0.0) 1 else 0)
-        val upperDamage = incrementalOverage(consumed.sodiumMg, n.sodiumMg, t.sodiumMg) +
-            incrementalOverage(consumed.carbsG, n.carbsG, t.carbsG) +
-            incrementalOverage(consumed.fatG, n.fatG, t.fatG) +
-            incrementalOverage(consumed.sugarG, n.sugarG, t.sugarG) +
-            incrementalOverage(consumed.saturatedFatG, n.saturatedFatG, t.saturatedFatG)
-        return MinimumEvaluation(unmet, proteinShortfall + fiberShortfall, upperDamage)
+    private fun evaluateBalanced(state: PlanState, context: PlannerDayContext, goals: UserGoals): BalancedEvaluation {
+        val before = context.consumed
+        val after = before + state.nutrition
+        val targets = goals.targetsFor(null)
+        val upperDamage = incrementalOverage(before.sodiumMg, after.sodiumMg, targets.sodiumMg) +
+            incrementalOverage(before.carbsG, after.carbsG, targets.carbsG) +
+            incrementalOverage(before.fatG, after.fatG, targets.fatG) +
+            incrementalOverage(before.sugarG, after.sugarG, targets.sugarG) +
+            incrementalOverage(before.saturatedFatG, after.saturatedFatG, targets.saturatedFatG)
+        val projectedSpending = context.spending.knownTotalMicros + state.knownCostMicros
+        val budgetDamage = if (goals.dailyBudgetMicros > 0L) {
+            incrementalOverage(
+                context.spending.knownTotalMicros.toDouble(), projectedSpending.toDouble(),
+                goals.dailyBudgetMicros.toDouble()
+            )
+        } else 0.0
+        val score = shortfall(after.proteinG, targets.proteinG) + shortfall(after.fiberG, targets.fiberG) +
+            normalizedDifference(after.calories, targets.calories) + upperDamage + budgetDamage * 2.0 +
+            state.unknownCostUnits * UNKNOWN_COST_PENALTY
+        return BalancedEvaluation(score)
     }
 
     private fun PlanState.toRecommendation(
-        consumed: NutritionSummary,
-        spending: DailySpending,
+        context: PlannerDayContext,
         goals: UserGoals,
         mode: RecommendationMode
     ): RecommendationPlan {
-        val projectedNutrition = consumed + nutrition
-        val projectedSpending = spending.knownTotalMicros + knownCostMicros
-        val evaluation = evaluateStrict(this, consumed, spending, goals)
-        val deltas = projectedNutrition.deltas(goals.targetsFor(null)) + ConstraintDelta(
-            "Budget", projectedSpending.toDouble() / MONEY_MICROS_PER_UNIT,
-            goals.dailyBudgetMicros.toDouble() / MONEY_MICROS_PER_UNIT,
-            percentageDifference(projectedSpending.toDouble(), goals.dailyBudgetMicros.toDouble()),
-            projectedSpending <= goals.dailyBudgetMicros * 1.1
-        )
-        val unmetMinimums = deltas.filter { it.label in MINIMUM_LABELS && it.actual < it.target }
-        val explanation = if (mode == RecommendationMode.UNRESTRICTED_MINIMUM) {
-            "Unrestricted fallback prioritizing unmet protein and fiber with the least additional calories. Planner limits are ignored."
+        val projectedNutrition = context.consumed + nutrition
+        val projectedSpending = context.spending.knownTotalMicros + knownCostMicros
+        val evaluation = evaluateStrict(this, context.consumed, context.spending, goals)
+        val impacts = constraintImpacts(context, projectedNutrition, projectedSpending, goals)
+        val unmetMinimums = impacts.filter { it.label in MINIMUM_LABELS && it.projected < it.target }
+        val explanation = if (mode == RecommendationMode.BALANCED_FALLBACK) {
+            "Balanced recovery option trading off protein and fiber shortfalls against calories, upper-limit damage, and budget excess."
         } else {
             if (evaluation.withinBudget) "Within goal tolerances and budget."
             else "Within goal tolerances; budget is within the allowed 10% margin."
@@ -347,7 +367,7 @@ class OfflineMealPlanner(
             projectedSpendingMicros = projectedSpending,
             withinBudget = projectedSpending <= goals.dailyBudgetMicros,
             completeFit = mode == RecommendationMode.STRICT && evaluation.complete,
-            deltas = deltas,
+            impacts = impacts,
             explanation = explanation,
             unknownCostItems = unknownCostItems,
             mode = mode,
@@ -355,34 +375,22 @@ class OfflineMealPlanner(
         )
     }
 
-    private fun hardViolations(nutrition: NutritionSummary, spendingMicros: Long, goals: UserGoals): List<ConstraintDelta> {
-        val nutritionViolations = nutrition.deltas(goals.targetsFor(null)).filter {
-            it.label !in MINIMUM_LABELS && it.percentDifference > 10.0
-        }
-        val budget = ConstraintDelta(
-            "Budget", spendingMicros.toDouble() / MONEY_MICROS_PER_UNIT,
-            goals.dailyBudgetMicros.toDouble() / MONEY_MICROS_PER_UNIT,
-            percentageDifference(spendingMicros.toDouble(), goals.dailyBudgetMicros.toDouble()),
-            spendingMicros <= goals.dailyBudgetMicros * 1.1
-        )
-        return nutritionViolations + listOfNotNull(budget.takeUnless(ConstraintDelta::withinTolerance))
-    }
-
     private data class StrictOutcome(
         val plans: List<RecommendationPlan> = emptyList(),
-        val reason: String? = null,
-        val violations: List<ConstraintDelta> = emptyList()
+        val reason: String? = null
     )
+
     private data class Evaluation(val complete: Boolean, val withinBudget: Boolean, val misses: Int, val penalty: Double)
     private data class ScoredState(val state: PlanState, val evaluation: Evaluation)
-    private data class MinimumEvaluation(val unmetMinimums: Int, val minimumShortfall: Double, val upperDamage: Double)
-    private data class MinimumScoredState(val state: PlanState, val evaluation: MinimumEvaluation)
+    private data class BalancedEvaluation(val score: Double)
+    private data class BalancedScoredState(val state: PlanState, val evaluation: BalancedEvaluation)
 
     private data class PlanState(
         val items: List<RecommendationItem> = emptyList(),
         val nutrition: NutritionSummary = NutritionSummary(),
         val knownCostMicros: Long = 0L,
         val unknownCostItems: Int = 0,
+        val unknownCostUnits: Int = 0,
         val totalUnits: Int = 0,
         val drinkUnits: Int = 0
     ) {
@@ -399,6 +407,7 @@ class OfflineMealPlanner(
                 nutrition = nutrition + itemNutrition,
                 knownCostMicros = knownCostMicros.saturatedAdd(itemCost ?: 0L),
                 unknownCostItems = unknownCostItems + if (itemCost == null) 1 else 0,
+                unknownCostUnits = unknownCostUnits.saturatedAdd(if (itemCost == null) units else 0),
                 totalUnits = totalUnits.saturatedAdd(units),
                 drinkUnits = drinkUnits.saturatedAdd(if (product.plannerType == PlannerItemType.DRINK) units else 0)
             )
@@ -409,6 +418,8 @@ class OfflineMealPlanner(
 
     private companion object {
         const val MAX_TARGET_DERIVED_UNITS = 1_000_000
+        const val FIXED_EPSILON = 1e-6
+        const val UNKNOWN_COST_PENALTY = 0.25
         val MINIMUM_LABELS = setOf("Protein", "Fiber")
     }
 }
@@ -428,23 +439,62 @@ operator fun NutritionSummary.plus(other: NutritionSummary) = NutritionSummary(
     entries + other.entries, extras
 )
 
-private fun NutritionSummary.deltas(targets: DailyNutritionTargets): List<ConstraintDelta> = listOf(
-    targetDelta("Calories", calories, targets.calories, true),
-    targetDelta("Protein", proteinG, targets.proteinG, false),
-    targetDelta("Fiber", fiberG, targets.fiberG, false),
-    targetDelta("Sodium", sodiumMg, targets.sodiumMg, true),
-    targetDelta("Carbs", carbsG, targets.carbsG, true),
-    targetDelta("Fat", fatG, targets.fatG, true),
-    targetDelta("Sugar", sugarG, targets.sugarG, true),
-    targetDelta("Saturated fat", saturatedFatG, targets.saturatedFatG, true)
-)
+private fun existingUpperViolations(context: PlannerDayContext, goals: UserGoals): List<ConstraintImpact> =
+    constraintImpacts(context, context.consumed, context.spending.knownTotalMicros, goals).filter { impact ->
+        impact.label !in setOf("Protein", "Fiber") && impact.target > 0.0 && impact.percentDifference > 10.0
+    }
 
-private fun targetDelta(label: String, actual: Double, target: Double, upper: Boolean): ConstraintDelta {
-    val difference = percentageDifference(actual, target)
-    val within = if (label == "Calories") abs(difference) <= 10.0
-    else if (upper) difference <= 10.0 else difference >= -10.0
-    return ConstraintDelta(label, actual, target, difference, within)
+private fun constraintImpacts(
+    context: PlannerDayContext,
+    projectedNutrition: NutritionSummary,
+    projectedSpendingMicros: Long,
+    goals: UserGoals
+): List<ConstraintImpact> {
+    val targets = goals.targetsFor(null)
+    return listOf(
+        targetImpact("Calories", context.consumed.calories, projectedNutrition.calories, targets.calories, upper = true),
+        targetImpact("Protein", context.consumed.proteinG, projectedNutrition.proteinG, targets.proteinG, upper = false),
+        targetImpact("Fiber", context.consumed.fiberG, projectedNutrition.fiberG, targets.fiberG, upper = false),
+        targetImpact("Sodium", context.consumed.sodiumMg, projectedNutrition.sodiumMg, targets.sodiumMg, upper = true),
+        targetImpact("Carbs", context.consumed.carbsG, projectedNutrition.carbsG, targets.carbsG, upper = true),
+        targetImpact("Fat", context.consumed.fatG, projectedNutrition.fatG, targets.fatG, upper = true),
+        targetImpact("Sugar", context.consumed.sugarG, projectedNutrition.sugarG, targets.sugarG, upper = true),
+        targetImpact(
+            "Saturated fat", context.consumed.saturatedFatG, projectedNutrition.saturatedFatG,
+            targets.saturatedFatG, upper = true
+        ),
+        targetImpact(
+            "Budget",
+            context.spending.knownTotalMicros.toDouble() / MONEY_MICROS_PER_UNIT,
+            projectedSpendingMicros.toDouble() / MONEY_MICROS_PER_UNIT,
+            goals.dailyBudgetMicros.toDouble() / MONEY_MICROS_PER_UNIT,
+            upper = true,
+            disabled = goals.dailyBudgetMicros <= 0L
+        )
+    )
 }
+
+private fun targetImpact(
+    label: String,
+    baseline: Double,
+    projected: Double,
+    target: Double,
+    upper: Boolean,
+    disabled: Boolean = false
+): ConstraintImpact {
+    val difference = if (disabled) 0.0 else percentageDifference(projected, target)
+    val within = when {
+        disabled -> true
+        label == "Calories" -> abs(difference) <= 10.0
+        upper -> difference <= 10.0
+        else -> difference >= -10.0
+    }
+    return ConstraintImpact(label, baseline, projected, target, difference, within)
+}
+
+private fun needsMinimum(nutrition: NutritionSummary, goals: UserGoals): Boolean =
+    (goals.proteinG > 0.0 && nutrition.proteinG < goals.proteinG) ||
+        (goals.fiberG > 0.0 && nutrition.fiberG < goals.fiberG)
 
 private fun percentageDifference(actual: Double, target: Double): Double =
     if (target <= 0.0) if (actual <= 0.0) 0.0 else 100.0 else ((actual - target) / target) * 100.0

@@ -98,7 +98,7 @@ class OfflineMealPlannerTest {
         assertTrue("Planner took ${elapsedMillis}ms", elapsedMillis < 500L)
     }
 
-    @Test fun existingUpperLimitViolationIsNamedAndReturnsOneMinimumTargetFallback() {
+    @Test fun existingUpperLimitViolationIsNamedAndReturnsBalancedRecovery() {
         val proteinAndFiber = ProductEntity(
             "protein", name = "Protein bowl", calories = 200.0, proteinG = 40.0, fiberG = 5.0,
             purchasePriceMicros = 20_000_000L
@@ -110,11 +110,11 @@ class OfflineMealPlannerTest {
             DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
         )
 
-        assertTrue(result.blockingViolations.any { it.label == "Sodium" })
+        assertTrue(result.existingViolations.any { it.label == "Sodium" && it.baseline == 2_500.0 })
         assertEquals(1, result.plans.size)
-        assertTrue(result.plans.single().minimumTargetFallback)
-        assertTrue(result.plans.single().nutrition.proteinG >= goals.proteinG)
-        assertTrue(result.plans.single().nutrition.fiberG >= goals.fiberG)
+        assertTrue(result.plans.single().balancedFallback)
+        assertTrue(result.plans.single().nutrition.proteinG > consumed.proteinG)
+        assertTrue(result.plans.single().nutrition.fiberG > consumed.fiberG)
     }
 
     @Test fun impossibleCompletePlanReturnsOnlyBestFallbackAndListsProjectedViolation() {
@@ -130,21 +130,21 @@ class OfflineMealPlannerTest {
         )
 
         assertEquals(1, result.plans.size)
-        assertTrue(result.plans.single().minimumTargetFallback)
-        assertTrue(result.blockingViolations.any { it.label == "Calories" })
+        assertTrue(result.plans.single().balancedFallback)
+        assertTrue(result.plans.single().impacts.any { it.label == "Calories" && !it.withinTolerance })
     }
 
-    @Test fun unrestrictedFallbackIgnoresFixedDrinkBudgetAndStrictQuantityLimits() {
+    @Test fun balancedFallbackIgnoresFixedDrinkBudgetAndStrictQuantityLimits() {
         val fallbackGoals = goals.copy(
-            calories = 10.0, proteinG = 25.0, fiberG = 0.0, dailyBudgetMicros = 1L
+            calories = 9.0, proteinG = 9.0, fiberG = 0.0, dailyBudgetMicros = 1L
         )
         val fixed = ProductEntity(
             "fixed", name = "Fixed", calories = 100.0, proteinG = 1.0,
             purchasePriceMicros = 1_000_000L, alwaysIncludeInPlanner = true
         )
         val drink = ProductEntity(
-            "drink", name = "Unpriced drink", calories = 1.0, proteinG = 1.0,
-            purchasePriceMicros = null, plannerItemType = PlannerItemType.DRINK.name
+            "drink", name = "Drink", calories = 1.0, proteinG = 1.0,
+            purchasePriceMicros = 0L, plannerItemType = PlannerItemType.DRINK.name
         )
         val disabled = ProductEntity(
             "disabled", name = "Disabled perfect item", calories = 0.0, proteinG = 100.0,
@@ -159,10 +159,10 @@ class OfflineMealPlannerTest {
         val plan = result.plans.single()
         assertTrue(plan.minimumTargetFallback)
         assertEquals(listOf("drink"), plan.items.map { it.productId })
-        assertEquals(25, plan.items.single().purchaseUnits)
-        assertEquals(null, plan.items.single().costMicros)
-        assertEquals(1, plan.unknownCostItems)
-        assertTrue(plan.items.single().purchaseUnits > 20)
+        assertEquals(9, plan.items.single().purchaseUnits)
+        assertEquals(0L, plan.items.single().costMicros)
+        assertEquals(0, plan.unknownCostItems)
+        assertTrue(plan.items.single().purchaseUnits > maxOf(6, 2))
     }
 
     @Test fun unrestrictedFallbackRespectsPhysicalPurchaseUnitServings() {
@@ -178,5 +178,142 @@ class OfflineMealPlannerTest {
         assertTrue(plan.minimumTargetFallback)
         assertEquals(2, plan.items.single().purchaseUnits)
         assertEquals(4.0, plan.items.single().servings, 0.0)
+    }
+
+    @Test fun loggedFixedPurchaseUnitIsAlreadySatisfied() {
+        val fixed = ProductEntity(
+            "fixed", name = "Fixed", calories = 300.0, proteinG = 25.0, fiberG = 2.0,
+            purchasePriceMicros = 20_000_000L, alwaysIncludeInPlanner = true
+        )
+        val optional = ProductEntity(
+            "optional", name = "Optional", calories = 700.0, proteinG = 55.0, fiberG = 8.0,
+            purchasePriceMicros = 20_000_000L
+        )
+        val context = PlannerDayContext(
+            consumed = NutritionSummary(calories = 300.0, proteinG = 25.0, fiberG = 2.0),
+            spending = DailySpending(knownTotalMicros = 20_000_000L, budgetMicros = goals.dailyBudgetMicros),
+            loggedServingsByProductId = mapOf("fixed" to 1.0)
+        )
+
+        val plan = planner.generate(listOf(fixed, optional), context, goals).plans.first()
+
+        assertEquals(RecommendationMode.STRICT, plan.mode)
+        assertTrue(plan.items.none { it.productId == "fixed" })
+        assertEquals(listOf("optional"), plan.items.map { it.productId })
+    }
+
+    @Test fun partialOrDetachedFixedLogStillRequiresOneWholeUnit() {
+        val fixed = ProductEntity(
+            "fixed", name = "Fixed", calories = 1_000.0, proteinG = 80.0, fiberG = 10.0,
+            purchasePriceMicros = 20_000_000L, alwaysIncludeInPlanner = true
+        )
+
+        listOf(mapOf("fixed" to 0.5), mapOf("detached" to 10.0)).forEach { logged ->
+            val result = planner.generate(
+                listOf(fixed),
+                PlannerDayContext(
+                    NutritionSummary(),
+                    DailySpending(budgetMicros = goals.dailyBudgetMicros),
+                    logged
+                ),
+                goals
+            )
+            val item = result.plans.single().items.single()
+            assertTrue(item.fixed)
+            assertEquals(1, item.purchaseUnits)
+            assertEquals(1.0, item.servings, 0.0)
+        }
+    }
+
+    @Test fun julySixteenRegressionBalancesDamageAndKeepsDisplayedValuesConsistent() {
+        val regressionGoals = goals.copy(
+            calories = 1_804.4383413011487, proteinG = 120.0, fiberG = 20.0,
+            sodiumMg = 2_000.0, carbsG = 150.0, fatG = 60.0, sugarG = 50.0,
+            saturatedFatG = 15.0, dailyBudgetMicros = 350_000_000L
+        )
+        val fixedFiber = ProductEntity(
+            "fixed-fiber", name = "Fixed fiber", calories = 70.0, sodiumMg = 81.0,
+            carbsG = 25.0, sugarG = 9.2, fiberG = 12.6,
+            purchasePriceMicros = 42_000_000L, alwaysIncludeInPlanner = true
+        )
+        val proteinFood = ProductEntity(
+            "protein-food", name = "Protein food", calories = 139.0, proteinG = 14.3,
+            sodiumMg = 382.0, carbsG = 11.4, fatG = 4.1, sugarG = 0.2,
+            saturatedFatG = 1.3, purchasePriceMicros = 45_000_000L
+        )
+        val context = PlannerDayContext(
+            consumed = NutritionSummary(
+                calories = 862.0, proteinG = 49.4, sodiumMg = 544.0, carbsG = 116.4,
+                fatG = 28.8, sugarG = 48.8, fiberG = 25.2, saturatedFatG = 17.1,
+                entries = 3
+            ),
+            spending = DailySpending(knownTotalMicros = 213_000_000L, budgetMicros = 350_000_000L),
+            loggedServingsByProductId = mapOf("fixed-fiber" to 2.0)
+        )
+
+        val result = planner.generate(listOf(fixedFiber, proteinFood), context, regressionGoals)
+        val plan = result.plans.single()
+
+        assertTrue(plan.balancedFallback)
+        assertEquals(listOf("protein-food"), plan.items.map { it.productId })
+        assertEquals(3, plan.items.single().purchaseUnits)
+        assertEquals(348_000_000L, plan.projectedSpendingMicros)
+        assertTrue(result.existingViolations.any {
+            it.label == "Saturated fat" && it.baseline == 17.1 && it.projected == 17.1
+        })
+        assertTrue(plan.impacts.any {
+            it.label == "Sugar" && it.baseline == 48.8 && kotlin.math.abs(it.projected - 49.4) < 0.0001
+        })
+    }
+
+    @Test fun balancedFallbackPrefersKnownCostWhenNutritionIsEqual() {
+        val consumed = NutritionSummary(sodiumMg = 2_500.0)
+        val priced = ProductEntity(
+            "priced", name = "Priced", calories = 200.0, proteinG = 40.0, fiberG = 5.0,
+            purchasePriceMicros = 20_000_000L
+        )
+        val unknown = priced.copy(productId = "unknown", name = "Unknown", purchasePriceMicros = null)
+
+        val plan = planner.generate(
+            listOf(unknown, priced), consumed,
+            DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
+        ).plans.single()
+
+        assertTrue(plan.balancedFallback)
+        assertEquals(listOf("priced"), plan.items.map { it.productId })
+    }
+
+    @Test fun balancedFallbackDoesNotRepeatASatisfiedFixedProduct() {
+        val fixed = ProductEntity(
+            "fixed", name = "Fixed", calories = 100.0, proteinG = 100.0,
+            purchasePriceMicros = 1L, alwaysIncludeInPlanner = true
+        )
+        val optional = ProductEntity(
+            "optional", name = "Optional", calories = 200.0, proteinG = 20.0,
+            purchasePriceMicros = 20_000_000L
+        )
+        val result = planner.generate(
+            listOf(fixed, optional),
+            PlannerDayContext(
+                consumed = NutritionSummary(sodiumMg = 2_500.0),
+                spending = DailySpending(budgetMicros = goals.dailyBudgetMicros),
+                loggedServingsByProductId = mapOf("fixed" to 1.0)
+            ),
+            goals
+        )
+
+        assertEquals(listOf("optional"), result.plans.single().items.map { it.productId })
+    }
+
+    @Test fun noFallbackIsNeededWhenProteinAndFiberAreAlreadySatisfied() {
+        val consumed = NutritionSummary(proteinG = goals.proteinG, fiberG = goals.fiberG, sodiumMg = 2_500.0)
+
+        val result = planner.generate(
+            listOf(ProductEntity("food", name = "Food", proteinG = 20.0, purchasePriceMicros = 1L)),
+            consumed, DailySpending(budgetMicros = goals.dailyBudgetMicros), goals
+        )
+
+        assertTrue(result.plans.isEmpty())
+        assertTrue(result.message.orEmpty().contains("already satisfied"))
     }
 }

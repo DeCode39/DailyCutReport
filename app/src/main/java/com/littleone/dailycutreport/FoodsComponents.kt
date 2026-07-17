@@ -121,11 +121,11 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 result.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-                if (result.blockingViolations.isNotEmpty()) {
-                    Text("Values preventing a complete plan", fontWeight = FontWeight.Bold)
-                    result.blockingViolations.forEach { violation ->
+                if (result.existingViolations.isNotEmpty()) {
+                    Text("Already outside target", fontWeight = FontWeight.Bold)
+                    result.existingViolations.forEach { violation ->
                         Text(
-                            "${violation.label}: ${constraintValue(violation, currencyCode)} " +
+                            "${violation.label}: ${constraintValue(violation.label, violation.baseline, currencyCode)} " +
                                 "(target ${constraintTarget(violation, currencyCode)}, ${"%+.1f".format(violation.percentDifference)}%)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
@@ -133,8 +133,8 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                     }
                 }
                 if (result.unpricedProducts > 0) Text(
-                    if (result.plans.any { it.minimumTargetFallback }) {
-                        "${result.unpricedProducts} unpriced product(s) were eligible for the unrestricted fallback; unknown costs are marked."
+                    if (result.plans.any { it.balancedFallback }) {
+                        "${result.unpricedProducts} unpriced product(s) were eligible for balanced recovery; unknown costs are marked."
                     } else {
                         "${result.unpricedProducts} unpriced product(s) were excluded from strict planning."
                     },
@@ -152,7 +152,7 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                if (plan.minimumTargetFallback) "Best minimum-target option" else "Option ${index + 1}",
+                                if (plan.balancedFallback) "Best balanced option" else "Option ${index + 1}",
                                 fontWeight = FontWeight.Bold
                             )
                             plan.items.forEach { item ->
@@ -178,11 +178,15 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                             MetricRow("Projected calories", "${plan.nutrition.calories.roundToInt()} kcal")
                             MetricRow("Projected protein", "${plan.nutrition.proteinG.roundToInt()} g")
                             Text(plan.explanation, style = MaterialTheme.typography.bodySmall)
-                            (plan.unmetMinimums + plan.deltas.filterNot { it.withinTolerance })
+                            (plan.unmetMinimums + plan.impacts.filterNot { it.withinTolerance })
                                 .distinctBy { it.label }
-                                .forEach { delta ->
+                                .forEach { impact ->
                                     Text(
-                                        "${delta.label}: ${"%+.1f".format(delta.percentDifference)}% from target",
+                                        "${impact.label}: " +
+                                            "${constraintValue(impact.label, impact.baseline, currencyCode)} → " +
+                                            "${constraintValue(impact.label, impact.projected, currencyCode)} " +
+                                            "(target ${constraintTarget(impact, currencyCode)}, " +
+                                            "${"%+.1f".format(impact.percentDifference)}%)",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error
                                     )
@@ -197,18 +201,18 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
     )
 }
 
-private fun constraintValue(delta: ConstraintDelta, currencyCode: String): String = when (delta.label) {
-    "Budget" -> formatMoney((delta.actual * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${delta.actual.roundToInt()} kcal"
-    "Sodium" -> "${delta.actual.roundToInt()} mg"
-    else -> "${delta.actual.toDisplay()} g"
+private fun constraintValue(label: String, value: Double, currencyCode: String): String = when (label) {
+    "Budget" -> formatMoney((value * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
+    "Calories" -> "${value.roundToInt()} kcal"
+    "Sodium" -> "${value.roundToInt()} mg"
+    else -> "${value.toDisplay()} g"
 }
 
-private fun constraintTarget(delta: ConstraintDelta, currencyCode: String): String = when (delta.label) {
-    "Budget" -> formatMoney((delta.target * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${delta.target.roundToInt()} kcal"
-    "Sodium" -> "${delta.target.roundToInt()} mg"
-    else -> "${delta.target.toDisplay()} g"
+private fun constraintTarget(impact: ConstraintImpact, currencyCode: String): String = when (impact.label) {
+    "Budget" -> formatMoney((impact.target * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
+    "Calories" -> "${impact.target.roundToInt()} kcal"
+    "Sodium" -> "${impact.target.roundToInt()} mg"
+    else -> "${impact.target.toDisplay()} g"
 }
 
 @Composable
