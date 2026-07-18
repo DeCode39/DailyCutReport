@@ -24,6 +24,7 @@ internal const val PRODUCT_JSON_TEMPLATE = """
     "includeInPlanner": true,
     "itemType": "FOOD",
     "fixedInPlanner": false,
+    "favorite": false,
     "extras": [
       { "name": "Potassium", "value": 0, "unit": "mg" }
     ]
@@ -87,6 +88,7 @@ internal fun ProductEditorDraft.withProductJson(input: String): ProductEditorDra
         includeInPlanner = include,
         plannerItemType = itemType,
         alwaysIncludeInPlanner = include && fixed,
+        favorite = if (product.has("favorite")) product.getBoolean("favorite") else favorite,
         extras = if (product.has("extras")) product.getJSONArray("extras").toEditorText() else extras,
         ocrDraft = null
     )

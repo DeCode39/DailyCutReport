@@ -264,7 +264,16 @@ class OfflineMealPlanner(
         val fiberDense = products.sortedWith(compareByDescending<ProductEntity> {
             it.fiberG * it.purchaseUnitServings / requireNotNull(it.purchasePriceMicros).coerceAtLeast(1L)
         }.thenBy(ProductEntity::productId)).take(6)
-        return (balanced + cheapest + proteinDense + fiberDense).distinctBy(ProductEntity::productId).sortedBy(ProductEntity::productId)
+        val favorites = products.filter(ProductEntity::favorite)
+            .sortedWith(compareBy<ProductEntity> { candidate ->
+                val servings = candidate.purchaseUnitServings
+                abs(candidate.calories * servings / remainingCalories - 0.25) -
+                    candidate.proteinG * servings / remainingProtein * 0.4 -
+                    candidate.fiberG * servings / remainingFiber * 0.2
+            }.thenBy(ProductEntity::productId))
+            .take(8)
+        return (favorites + balanced + cheapest + proteinDense + fiberDense)
+            .distinctBy(ProductEntity::productId).sortedBy(ProductEntity::productId)
     }
 
     private fun withinHardCeilings(
@@ -285,12 +294,16 @@ class OfflineMealPlanner(
     private val strictComparator = compareByDescending<ScoredState> { it.evaluation.complete }
         .thenByDescending { it.evaluation.withinBudget }
         .thenBy { it.evaluation.misses }
+        .thenBy { preferenceBand(it.evaluation.penalty) }
+        .thenByDescending { it.state.favoriteCoverage }
         .thenBy { it.evaluation.penalty }
         .thenBy { it.state.knownCostMicros }
         .thenBy { it.state.items.size }
         .thenBy { it.state.signature() }
 
-    private val balancedComparator = compareBy<BalancedScoredState> { it.evaluation.score }
+    private val balancedComparator = compareBy<BalancedScoredState> { preferenceBand(it.evaluation.score) }
+        .thenByDescending { it.state.favoriteCoverage }
+        .thenBy { it.evaluation.score }
         .thenBy { it.state.knownCostMicros }
         .thenBy { it.state.totalUnits }
         .thenBy { it.state.items.size }
@@ -392,8 +405,12 @@ class OfflineMealPlanner(
         val unknownCostItems: Int = 0,
         val unknownCostUnits: Int = 0,
         val totalUnits: Int = 0,
-        val drinkUnits: Int = 0
+        val drinkUnits: Int = 0,
+        val favoriteUnits: Int = 0
     ) {
+        val favoriteCoverage: Double get() =
+            if (totalUnits <= 0) 0.0 else favoriteUnits.toDouble() / totalUnits
+
         fun add(product: ProductEntity, units: Int, fixed: Boolean = false): PlanState {
             val servings = product.purchaseUnitServings * units
             val itemNutrition = product.nutrition(servings)
@@ -409,17 +426,21 @@ class OfflineMealPlanner(
                 unknownCostItems = unknownCostItems + if (itemCost == null) 1 else 0,
                 unknownCostUnits = unknownCostUnits.saturatedAdd(if (itemCost == null) units else 0),
                 totalUnits = totalUnits.saturatedAdd(units),
-                drinkUnits = drinkUnits.saturatedAdd(if (product.plannerType == PlannerItemType.DRINK) units else 0)
+                drinkUnits = drinkUnits.saturatedAdd(if (product.plannerType == PlannerItemType.DRINK) units else 0),
+                favoriteUnits = favoriteUnits.saturatedAdd(if (product.favorite) units else 0)
             )
         }
-
         fun signature(): String = items.joinToString("|") { "${it.productId}:${it.purchaseUnits}" }
     }
+
+    private fun preferenceBand(score: Double): Long =
+        kotlin.math.floor(score / FAVORITE_SCORE_BAND).toLong()
 
     private companion object {
         const val MAX_TARGET_DERIVED_UNITS = 1_000_000
         const val FIXED_EPSILON = 1e-6
         const val UNKNOWN_COST_PENALTY = 0.25
+        const val FAVORITE_SCORE_BAND = 0.01
         val MINIMUM_LABELS = setOf("Protein", "Fiber")
     }
 }

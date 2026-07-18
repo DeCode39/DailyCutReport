@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -23,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -70,16 +72,19 @@ class MlKitBarcodeDecoder : BarcodeDecoder {
 class BarcodeAnalyzer(
     private val decoder: BarcodeDecoder,
     private val callbackExecutor: Executor,
+    private val continuous: Boolean = false,
     private val onFound: (String) -> Unit,
     private val onFailure: (Throwable) -> Unit
 ) : ImageAnalysis.Analyzer {
     private val processing = AtomicBoolean(false)
     private val delivered = AtomicBoolean(false)
+    @Volatile private var lastContinuousValue: String? = null
+    @Volatile private var noBarcodeSinceMs: Long = 0L
 
     @androidx.annotation.OptIn(markerClass = [ExperimentalGetImage::class])
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
-        if (mediaImage == null || delivered.get() || !processing.compareAndSet(false, true)) {
+        if (mediaImage == null || (!continuous && delivered.get()) || !processing.compareAndSet(false, true)) {
             imageProxy.close()
             return
         }
@@ -89,7 +94,21 @@ class BarcodeAnalyzer(
                 input,
                 onSuccess = { results ->
                     val value = results.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue
-                    if (value != null && delivered.compareAndSet(false, true)) callbackExecutor.execute { onFound(value) }
+                    if (continuous) {
+                        val now = System.currentTimeMillis()
+                        if (value == null) {
+                            if (noBarcodeSinceMs == 0L) noBarcodeSinceMs = now
+                            if (now - noBarcodeSinceMs >= BARCODE_LEAVE_INTERVAL_MS) lastContinuousValue = null
+                        } else {
+                            noBarcodeSinceMs = 0L
+                            if (value != lastContinuousValue) {
+                                lastContinuousValue = value
+                                callbackExecutor.execute { onFound(value) }
+                            }
+                        }
+                    } else if (value != null && delivered.compareAndSet(false, true)) {
+                        callbackExecutor.execute { onFound(value) }
+                    }
                 },
                 onFailure = { error -> callbackExecutor.execute { onFailure(error) } },
                 onComplete = {
@@ -109,7 +128,15 @@ class BarcodeAnalyzer(
 }
 
 @Composable
-fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
+fun BarcodeScannerScreen(
+    multiEnabled: Boolean,
+    queueCount: Int,
+    sessionStatus: String,
+    onMultiChange: (Boolean) -> Unit,
+    onFound: (String) -> Unit,
+    onDone: () -> Unit,
+    onCancel: () -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
@@ -132,7 +159,7 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
         if (permissionGranted) {
             val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-            DisposableEffect(lifecycleOwner, retryToken) {
+            DisposableEffect(lifecycleOwner, retryToken, multiEnabled) {
                 var provider: ProcessCameraProvider? = null
                 val future = ProcessCameraProvider.getInstance(context)
                 future.addListener({
@@ -146,7 +173,8 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
                         val analyzer = BarcodeAnalyzer(
                             decoder,
                             mainExecutor,
-                            onFound = { onResult(ScannerResult.Found(it)) },
+                            continuous = multiEnabled,
+                            onFound = onFound,
                             onFailure = {
                                 val now = System.currentTimeMillis()
                                 val previous = lastFailureLogMs.get()
@@ -175,13 +203,19 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(status, color = Color.White, style = MaterialTheme.typography.titleMedium)
+            Text(if (multiEnabled) sessionStatus else status, color = Color.White, style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Multi-scan", color = Color.White)
+                Switch(checked = multiEnabled, onCheckedChange = onMultiChange)
+                if (multiEnabled) Text("$queueCount queued", color = Color.White)
+            }
             if (!permissionGranted) {
                 Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
             } else {
                 OutlinedButton(onClick = { retryToken++ }) { Text("Retry") }
             }
-            OutlinedButton(onClick = { onResult(ScannerResult.Cancelled) }) { Text("Cancel") }
+            if (multiEnabled) Button(onClick = onDone) { Text(if (queueCount == 0) "Done" else "Review $queueCount") }
+            OutlinedButton(onClick = onCancel) { Text("Cancel") }
         }
     }
 
@@ -194,3 +228,4 @@ fun BarcodeScannerScreen(onResult: (ScannerResult) -> Unit) {
 }
 
 private const val FAILURE_LOG_INTERVAL_MS = 5_000L
+private const val BARCODE_LEAVE_INTERVAL_MS = 700L

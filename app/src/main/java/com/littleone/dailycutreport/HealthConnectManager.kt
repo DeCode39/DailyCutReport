@@ -164,6 +164,12 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
             endDate.plusDays(1).atStartOfDay(zone).toInstant()
         )
         val sessions = readAllExerciseSessions(hc, range)
+        val nutritionByDate = if (NUTRITION_PERMISSION in granted) {
+            readAllNutritionRecords(hc, range).groupBy { record ->
+                val offset = record.startZoneOffset ?: zone.rules.getOffset(record.startTime)
+                record.startTime.atOffset(offset).toLocalDate()
+            }
+        } else emptyMap()
         val daily = generateSequence(startDate) { current ->
             current.plusDays(1).takeIf { !it.isAfter(endDate) }
         }.associateWith { date ->
@@ -181,6 +187,7 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                 )
             )
             val daySessions = sessions.filter { it.startTime >= dayStart && it.startTime < dayEnd }
+            val dayNutrition = nutritionByDate[date].orEmpty()
             HealthSummary(
                 steps = aggregate[StepsRecord.COUNT_TOTAL] ?: 0L,
                 distanceKm = aggregate[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0,
@@ -190,7 +197,13 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                 exerciseMinutes = daySessions.sumOf {
                     Duration.between(it.startTime, it.endTime).toMinutes().coerceAtLeast(0)
                 },
-                healthConnectStatus = "Activity history loaded from Health Connect"
+                nutritionCalories = dayNutrition.sumOf { it.energy?.inKilocalories ?: 0.0 },
+                nutritionProteinG = dayNutrition.sumOf { it.protein?.inGrams ?: 0.0 },
+                nutritionSodiumMg = dayNutrition.sumOf { it.sodium?.inMilligrams ?: 0.0 },
+                nutritionRecords = dayNutrition.size,
+                healthConnectStatus = if (NUTRITION_PERMISSION in granted) {
+                    "Activity and nutrition history loaded from Health Connect"
+                } else "Activity history loaded from Health Connect"
             )
         }
         val weights = if (WEIGHT_PERMISSION in granted) {

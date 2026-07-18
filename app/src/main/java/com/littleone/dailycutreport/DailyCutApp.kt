@@ -1,6 +1,7 @@
 package com.littleone.dailycutreport
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -31,6 +33,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +42,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -87,6 +92,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -132,6 +138,7 @@ internal fun TodayScreen(
     onScan: () -> Unit,
     onEditLog: (FoodLogSnapshot) -> Unit,
     onDeleteLog: (Long) -> Unit,
+    onDeleteGroup: (String) -> Unit,
     onMessage: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -192,8 +199,8 @@ internal fun TodayScreen(
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(state.report.verdict.label, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
                     Text(balanceLabel(state.report.energyBalance), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                    MetricRow("Burn", "${formatDecimal(state.report.finalBurnCalories)} kcal")
-                    MetricRow("Food", "${formatDecimal(state.report.finalFoodCalories)} kcal")
+                    MetricRow("Burn", "${formatCalories(state.report.finalBurnCalories)} kcal")
+                    MetricRow("Food", "${formatCalories(state.report.finalFoodCalories)} kcal")
                     MetricRow("Protein", "${formatDecimal(state.report.finalProteinG)} g")
                     MetricRow("Sodium", "${formatDecimal(state.report.finalSodiumMg)} mg")
                     Text(
@@ -248,16 +255,26 @@ internal fun TodayScreen(
                     Text("Activity", style = MaterialTheme.typography.titleLarge)
                     MetricRow("Steps", formatInteger(state.report.health.steps))
                     MetricRow("Distance", "${formatDecimal(state.report.health.distanceKm)} km")
-                    MetricRow("Active burn", "${formatDecimal(state.report.health.activeCalories)} kcal")
-                    MetricRow("Total burn", "${formatDecimal(state.report.health.totalCalories)} kcal")
+                    MetricRow("Active burn", "${formatCalories(state.report.health.activeCalories)} kcal")
+                    MetricRow("Total burn", "${formatCalories(state.report.health.totalCalories)} kcal")
                     Text(state.report.health.healthConnectStatus, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
         item { Text("Food log", style = MaterialTheme.typography.titleLarge) }
         if (state.logs.isEmpty()) item { Text("No food entries for this date.") }
-        items(state.logs, key = { it.id }) { log ->
-            FoodLogCard(log, state.goals.currencyCode, onEdit = { onEditLog(log) }, onDelete = { onDeleteLog(log.id) })
+        items(state.logs.groupForDisplay(), key = FoodLogGroup::key) { group ->
+            when (group) {
+                is FoodLogGroup.Single -> FoodLogCard(
+                    group.log, state.goals.currencyCode,
+                    onEdit = { onEditLog(group.log) },
+                    onDelete = { onDeleteLog(group.log.id) }
+                )
+                is FoodLogGroup.Bulk -> BulkFoodLogCard(
+                    group, state.goals.currencyCode, onEditLog, onDeleteLog,
+                    onDeleteGroup = { onDeleteGroup(group.mealId) }
+                )
+            }
         }
             item { Spacer(Modifier.height(80.dp)) }
         }
@@ -302,8 +319,9 @@ private fun TargetRow(label: String, value: Double, target: Double, unit: String
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label)
             Text(
-                if (hasTarget) "${formatDecimal(safeValue)} / ${formatDecimal(target)} $unit"
-                else "${formatDecimal(safeValue)} $unit · no target",
+                if (hasTarget) "${if (unit == "kcal") formatCalories(safeValue) else formatDecimal(safeValue)} / " +
+                    "${if (unit == "kcal") formatCalories(target) else formatDecimal(target)} $unit"
+                else "${if (unit == "kcal") formatCalories(safeValue) else formatDecimal(safeValue)} $unit · no target",
                 fontWeight = FontWeight.Bold
             )
         }
@@ -314,6 +332,7 @@ private fun TargetRow(label: String, value: Double, target: Double, unit: String
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FoodsScreen(
     selectedDate: LocalDate,
@@ -325,9 +344,24 @@ internal fun FoodsScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var manualCode by remember { mutableStateOf("") }
     var showManualTools by remember { mutableStateOf(false) }
+    var showCart by remember { mutableStateOf(false) }
 
     Scaffold(floatingActionButton = {
-        FloatingActionButton(onClick = { onScan(viewModel.scanTarget()) }) { Text("Scan") }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (state.mode == FoodMode.BULK || state.bulkDraft.items.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = { showCart = true },
+                    icon = { Text("●") },
+                    text = {
+                        Text(
+                            "Cart ${state.bulkDraft.items.size}" +
+                                (bulkEstimateMicros(state.bulkDraft)?.let { " · ${formatMoney(it, state.goals.currencyCode)}" } ?: "")
+                        )
+                    }
+                )
+            }
+            FloatingActionButton(onClick = { onScan(viewModel.scanTarget()) }) { Text("Scan") }
+        }
     }) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
@@ -339,9 +373,13 @@ internal fun FoodsScreen(
                 DateHeader(selectedDate, dateViewModel)
             }
             item {
-                ToggleRow("Bulk purchase mode", state.mode == FoodMode.BULK) { enabled ->
-                    viewModel.setMode(if (enabled) FoodMode.BULK else FoodMode.NORMAL)
-                }
+                FilterChip(
+                    selected = state.mode == FoodMode.BULK,
+                    onClick = {
+                        viewModel.setMode(if (state.mode == FoodMode.BULK) FoodMode.NORMAL else FoodMode.BULK)
+                    },
+                    label = { Text(if (state.mode == FoodMode.BULK) "Bulk cart active" else "Bulk cart") }
+                )
                 if (state.mode == FoodMode.BULK) Text(
                     "Search and add products below, then enter one final checkout total.",
                     style = MaterialTheme.typography.bodySmall
@@ -361,14 +399,19 @@ internal fun FoodsScreen(
                     TextButton(onClick = viewModel::createProduct) { Text("Create product manually") }
                 }
             }
-            if (state.mode == FoodMode.BULK) item {
-                BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
-            }
             if (state.query.isBlank()) {
+                val favoriteIds = state.favoriteProducts.map(ProductEntity::productId).toSet()
+                if (state.favoriteProducts.isNotEmpty()) {
+                    item { Text("Favorites", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+                    items(state.favoriteProducts, key = { "favorite-${it.productId}" }) { product ->
+                        ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
+                    }
+                }
+                val recent = state.recentProducts.filterNot { it.productId in favoriteIds }.take(5)
                 item { Text("Recently used", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-                if (state.recentProducts.isEmpty()) {
+                if (recent.isEmpty()) {
                     item { Text("Search the catalog to add your first food.", style = MaterialTheme.typography.bodySmall) }
-                } else items(state.recentProducts, key = { "recent-${it.productId}" }) { product ->
+                } else items(recent, key = { "recent-${it.productId}" }) { product ->
                     ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
                 }
             } else {
@@ -380,6 +423,12 @@ internal fun FoodsScreen(
                 }
             }
             item { Spacer(Modifier.height(80.dp)) }
+        }
+    }
+    if (showCart) {
+        ModalBottomSheet(onDismissRequest = { showCart = false }) {
+            BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
@@ -412,7 +461,65 @@ internal fun FoodWorkflowDialogs(
             onDismiss = viewModel::cancelDialogs,
             onSave = viewModel::saveLogEdit
         )
+        is FoodWorkflowState.ReviewMultiScan -> MultiScanReviewDialog(
+            workflow.items,
+            currencyCode = state.goals.currencyCode,
+            onDismiss = viewModel::cancelDialogs,
+            onQuantity = viewModel::updateMultiScanQuantity,
+            onActualPaid = viewModel::updateMultiScanActualPaid,
+            onBudgetExclusion = viewModel::updateMultiScanBudgetExclusion,
+            onConfirm = viewModel::confirmMultiScan
+        )
     }
+}
+
+@Composable
+private fun MultiScanReviewDialog(
+    items: List<MultiScanItem>,
+    currencyCode: String,
+    onDismiss: () -> Unit,
+    onQuantity: (String, String) -> Unit,
+    onActualPaid: (String, String) -> Unit,
+    onBudgetExclusion: (String, Boolean) -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review scanned items") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items.forEach { item ->
+                    Text(item.product.name, fontWeight = FontWeight.Bold)
+                    DecimalField("Servings", item.quantityText) {
+                        onQuantity(item.product.productId, it)
+                    }
+                    DecimalField("Actual paid total ($currencyCode, optional)", item.actualPaidText) {
+                        onActualPaid(item.product.productId, it)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = item.excludeCostFromBudget,
+                            onCheckedChange = { onBudgetExclusion(item.product.productId, it) }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Ignore price in daily budget")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = items.isNotEmpty() && items.all { it.quantity != null && it.actualPaidValid },
+                onClick = onConfirm
+            ) {
+                Text("Log ${items.size} products")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -423,7 +530,7 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.Bold)
                 log.mealName?.let { Text("Bulk log · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
-                Text("${formatDecimal(log.calories)} kcal · ${formatDecimal(log.proteinG)} g protein", style = MaterialTheme.typography.bodyMedium)
+                Text("${formatCalories(log.calories)} kcal · ${formatDecimal(log.proteinG)} g protein", style = MaterialTheme.typography.bodyMedium)
                 Text("${formatDecimal(log.sodiumMg)} mg sodium · ${formatDecimal(log.carbsG)} g carbs", style = MaterialTheme.typography.bodySmall)
                 Text(
                     (log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "Cost unknown") +
@@ -438,6 +545,60 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                     DropdownMenuItem(text = { Text("Edit servings") }, onClick = { menuExpanded = false; onEdit() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menuExpanded = false; onDelete() })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BulkFoodLogCard(
+    group: FoodLogGroup.Bulk,
+    currencyCode: String,
+    onEdit: (FoodLogSnapshot) -> Unit,
+    onDelete: (Long) -> Unit,
+    onDeleteGroup: () -> Unit
+) {
+    var expanded by remember(group.mealId) { mutableStateOf(false) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(group.label, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${group.logs.size} items · ${formatCalories(group.calories)} kcal · ${formatDecimal(group.proteinG)} g protein",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        group.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "Cost incomplete",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Collapse" else "Details") }
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(painterResource(R.drawable.ic_more), contentDescription = "Bulk order actions")
+                    }
+                    DropdownMenu(menuExpanded, { menuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Delete entire order") },
+                            onClick = { menuExpanded = false; onDeleteGroup() }
+                        )
+                    }
+                }
+            }
+            if (expanded) group.logs.forEach { log ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "${formatCalories(log.calories)} kcal · ${log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "unknown cost"}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    TextButton(onClick = { onEdit(log) }) { Text("Edit") }
+                    TextButton(onClick = { onDelete(log.id) }) { Text("Delete") }
                 }
             }
         }
@@ -738,6 +899,7 @@ internal fun HealthScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val dashboard = state.dashboard
     var showWeightEntry by remember { mutableStateOf(false) }
+    var showWeightManager by remember { mutableStateOf(false) }
     var explanationExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(state.message) {
         state.message?.let { onMessage(it); viewModel.clearMessage() }
@@ -759,31 +921,7 @@ internal fun HealthScreen(
             item { Text("Loading local health history…") }
         } else {
             item { DeficitSummaryCard(dashboard) }
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Weight", style = MaterialTheme.typography.titleLarge)
-                        val projection = dashboard.projection
-                        if (projection.currentWeightKg != null) {
-                            Text(
-                                "${formatDecimal(dashboard.profile.weightUnit.fromKg(projection.currentWeightKg))} ${dashboard.profile.weightUnit.label} · " +
-                                    "${projection.currentWeightSource?.name?.lowercase()?.replace('_', ' ')} · ${projection.currentWeightDate}"
-                            )
-                        } else Text("No weight recorded. Manual weights work without Health Connect permission.")
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            WeightUnit.entries.forEach { unit ->
-                                RadioButton(
-                                    selected = dashboard.profile.weightUnit == unit,
-                                    onClick = { viewModel.setWeightUnit(unit) }
-                                )
-                                Text(unit.label, Modifier.padding(end = 12.dp))
-                            }
-                        }
-                        Text("Use the Weight action to add or replace this date's manual measurement.", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-            item { WeightProjectionCard(dashboard) }
+            item { WeightAndProjectionCard(dashboard, onManage = { showWeightManager = true }) }
             item { WalkingGuidanceCard(dashboard) }
             item {
                 Card(Modifier.fillMaxWidth()) {
@@ -804,7 +942,7 @@ internal fun HealthScreen(
                             onClick = viewModel::refreshHistory,
                             enabled = !state.refreshing,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (state.refreshing) "Refreshing…" else "Refresh 28-day history") }
+                        ) { Text(if (state.refreshing) "Refreshing…" else "Refresh Health history") }
                         TextButton(onClick = { explanationExpanded = !explanationExpanded }) {
                             Text(if (explanationExpanded) "Hide calculation" else "How this is calculated")
                         }
@@ -827,13 +965,16 @@ internal fun HealthScreen(
             dashboard = dashboard,
             onDismiss = { showWeightEntry = false },
             onSave = {
-                viewModel.saveManualWeight(it)
-                showWeightEntry = false
-            },
-            onDelete = {
-                viewModel.deleteManualWeight()
+                viewModel.saveManualWeight(it.first, it.second)
                 showWeightEntry = false
             }
+        )
+    }
+    if (showWeightManager && dashboard != null) {
+        WeightRecordingsDialog(
+            dashboard,
+            onDismiss = { showWeightManager = false },
+            onDelete = viewModel::deleteManualWeight
         )
     }
 }
@@ -843,19 +984,11 @@ private fun WeightEntryDialog(
     selectedDate: LocalDate,
     dashboard: HealthDashboard,
     onDismiss: () -> Unit,
-    onSave: (Double) -> Unit,
-    onDelete: () -> Unit
+    onSave: (Pair<Double, LocalTime>) -> Unit
 ) {
-    val projection = dashboard.projection
-    val existingManual = projection.currentWeightSource == WeightSource.MANUAL &&
-        projection.currentWeightDate == selectedDate
-    var weightInput by remember(selectedDate, dashboard.profile.weightUnit, projection.currentWeightKg) {
-        mutableStateOf(
-            if (existingManual) {
-                projection.currentWeightKg?.let(dashboard.profile.weightUnit::fromKg)?.let(::formatDecimal).orEmpty()
-            } else ""
-        )
-    }
+    val context = LocalContext.current
+    var weightInput by remember(selectedDate, dashboard.profile.weightUnit) { mutableStateOf("") }
+    var time by remember(selectedDate) { mutableStateOf(if (selectedDate == LocalDate.now()) LocalTime.now() else LocalTime.NOON) }
     val parsed = weightInput.numberOrNull()?.takeIf { it > 0.0 }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -863,11 +996,16 @@ private fun WeightEntryDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 DecimalField("Weight (${dashboard.profile.weightUnit.label})", weightInput) { weightInput = it }
-                Text("Manual entries take precedence over Health Connect weight for the same date.", style = MaterialTheme.typography.bodySmall)
-                if (existingManual) TextButton(onClick = onDelete) { Text("Remove manual weight") }
+                OutlinedButton(
+                    onClick = {
+                        TimePickerDialog(context, { _, hour, minute -> time = LocalTime.of(hour, minute) }, time.hour, time.minute, true).show()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Recorded at ${time.format(DateTimeFormatter.ofPattern("HH:mm"))}") }
+                Text("Multiple measurements are combined using the daily median for trends.", style = MaterialTheme.typography.bodySmall)
             }
         },
-        confirmButton = { Button(enabled = parsed != null, onClick = { parsed?.let(onSave) }) { Text("Save") } },
+        confirmButton = { Button(enabled = parsed != null, onClick = { parsed?.let { onSave(it to time) } }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -881,27 +1019,47 @@ private fun DeficitSummaryCard(dashboard: HealthDashboard) {
             Text(
                 when {
                     deficit == null -> "Unavailable"
-                    deficit >= 0.0 -> "${formatDecimal(deficit)} kcal deficit"
-                    else -> "${formatDecimal(-deficit)} kcal surplus"
+                    deficit >= 0.0 -> "${formatCalories(deficit)} kcal deficit"
+                    else -> "${formatCalories(-deficit)} kcal surplus"
                 },
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            MetricRow("Projected final burn", dashboard.projectedBurnCalories?.let { "${formatDecimal(it)} kcal" } ?: "Unavailable")
-            MetricRow("Logged intake", if (dashboard.intakePresent) "${formatDecimal(dashboard.intakeCalories)} kcal" else "Unavailable")
-            MetricRow("Desired deficit", "${formatDecimal(dashboard.desiredDeficitCalories)} kcal")
-            MetricRow("Remaining gap", dashboard.remainingDeficitGap?.let { "${formatDecimal(it)} kcal" } ?: "Unavailable")
+            MetricRow("Projected final burn", dashboard.projectedBurnCalories?.let { "${formatCalories(it)} kcal" } ?: "Unavailable")
+            MetricRow("Logged intake", if (dashboard.intakePresent) "${formatCalories(dashboard.intakeCalories)} kcal" else "Unavailable")
+            MetricRow("Desired deficit", "${formatCalories(dashboard.desiredDeficitCalories)} kcal")
+            MetricRow("Remaining gap", dashboard.remainingDeficitGap?.let { "${formatCalories(it)} kcal" } ?: "Unavailable")
         }
     }
 }
 
 @Composable
-private fun WeightProjectionCard(dashboard: HealthDashboard) {
+private fun WeightAndProjectionCard(dashboard: HealthDashboard, onManage: () -> Unit) {
     val projection = dashboard.projection
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Expected weight change", style = MaterialTheme.typography.titleLarge)
+            Text("Weight and expected change", style = MaterialTheme.typography.titleLarge)
+            val latest = dashboard.latestWeight
+            if (latest == null) {
+                Text("No weight recorded. Manual weights work without Health Connect permission.")
+            } else {
+                MetricRow(
+                    "Latest",
+                    "${formatDecimal(dashboard.profile.weightUnit.fromKg(latest.weightKg))} ${dashboard.profile.weightUnit.label} · " +
+                        Instant.ofEpochMilli(latest.recordedAtEpochMs).atZone(ZoneId.systemDefault())
+                            .format(DateTimeFormatter.ofPattern("HH:mm"))
+                )
+                Text(
+                    latest.source.name.lowercase().replace('_', ' ') +
+                        if (dashboard.selectedDateWeights.size > 1) " · latest of ${dashboard.selectedDateWeights.size} recordings" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                dashboard.selectedDateMedianKg?.takeIf { dashboard.selectedDateWeights.size > 1 }?.let {
+                    MetricRow("Daily median", "${formatDecimal(dashboard.profile.weightUnit.fromKg(it))} ${dashboard.profile.weightUnit.label}")
+                }
+                TextButton(onClick = onManage) { Text("Manage recordings") }
+            }
             if (projection.weeklyChangeKg == null) {
                 Text("More valid burn, intake, or weight history is needed.")
             } else {
@@ -929,6 +1087,41 @@ private fun WeightProjectionCard(dashboard: HealthDashboard) {
 }
 
 @Composable
+private fun WeightRecordingsDialog(
+    dashboard: HealthDashboard,
+    onDismiss: () -> Unit,
+    onDelete: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Weight recordings") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                dashboard.selectedDateWeights.forEach { entry ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("${formatDecimal(dashboard.profile.weightUnit.fromKg(entry.weightKg))} ${dashboard.profile.weightUnit.label}")
+                            Text(
+                                "${Instant.ofEpochMilli(entry.recordedAtEpochMs).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))} · " +
+                                    entry.source.name.lowercase().replace('_', ' '),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (entry.source == WeightSource.MANUAL) {
+                            TextButton(onClick = { onDelete(entry.entryId) }) { Text("Delete") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
+    )
+}
+
+@Composable
 private fun WalkingGuidanceCard(dashboard: HealthDashboard) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -942,8 +1135,8 @@ private fun WalkingGuidanceCard(dashboard: HealthDashboard) {
                     Text("Walk ${formatDecimal(distanceKm)} km", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     MetricRow("Time", "${minutes.roundToInt()} min")
                     MetricRow("Steps", formatInteger(steps))
-                    MetricRow("Estimated burn", "${formatDecimal(estimatedBurn)} kcal")
-                    if (capped && remainingGap > 0.0) Text("Capped at 90 minutes; about ${formatDecimal(remainingGap)} kcal would remain.")
+                    MetricRow("Estimated burn", "${formatCalories(estimatedBurn)} kcal")
+                    if (capped && remainingGap > 0.0) Text("Capped at 90 minutes; about ${formatCalories(remainingGap)} kcal would remain.")
                     Text("Estimate source: ${source.name.lowercase().replace('_', ' ')}", style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -967,24 +1160,38 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
             val maxDeficit = validDeficits.maxOfOrNull { abs(it) }?.coerceAtLeast(1.0) ?: 1.0
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Daily deficit / surplus", fontWeight = FontWeight.Bold)
-                Text("±${formatDecimal(maxDeficit)} kcal", style = MaterialTheme.typography.bodySmall)
+                Text("±${formatCalories(maxDeficit)} kcal", style = MaterialTheme.typography.bodySmall)
             }
-            Canvas(Modifier.fillMaxWidth().height(112.dp)) {
-                val middle = size.height / 2f
-                drawLine(gridColor.copy(alpha = 0.35f),
-                    androidx.compose.ui.geometry.Offset(0f, middle),
-                    androidx.compose.ui.geometry.Offset(size.width, middle), 1.dp.toPx())
-                val slot = size.width / points.size.coerceAtLeast(1)
-                val barWidth = (slot * 0.58f).coerceAtLeast(2.dp.toPx())
-                points.forEachIndexed { index, point ->
-                    point.deficitCalories?.let { value ->
-                        val height = (abs(value) / maxDeficit * middle * 0.88).toFloat().coerceAtLeast(1.dp.toPx())
-                        val top = if (value >= 0.0) middle - height else middle
-                        drawRect(
-                            color = if (value >= 0.0) deficitColor else surplusColor,
-                            topLeft = androidx.compose.ui.geometry.Offset(index * slot + (slot - barWidth) / 2f, top),
-                            size = androidx.compose.ui.geometry.Size(barWidth, height)
-                        )
+            Row(Modifier.fillMaxWidth().height(112.dp)) {
+                Column(
+                    Modifier.width(48.dp).height(112.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.End
+                ) {
+                    listOf(maxDeficit, maxDeficit / 2, 0.0, -maxDeficit / 2, -maxDeficit).forEach {
+                        Text(formatCalories(it), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Canvas(Modifier.weight(1f).height(112.dp).padding(start = 6.dp)) {
+                    val middle = size.height / 2f
+                    repeat(5) { tick ->
+                        val y = size.height * tick / 4f
+                        drawLine(gridColor.copy(alpha = if (tick == 2) 0.35f else 0.12f),
+                            androidx.compose.ui.geometry.Offset(0f, y),
+                            androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
+                    }
+                    val slot = size.width / points.size.coerceAtLeast(1)
+                    val barWidth = (slot * 0.58f).coerceAtLeast(2.dp.toPx())
+                    points.forEachIndexed { index, point ->
+                        point.deficitCalories?.let { value ->
+                            val height = (abs(value) / maxDeficit * middle * 0.88).toFloat().coerceAtLeast(1.dp.toPx())
+                            val top = if (value >= 0.0) middle - height else middle
+                            drawRect(
+                                color = if (value >= 0.0) deficitColor else surplusColor,
+                                topLeft = androidx.compose.ui.geometry.Offset(index * slot + (slot - barWidth) / 2f, top),
+                                size = androidx.compose.ui.geometry.Size(barWidth, height)
+                            )
+                        }
                     }
                 }
             }
@@ -1001,25 +1208,38 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
                 Text("Smoothed weight", fontWeight = FontWeight.Bold)
                 Text("${formatDecimal(minWeight)}–${formatDecimal(maxWeight)} ${weightUnit.label}", style = MaterialTheme.typography.bodySmall)
             }
-            Canvas(Modifier.fillMaxWidth().height(112.dp)) {
-                val xStep = size.width / (points.size - 1).coerceAtLeast(1)
-                repeat(3) { line ->
-                    val y = size.height * (line + 1) / 4f
-                    drawLine(gridColor.copy(alpha = 0.12f),
-                        androidx.compose.ui.geometry.Offset(0f, y),
-                        androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
+            val axisMin = minWeight - range * 0.125
+            val axisMax = maxWeight + range * 0.125
+            Row(Modifier.fillMaxWidth().height(112.dp)) {
+                Column(
+                    Modifier.width(48.dp).height(112.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.End
+                ) {
+                    (0..4).forEach { tick ->
+                        Text(formatDecimal(axisMax - (axisMax - axisMin) * tick / 4.0), style = MaterialTheme.typography.labelSmall)
+                    }
                 }
-                var previous: androidx.compose.ui.geometry.Offset? = null
-                points.forEachIndexed { index, point ->
-                    point.weightKg?.let(weightUnit::fromKg)?.let { value ->
-                        val current = androidx.compose.ui.geometry.Offset(
-                            index * xStep,
-                            size.height - ((value - minWeight) / range * size.height * 0.75 + size.height * 0.125).toFloat()
-                        )
-                        previous?.let { drawLine(Color(0xFF70D680), it, current, 3.dp.toPx()) }
-                        drawCircle(Color(0xFF70D680), 2.5.dp.toPx(), current)
-                        previous = current
-                    } ?: run { previous = null }
+                Canvas(Modifier.weight(1f).height(112.dp).padding(start = 6.dp)) {
+                    val xStep = size.width / (points.size - 1).coerceAtLeast(1)
+                    repeat(5) { line ->
+                        val y = size.height * line / 4f
+                        drawLine(gridColor.copy(alpha = 0.12f),
+                            androidx.compose.ui.geometry.Offset(0f, y),
+                            androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
+                    }
+                    var previous: androidx.compose.ui.geometry.Offset? = null
+                    points.forEachIndexed { index, point ->
+                        point.weightKg?.let(weightUnit::fromKg)?.let { value ->
+                            val current = androidx.compose.ui.geometry.Offset(
+                                index * xStep,
+                                size.height - ((value - axisMin) / (axisMax - axisMin) * size.height).toFloat()
+                            )
+                            previous?.let { drawLine(Color(0xFF70D680), it, current, 3.dp.toPx()) }
+                            drawCircle(Color(0xFF70D680), 2.5.dp.toPx(), current)
+                            previous = current
+                        } ?: run { previous = null }
+                    }
                 }
             }
         }
@@ -1138,7 +1358,7 @@ internal fun SettingsScreen(
                     Text("Food data and reports stay in the app's local Room database. Android cloud backup is disabled.")
                     Text("Chinese, English, and Japanese label OCR uses bundled on-device models.")
                     Text("Nutrition-label OCR remains assistive; review recognized values before saving.")
-                    Text("The Quick Scan widget opens the same offline scanner directly.")
+                    Text("The Today summary widget shows local progress and opens the same offline scanner directly.")
                 }
             }
         }
@@ -1146,7 +1366,7 @@ internal fun SettingsScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 6 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 7 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -1389,6 +1609,7 @@ private fun ProductEditorDialog(
                 DecimalField("Saturated fat g", draft.saturatedFat) { onDraftChange(draft.copy(saturatedFat = it)) }
                 DecimalField("Purchase price ($currencyCode, optional)", draft.purchasePrice) { onDraftChange(draft.copy(purchasePrice = it)) }
                 DecimalField("Minimum purchase servings", draft.purchaseServings) { onDraftChange(draft.copy(purchaseServings = it)) }
+                ToggleRow("Favorite", draft.favorite) { onDraftChange(draft.copy(favorite = it)) }
                 ToggleRow("Include in daily planning", draft.includeInPlanner) {
                     onDraftChange(draft.copy(includeInPlanner = it, alwaysIncludeInPlanner = if (it) draft.alwaysIncludeInPlanner else false))
                 }
@@ -1427,6 +1648,7 @@ private fun ProductEditorDialog(
                     includeInPlanner = draft.includeInPlanner,
                     plannerItemType = draft.plannerItemType.name,
                     alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner,
+                    favorite = draft.favorite,
                     notes = product?.notes.orEmpty(),
                     createdAt = product?.createdAt ?: System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()

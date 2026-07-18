@@ -39,6 +39,7 @@ data class ProductEntity(
     val includeInPlanner: Boolean = true,
     val plannerItemType: String = PlannerItemType.FOOD.name,
     val alwaysIncludeInPlanner: Boolean = false,
+    val favorite: Boolean = false,
     val notes: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -219,6 +220,13 @@ data class DailyNutritionMutation(
     val deleted: DeletedFoodLogEntity? = null
 )
 
+data class DailyNutritionGroupMutation(
+    val date: String,
+    val before: DailyNutritionTotals,
+    val after: DailyNutritionTotals,
+    val deleted: List<DeletedFoodLogEntity>
+)
+
 data class ProductSaveMutation(
     val affectedDates: Set<String>,
     val linkedEntriesUpdated: Int
@@ -283,7 +291,7 @@ interface NutritionDao {
     suspend fun productByBarcode(barcode: String): ProductEntity?
     @Query("SELECT * FROM product_extra_nutrients WHERE productId = :productId ORDER BY name")
     suspend fun extrasForProduct(productId: String): List<ProductExtraNutrientEntity>
-    @Query("SELECT * FROM products WHERE name LIKE '%' || :query || '%' ESCAPE '\\' OR brand LIKE '%' || :query || '%' ESCAPE '\\' OR COALESCE(barcode, '') LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY name LIMIT 100")
+    @Query("SELECT * FROM products WHERE name LIKE '%' || :query || '%' ESCAPE '\\' OR brand LIKE '%' || :query || '%' ESCAPE '\\' OR COALESCE(barcode, '') LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY favorite DESC, name LIMIT 100")
     fun observeProducts(query: String): Flow<List<ProductEntity>>
     @Query("""
         SELECT p.* FROM products p
@@ -293,6 +301,17 @@ interface NutritionDao {
         LIMIT 10
     """)
     fun observeRecentProducts(): Flow<List<ProductEntity>>
+    @Query("""
+        SELECT p.* FROM products p
+        LEFT JOIN daily_food_logs f ON f.productId = p.productId
+        WHERE p.favorite = 1
+        GROUP BY p.productId
+        ORDER BY MAX(f.loggedAt) IS NULL, MAX(f.loggedAt) DESC, p.updatedAt DESC, p.productId
+        LIMIT 5
+    """)
+    fun observeFavoriteProducts(): Flow<List<ProductEntity>>
+    @Query("UPDATE products SET favorite = :favorite, updatedAt = :updatedAt WHERE productId = :productId")
+    suspend fun updateProductFavorite(productId: String, favorite: Boolean, updatedAt: Long = System.currentTimeMillis()): Int
 
     @Query("SELECT * FROM products ORDER BY productId") suspend fun allProducts(): List<ProductEntity>
     @Query("SELECT * FROM product_extra_nutrients ORDER BY productId, name") suspend fun allProductExtras(): List<ProductExtraNutrientEntity>
@@ -384,6 +403,10 @@ interface NutritionDao {
     @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC") suspend fun foodLogsForDate(date: String): List<DailyFoodLogEntity>
     @Query("SELECT * FROM daily_food_logs WHERE date = :date ORDER BY loggedAt DESC") fun observeLogsForDate(date: String): Flow<List<DailyFoodLogEntity>>
     @Query("DELETE FROM daily_food_logs WHERE id = :id") suspend fun deleteLog(id: Long): Int
+    @Query("SELECT * FROM daily_food_logs WHERE mealId = :mealId ORDER BY loggedAt, id")
+    suspend fun foodLogsForMeal(mealId: String): List<DailyFoodLogEntity>
+    @Query("DELETE FROM daily_food_logs WHERE mealId = :mealId")
+    suspend fun deleteMealLogs(mealId: String): Int
 
     @Transaction
     suspend fun addProductToDate(
@@ -460,6 +483,23 @@ interface NutritionDao {
     }
 
     @Transaction
+    suspend fun addMultipleProductsToDate(date: String, selections: List<BulkLogSelection>): DailyNutritionMutation {
+        val before = totalsForDate(date)
+        selections.forEach { selection ->
+            val product = productById(selection.productId) ?: error("A scanned product no longer exists.")
+            addProductToDate(
+                date = date,
+                product = product,
+                quantity = selection.quantity,
+                extras = extrasForProduct(product.productId),
+                actualPaidTotalMicros = selection.actualPaidTotalMicros,
+                excludeCostFromBudget = selection.excludeCostFromBudget
+            )
+        }
+        return DailyNutritionMutation(date, before, totalsForDate(date))
+    }
+
+    @Transaction
     suspend fun updateFoodLogQuantitySnapshot(
         id: Long,
         quantity: Double,
@@ -488,6 +528,31 @@ interface NutritionDao {
         insertFoodLog(deleted.log)
         if (deleted.extras.isNotEmpty()) insertDailyExtraLogs(deleted.extras)
         return DailyNutritionMutation(date, before, totalsForDate(date))
+    }
+
+    @Transaction
+    suspend fun deleteFoodLogGroup(mealId: String): DailyNutritionGroupMutation? {
+        val logs = foodLogsForMeal(mealId)
+        if (logs.isEmpty()) return null
+        val date = logs.first().date
+        require(logs.all { it.date == date }) { "A bulk group cannot span dates." }
+        val before = totalsForDate(date)
+        val deleted = logs.map { DeletedFoodLogEntity(it, dailyExtrasForLog(it.id)) }
+        check(deleteMealLogs(mealId) == logs.size) { "Bulk order changed before it could be deleted." }
+        return DailyNutritionGroupMutation(date, before, totalsForDate(date), deleted)
+    }
+
+    @Transaction
+    suspend fun restoreFoodLogGroup(deleted: List<DeletedFoodLogEntity>): DailyNutritionGroupMutation {
+        require(deleted.isNotEmpty())
+        val date = deleted.first().log.date
+        require(deleted.all { it.log.date == date })
+        val before = totalsForDate(date)
+        deleted.forEach {
+            insertFoodLog(it.log)
+            if (it.extras.isNotEmpty()) insertDailyExtraLogs(it.extras)
+        }
+        return DailyNutritionGroupMutation(date, before, totalsForDate(date), deleted)
     }
 
     @Query("""
@@ -631,7 +696,7 @@ interface NutritionDao {
         DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class,
         UserGoalsEntity::class, HealthProfileEntity::class, WeightEntryEntity::class,
         WalkingSessionSampleEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class NutritionDatabase : RoomDatabase() {
@@ -718,9 +783,18 @@ abstract class NutritionDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `favorite` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { INSTANCE = it }
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                    MIGRATION_5_6, MIGRATION_6_7
+                ).build().also { INSTANCE = it }
         }
     }
 }

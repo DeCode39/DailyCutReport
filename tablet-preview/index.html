@@ -63,6 +63,7 @@
           <label>Planner type<select id="productPlannerType"><option value="FOOD">Solid food</option><option value="DRINK">Drink</option></select></label>
           <label><input id="productIncludePlanner" type="checkbox" checked> Include in daily planning</label>
           <label><input id="productFixedPlanner" type="checkbox"> Always include one purchase unit</label>
+          <label><input id="productFavorite" type="checkbox"> Favorite</label>
         </div>
         <p class="muted">Nutrition-label OCR is available in the Android app only.</p>
         <div class="actions"><button id="importProductJson">Import product JSON</button><button id="saveProduct">Save product</button><button id="saveAndAddProduct">Save and add</button></div>
@@ -88,12 +89,11 @@
 
     <section id="healthTab" class="tab-panel hidden">
       <article id="healthSummary" class="card hero"></article>
-      <article class="card"><h2>Weight</h2><div class="grid">
-        <label>Display unit<select id="weightUnit"><option value="KG">kg</option><option value="LB">lb</option></select></label>
-        <label>Weight for selected date<input id="manualWeight" inputmode="decimal"></label>
+      <article class="card"><h2>Weight and expected change</h2><div class="grid">
+        <label>Add weight for selected date<input id="manualWeight" inputmode="decimal"></label>
       </div><div class="actions"><button id="saveWeight">Save weight</button><button id="removeWeight" class="danger">Remove manual weight</button></div>
-      <p class="muted">Health Connect weight and walking import are Android-only. Browser weights are manual and stay in dcr_v5 local storage.</p></article>
-      <article id="weightProjection" class="card"></article>
+      <p class="muted">Multiple readings are supported and their daily median drives trends. Health Connect import is Android-only. Browser weights stay in dcr_v6 local storage.</p>
+      <div id="weightProjection"></div></article>
       <article id="walkingGuidance" class="card"></article>
       <article class="card"><h2>28-day trend</h2><canvas id="healthChart" width="900" height="280"></canvas><p class="muted">Deficit/surplus and smoothed weight use separate scales. Estimates are for planning, not medical predictions.</p></article>
     </section>
@@ -119,7 +119,7 @@
       <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
       <article class="card"><h2>Native capabilities</h2><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK. All manual report, product, log, date, and export workflows are available here.</p></article>
       <article class="card"><h2>Encrypted backup</h2><p>Export or restore the same password-protected backup format used by Android.</p><div class="actions"><button id="exportBackup">Export backup</button><button id="importBackup">Restore backup</button></div><input id="backupFile" type="file" accept=".dcrbackup,application/octet-stream" class="hidden"></article>
-      <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v5</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
+      <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v6</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
     </section>
   </main>
   <nav><button data-tab="today" class="active">Today</button><button data-tab="foods">Foods</button><button data-tab="health">Health</button><button data-tab="settings">Settings</button></nav>

@@ -141,6 +141,27 @@ class NutritionDatabaseTest {
         assertEquals(15_000_001L, dao.spendingForDate("2026-01-02").knownTotalMicros)
     }
 
+    @Test fun multiScanLoggingPreservesPerItemPaidAndBudgetChoices() = runBlocking {
+        val dao = database.nutritionDao()
+        dao.saveProductWithExtras(ProductEntity("first", name = "Rice"), emptyList())
+        dao.saveProductWithExtras(ProductEntity("second", name = "Drink"), emptyList())
+
+        dao.addMultipleProductsToDate(
+            "2026-01-02",
+            listOf(
+                BulkLogSelection("first", 2.0, actualPaidTotalMicros = 12_000_000L),
+                BulkLogSelection("second", 1.0, actualPaidTotalMicros = 8_000_000L, excludeCostFromBudget = true)
+            )
+        )
+
+        val logs = dao.foodLogsForDate("2026-01-02").associateBy { it.productId }
+        assertEquals(12_000_000L, logs.getValue("first").actualPaidTotalMicros)
+        assertEquals(false, logs.getValue("first").excludeCostFromBudget)
+        assertEquals(8_000_000L, logs.getValue("second").actualPaidTotalMicros)
+        assertEquals(true, logs.getValue("second").excludeCostFromBudget)
+        assertEquals(12_000_000L, dao.spendingForDate("2026-01-02").knownTotalMicros)
+    }
+
     @Test fun escapedWildcardSearchMatchesLiteralProductName() = runBlocking {
         val dao = database.nutritionDao()
         dao.saveProductWithExtras(ProductEntity(productId = "literal", name = "100% Whey_Protein"), emptyList())
@@ -221,7 +242,8 @@ class NutritionDatabaseTest {
                 NutritionDatabase.MIGRATION_2_3,
                 NutritionDatabase.MIGRATION_3_4,
                 NutritionDatabase.MIGRATION_4_5,
-                NutritionDatabase.MIGRATION_5_6
+                NutritionDatabase.MIGRATION_5_6,
+                NutritionDatabase.MIGRATION_6_7
             )
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase

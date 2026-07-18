@@ -96,6 +96,7 @@ sealed interface FoodWorkflowState {
     data class ConfirmQuantity(val product: ProductWithExtras) : FoodWorkflowState
     data class EditProduct(val draft: ProductEditorDraft) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
+    data class ReviewMultiScan(val items: List<MultiScanItem>) : FoodWorkflowState
 }
 
 data class ProductEditorDraft(
@@ -118,6 +119,7 @@ data class ProductEditorDraft(
     val includeInPlanner: Boolean = true,
     val plannerItemType: PlannerItemType = PlannerItemType.FOOD,
     val alwaysIncludeInPlanner: Boolean = false,
+    val favorite: Boolean = false,
     val extras: String = "",
     val ocrDraft: OcrNutritionDraft? = null
 ) {
@@ -144,6 +146,7 @@ data class ProductEditorDraft(
                 includeInPlanner = product?.includeInPlanner ?: true,
                 plannerItemType = PlannerItemType.entries.firstOrNull { it.name == product?.plannerItemType } ?: PlannerItemType.FOOD,
                 alwaysIncludeInPlanner = product?.alwaysIncludeInPlanner ?: false,
+                favorite = product?.favorite ?: false,
                 extras = existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()
             )
         }
@@ -154,8 +157,15 @@ private fun Double?.editableNumber(): String = this?.takeUnless { it == 0.0 }?.l
 private fun String?.ifNullOrBlank(fallback: String): String = if (isNullOrBlank()) fallback else this
 
 sealed interface FoodUiEvent {
-    data class Message(val text: String, val undo: DeletedFoodLogSnapshot? = null) : FoodUiEvent
+    data class Message(val text: String, val undo: FoodUndo? = null) : FoodUiEvent
     data class Threshold(val text: String) : FoodUiEvent
+    data object ScannerNeedsEditor : FoodUiEvent
+    data object ResumeScanner : FoodUiEvent
+}
+
+sealed interface FoodUndo {
+    data class Single(val value: DeletedFoodLogSnapshot) : FoodUndo
+    data class Group(val value: DeletedFoodLogGroup) : FoodUndo
 }
 
 data class FoodsUiState(
@@ -163,6 +173,7 @@ data class FoodsUiState(
     val logs: List<FoodLogSnapshot> = emptyList(),
     val products: List<ProductEntity> = emptyList(),
     val recentProducts: List<ProductEntity> = emptyList(),
+    val favoriteProducts: List<ProductEntity> = emptyList(),
     val goals: UserGoals = UserGoals(),
     val query: String = "",
     val workflow: FoodWorkflowState = FoodWorkflowState.Idle,
@@ -173,6 +184,7 @@ data class FoodsUiState(
 private data class FoodsCatalogState(
     val products: List<ProductEntity>,
     val recent: List<ProductEntity>,
+    val favorites: List<ProductEntity>,
     val workflow: FoodWorkflowState,
     val mode: FoodMode,
     val bulkDraft: BulkDraft
@@ -186,6 +198,8 @@ class FoodsViewModel(
     private val workflow = MutableStateFlow<FoodWorkflowState>(FoodWorkflowState.Idle)
     private val mode = MutableStateFlow(FoodMode.NORMAL)
     private val bulkDraft = MutableStateFlow(BulkDraft())
+    private val _scannerSession = MutableStateFlow(ScannerSessionState())
+    val scannerSession: StateFlow<ScannerSessionState> = _scannerSession
     private val _events = MutableSharedFlow<FoodUiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<FoodUiEvent> = _events.asSharedFlow()
     private val thresholdNotifier = MacroThresholdNotifier()
@@ -201,9 +215,10 @@ class FoodsViewModel(
     }
 
     private val catalogState = combine(
-        productSearch, repository.observeRecentProducts(), workflow, mode, bulkDraft
-    ) { products, recent, active, foodMode, draft ->
-        FoodsCatalogState(products, recent, active, foodMode, draft)
+        productSearch, repository.observeRecentProducts(), repository.observeFavoriteProducts(),
+        combine(workflow, mode, bulkDraft) { active, foodMode, draft -> Triple(active, foodMode, draft) }
+    ) { products, recent, favorites, transient ->
+        FoodsCatalogState(products, recent, favorites, transient.first, transient.second, transient.third)
     }
     val uiState: StateFlow<FoodsUiState> = combine(
         selectedDate,
@@ -212,12 +227,142 @@ class FoodsViewModel(
         latestGoals
     ) { date, logs, catalog, goals ->
         FoodsUiState(
-            date, logs, catalog.products, catalog.recent, goals, query.value,
+            date, logs, catalog.products, catalog.recent, catalog.favorites, goals, query.value,
             catalog.workflow, catalog.mode, catalog.bulkDraft
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FoodsUiState())
 
     fun setQuery(value: String) { query.value = value }
+
+    fun beginScanner(target: ScanTarget) {
+        if (_scannerSession.value.items.isEmpty()) {
+            _scannerSession.value = ScannerSessionState(target = target)
+        } else {
+            _scannerSession.value = _scannerSession.value.copy(target = target)
+        }
+    }
+
+    fun setMultiScan(enabled: Boolean) {
+        _scannerSession.value = _scannerSession.value.copy(
+            multiEnabled = enabled,
+            status = if (enabled) "Multi-scan on · scan the first item" else "Point the camera at a barcode"
+        )
+    }
+
+    fun handleMultiScanBarcode(barcode: String) {
+        val normalized = barcode.trim()
+        if (normalized.isBlank()) return
+        viewModelScope.launch {
+            val saved = repository.lookupProduct(normalized)
+            if (saved == null) {
+                workflow.value = FoodWorkflowState.EditProduct(
+                    ProductEditorDraft.create(normalized, null, ProductSaveTarget.MULTI_SCAN_QUEUE)
+                )
+                _scannerSession.value = _scannerSession.value.copy(status = "New item · complete product details")
+                _events.emit(FoodUiEvent.ScannerNeedsEditor)
+            } else {
+                addToScannerQueue(saved.product)
+            }
+        }
+    }
+
+    private fun addToScannerQueue(product: ProductEntity) {
+        val current = _scannerSession.value
+        val existing = current.items.firstOrNull { it.product.productId == product.productId }
+        val items = if (existing == null) {
+            current.items + MultiScanItem(product)
+        } else {
+            current.items.map {
+                if (it.product.productId == product.productId) {
+                    it.copy(quantityText = ((it.quantity ?: 1.0) + 1.0).toDisplay())
+                } else it
+            }
+        }
+        _scannerSession.value = current.copy(items = items, status = "${product.name} · ${items.size} unique queued")
+    }
+
+    fun finishMultiScan() {
+        val session = _scannerSession.value
+        if (session.items.isEmpty()) {
+            _scannerSession.value = ScannerSessionState(target = session.target)
+            return
+        }
+        if (session.target == ScanTarget.BULK_CART) {
+            var draft = bulkDraft.value
+            session.items.forEach { scanned ->
+                val existing = draft.items.firstOrNull { it.product.productId == scanned.product.productId }
+                draft = if (existing == null) {
+                    draft.copy(
+                        date = draft.date ?: uiState.value.date,
+                        items = draft.items + BulkDraftItem(scanned.product, scanned.quantityText)
+                    )
+                } else {
+                    draft.copy(items = draft.items.map {
+                        if (it.product.productId == scanned.product.productId) {
+                            it.copy(quantityText = ((it.quantity ?: 0.0) + (scanned.quantity ?: 0.0)).toDisplay())
+                        } else it
+                    })
+                }
+            }
+            bulkDraft.value = draft
+            mode.value = FoodMode.BULK
+        } else {
+            workflow.value = FoodWorkflowState.ReviewMultiScan(session.items)
+        }
+        _scannerSession.value = ScannerSessionState(target = session.target)
+    }
+
+    fun updateMultiScanQuantity(productId: String, value: String) {
+        val review = workflow.value as? FoodWorkflowState.ReviewMultiScan ?: return
+        workflow.value = review.copy(items = review.items.map {
+            if (it.product.productId == productId) it.copy(quantityText = value) else it
+        })
+    }
+
+    fun updateMultiScanActualPaid(productId: String, value: String) {
+        val review = workflow.value as? FoodWorkflowState.ReviewMultiScan ?: return
+        workflow.value = review.copy(items = review.items.map {
+            if (it.product.productId == productId) it.copy(actualPaidText = value) else it
+        })
+    }
+
+    fun updateMultiScanBudgetExclusion(productId: String, excluded: Boolean) {
+        val review = workflow.value as? FoodWorkflowState.ReviewMultiScan ?: return
+        workflow.value = review.copy(items = review.items.map {
+            if (it.product.productId == productId) it.copy(excludeCostFromBudget = excluded) else it
+        })
+    }
+
+    fun confirmMultiScan() {
+        val review = workflow.value as? FoodWorkflowState.ReviewMultiScan ?: return
+        if (review.items.any { it.quantity == null || !it.actualPaidValid }) return
+        viewModelScope.launch {
+            runCatching {
+                repository.addProducts(
+                    uiState.value.date,
+                    review.items.map {
+                        BulkLogSelection(
+                            productId = it.product.productId,
+                            quantity = requireNotNull(it.quantity),
+                            actualPaidTotalMicros = it.actualPaidTotalMicros,
+                            excludeCostFromBudget = it.excludeCostFromBudget
+                        )
+                    }
+                )
+            }.onSuccess {
+                workflow.value = FoodWorkflowState.Idle
+                afterFoodChange(it)
+                _events.emit(FoodUiEvent.Message("Logged ${review.items.size} scanned products."))
+            }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not log scanned products.")) }
+        }
+    }
+
+    fun toggleFavorite(product: ProductEntity) {
+        viewModelScope.launch {
+            runCatching { repository.setProductFavorite(product.productId, !product.favorite) }
+                .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not update favorite.")) }
+        }
+    }
 
     fun handleBarcode(barcode: String, target: ScanTarget = ScanTarget.STANDALONE) {
         val normalized = barcode.trim()
@@ -348,6 +493,11 @@ class FoodsViewModel(
                         workflow.value = FoodWorkflowState.Idle
                         _events.emit(FoodUiEvent.Message("Saved ${product.name} and added it to the bulk cart."))
                     }
+                    ProductSaveTarget.MULTI_SCAN_QUEUE -> {
+                        addToScannerQueue(product)
+                        workflow.value = FoodWorkflowState.Idle
+                        _events.emit(FoodUiEvent.ResumeScanner)
+                    }
                     ProductSaveTarget.CATALOG_ONLY -> {
                         bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map { item ->
                             if (item.product.productId == result.product.productId) item.copy(product = result.product) else item
@@ -389,7 +539,7 @@ class FoodsViewModel(
             runCatching { repository.deleteFoodLog(id) }
                 .onSuccess { result ->
                     afterFoodChange(result)
-                    _events.emit(FoodUiEvent.Message("Food entry deleted.", result.deleted))
+                    _events.emit(FoodUiEvent.Message("Food entry deleted.", result.deleted?.let(FoodUndo::Single)))
                 }
                 .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not delete food.")) }
         }
@@ -403,6 +553,29 @@ class FoodsViewModel(
                     _events.emit(FoodUiEvent.Message("Food entry restored."))
                 }
                 .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not restore food.")) }
+        }
+    }
+
+    fun deleteGroup(mealId: String) {
+        viewModelScope.launch {
+            runCatching { repository.deleteFoodLogGroup(mealId) }
+                .onSuccess { result ->
+                    thresholdNotifier.crossingMessage(result.date, result.before, result.after, latestTargets.value)
+                        ?.let { _events.emit(FoodUiEvent.Threshold(it)) }
+                    _events.emit(FoodUiEvent.Message("Bulk order deleted.", FoodUndo.Group(result.deleted)))
+                }
+                .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not delete bulk order.")) }
+        }
+    }
+
+    fun undo(undo: FoodUndo) {
+        when (undo) {
+            is FoodUndo.Single -> undoDelete(undo.value)
+            is FoodUndo.Group -> viewModelScope.launch {
+                runCatching { repository.restoreFoodLogGroup(undo.value) }
+                    .onSuccess { _events.emit(FoodUiEvent.Message("Bulk order restored.")) }
+                    .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not restore bulk order.")) }
+            }
         }
     }
 
@@ -568,6 +741,13 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
         }
     }
 
+    fun permissionsChanged() {
+        viewModelScope.launch {
+            repository.ensureHealthBootstrap()
+            refresh()
+        }
+    }
+
     fun saveGoals(goals: UserGoals) {
         viewModelScope.launch {
             runCatching { repository.updateGoals(goals) }
@@ -646,11 +826,6 @@ class HealthViewModel(
     ) { dashboard, busy, note -> HealthUiState(dashboard, busy, note) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HealthUiState())
 
-    fun setWeightUnit(unit: WeightUnit) {
-        val profile = uiState.value.dashboard?.profile ?: return
-        viewModelScope.launch { repository.updateHealthProfile(profile.copy(weightUnit = unit)) }
-    }
-
     fun setTargetWeight(displayValue: Double?) {
         val profile = uiState.value.dashboard?.profile ?: return
         val kilograms = displayValue?.let(profile.weightUnit::toKg)
@@ -660,12 +835,13 @@ class HealthViewModel(
         }
     }
 
-    fun saveManualWeight(displayValue: Double) {
+    fun saveManualWeight(displayValue: Double, time: java.time.LocalTime) {
         val dashboard = uiState.value.dashboard ?: return
         viewModelScope.launch {
             runCatching {
-                repository.upsertManualWeight(
+                repository.addManualWeight(
                     dashboard.selectedDate,
+                    time,
                     dashboard.profile.weightUnit.toKg(displayValue)
                 )
             }.onSuccess { message.value = "Weight saved." }
@@ -673,10 +849,9 @@ class HealthViewModel(
         }
     }
 
-    fun deleteManualWeight() {
-        val dashboard = uiState.value.dashboard ?: return
+    fun deleteManualWeight(entryId: String) {
         viewModelScope.launch {
-            repository.deleteManualWeight(dashboard.selectedDate)
+            repository.deleteManualWeight(entryId)
             message.value = "Manual weight removed."
         }
     }
@@ -686,7 +861,7 @@ class HealthViewModel(
         viewModelScope.launch {
             refreshing.value = true
             repository.syncHealthHistory(force = true)
-                .onSuccess { message.value = "28-day Health Connect history refreshed." }
+                .onSuccess { message.value = "30-day Health Connect history refreshed." }
                 .onFailure { message.value = "History refresh failed: ${it.message ?: "unknown error"}" }
             refreshing.value = false
         }

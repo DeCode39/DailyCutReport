@@ -14,13 +14,13 @@ class HealthAnalyticsTest {
         assertEquals("0", formatDecimal(-0.0001))
     }
 
-    @Test fun manualWeightWinsForTheSameDate() {
+    @Test fun dailyMedianUsesAllSameDateReadings() {
         val date = LocalDate.of(2026, 7, 17)
         val values = listOf(
             WeightEntry("hc", date, 2L, 81.0, WeightSource.HEALTH_CONNECT),
             WeightEntry("manual", date, 1L, 79.5, WeightSource.MANUAL)
         )
-        assertEquals(79.5, HealthAnalyticsEngine().representativeWeights(values).single().weightKg, 0.0)
+        assertEquals(80.25, HealthAnalyticsEngine().representativeWeights(values).single().weightKg, 0.0)
     }
 
     @Test fun walkingUsesWeightFallbackAndCapsAtNinetyMinutes() {

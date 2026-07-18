@@ -102,8 +102,13 @@ data class HealthDashboard(
     val projection: WeightProjection,
     val walkingEstimate: WalkingEstimate?,
     val trends: List<HealthTrendPoint>,
+    val selectedDateWeights: List<WeightEntry> = emptyList(),
     val historyLastSynced: String? = null
-)
+) {
+    val latestWeight: WeightEntry? get() = selectedDateWeights.maxByOrNull(WeightEntry::recordedAtEpochMs)
+    val selectedDateMedianKg: Double? get() = selectedDateWeights
+        .map(WeightEntry::weightKg).filter(Double::isFinite).takeIf(List<Double>::isNotEmpty)?.medianValue()
+}
 
 class HealthAnalyticsEngine {
     fun dashboard(
@@ -146,7 +151,9 @@ class HealthAnalyticsEngine {
             }.toList()
         return HealthDashboard(
             selectedDate, burn, intake, intakePresent, goals.desiredDeficitCalories,
-            projectedDeficit, gap, profile, projection, walking, trends, historyLastSynced
+            projectedDeficit, gap, profile, projection, walking, trends,
+            weights.filter { it.date == selectedDate }.sortedByDescending(WeightEntry::recordedAtEpochMs),
+            historyLastSynced
         )
     }
 
@@ -243,10 +250,8 @@ class HealthAnalyticsEngine {
         .filter { it.weightKg.isFinite() && it.weightKg > 0.0 }
         .groupBy(WeightEntry::date)
         .mapNotNull { (date, values) ->
-            val manual = values.filter { it.source == WeightSource.MANUAL }.maxByOrNull(WeightEntry::recordedAtEpochMs)
-            manual ?: values.sortedBy(WeightEntry::weightKg).let { sorted ->
-                sorted.getOrNull(sorted.size / 2)?.copy(date = date)
-            }
+            val latest = values.maxByOrNull(WeightEntry::recordedAtEpochMs) ?: return@mapNotNull null
+            latest.copy(date = date, weightKg = values.map(WeightEntry::weightKg).medianValue())
         }.sortedBy(WeightEntry::date)
 
     private fun plausibleSession(sample: WalkingSessionSample): Boolean =
@@ -290,6 +295,13 @@ class HealthAnalyticsEngine {
         const val KCAL_PER_KILOGRAM = 7_700.0
         const val MAX_WALK_MINUTES = 90.0
     }
+}
+
+private fun List<Double>.medianValue(): Double {
+    val sorted = filter(Double::isFinite).sorted()
+    require(sorted.isNotEmpty())
+    val middle = sorted.size / 2
+    return if (sorted.size % 2 == 0) (sorted[middle - 1] + sorted[middle]) / 2.0 else sorted[middle]
 }
 
 fun HealthProfileEntity.toDomain() = HealthProfile(

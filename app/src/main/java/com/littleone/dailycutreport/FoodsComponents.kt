@@ -98,7 +98,7 @@ internal fun BulkDraftCard(
     }
 }
 
-private fun bulkEstimateMicros(draft: BulkDraft): Long? {
+internal fun bulkEstimateMicros(draft: BulkDraft): Long? {
     if (draft.items.isEmpty()) return null
     var total = 0L
     draft.items.forEach { item ->
@@ -175,7 +175,7 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                                 "${plan.unknownCostItems} suggested item(s) have unknown cost; budget compliance is not evaluated.",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            MetricRow("Projected calories", "${formatDecimal(plan.nutrition.calories)} kcal")
+                            MetricRow("Projected calories", "${formatCalories(plan.nutrition.calories)} kcal")
                             MetricRow("Projected protein", "${formatDecimal(plan.nutrition.proteinG)} g")
                             Text(plan.explanation, style = MaterialTheme.typography.bodySmall)
                             (plan.unmetMinimums + plan.impacts.filterNot { it.withinTolerance })
@@ -203,14 +203,14 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
 
 private fun constraintValue(label: String, value: Double, currencyCode: String): String = when (label) {
     "Budget" -> formatMoney((value * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${formatDecimal(value)} kcal"
+    "Calories" -> "${formatCalories(value)} kcal"
     "Sodium" -> "${formatDecimal(value)} mg"
     else -> "${value.toDisplay()} g"
 }
 
 private fun constraintTarget(impact: ConstraintImpact, currencyCode: String): String = when (impact.label) {
     "Budget" -> formatMoney((impact.target * MONEY_MICROS_PER_UNIT).toLong(), currencyCode)
-    "Calories" -> "${formatDecimal(impact.target)} kcal"
+    "Calories" -> "${formatCalories(impact.target)} kcal"
     "Sodium" -> "${formatDecimal(impact.target)} mg"
     else -> "${impact.target.toDisplay()} g"
 }
@@ -234,6 +234,9 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
                     },
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+            TextButton(onClick = { viewModel.toggleFavorite(product) }) {
+                Text(if (product.favorite) "★" else "☆")
             }
             TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit") }
             Button(

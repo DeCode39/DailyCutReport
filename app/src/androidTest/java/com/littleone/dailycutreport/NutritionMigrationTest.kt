@@ -94,5 +94,19 @@ class NutritionMigrationTest {
         migrated.close()
     }
 
+    @Test fun migrationSixToSevenAddsFavoritesWithoutChangingProducts() {
+        helper.createDatabase("migration-6-7", 6).apply {
+            execSQL("INSERT INTO products (productId,barcode,name,brand,servingLabel,calories,proteinG,sodiumMg,carbsG,fatG,sugarG,fiberG,saturatedFatG,purchasePriceMicros,purchaseUnitServings,includeInPlanner,plannerItemType,alwaysIncludeInPlanner,notes,createdAt,updatedAt) VALUES ('meal',NULL,'Meal','','1 serving',100,10,20,0,0,0,0,0,NULL,1,1,'FOOD',0,'',1,1)")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate("migration-6-7", 7, true, NutritionDatabase.MIGRATION_6_7)
+        migrated.query("SELECT name,favorite FROM products WHERE productId='meal'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("Meal", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+        }
+        migrated.close()
+    }
+
     private companion object { const val DATABASE_NAME = "migration-3-4" }
 }

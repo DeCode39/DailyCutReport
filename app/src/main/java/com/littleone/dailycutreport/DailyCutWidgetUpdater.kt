@@ -12,13 +12,19 @@ object DailyCutWidgetUpdater {
         val manager = AppWidgetManager.getInstance(appContext)
         val ids = manager.getAppWidgetIds(ComponentName(appContext, QuickScanWidgetProvider::class.java))
         if (ids.isEmpty()) return
-        val label = todayDeficitLabel(appContext)
+        val state = todayState(appContext)
         ids.forEach { id ->
-            manager.updateAppWidget(id, QuickScanWidgetProvider.widgetViews(appContext, label))
+            manager.updateAppWidget(
+                id,
+                QuickScanWidgetProvider.widgetViews(
+                    appContext, state,
+                    QuickScanWidgetProvider.isExpanded(manager.getAppWidgetOptions(id))
+                )
+            )
         }
     }
 
-    private suspend fun todayDeficitLabel(context: Context): String {
+    private suspend fun todayState(context: Context): TodayWidgetState {
         val dao = NutritionDatabase.get(context).nutritionDao()
         val today = LocalDate.now().toString()
         val report = dao.dailyReport(today)
@@ -32,14 +38,28 @@ object DailyCutWidgetUpdater {
             ?: totals.calories.takeIf { totals.entries > 0 }
             ?: report?.nutritionCalories?.takeIf { report.nutritionRecords > 0 }
             ?: 0.0
-        if (goals.mode == GoalMode.CALORIE) {
-            return "${formatDecimal(food)} / ${formatDecimal(goals.calories)} kcal"
-        }
-        return when (val balance = calculateEnergyBalance(burn, food)) {
-            EnergyBalance.Unavailable -> "Open app to load burn"
-            is EnergyBalance.Cut -> "−${formatDecimal(balance.calories)} / ${formatDecimal(goals.desiredDeficitCalories)} kcal"
-            is EnergyBalance.Surplus -> "+${formatDecimal(balance.calories)} kcal surplus"
+        val allowance = goals.calorieAllowance(burn.takeIf { it > 0.0 })
+        val balanceLabel = if (goals.mode == GoalMode.CALORIE) {
+            "${formatCalories(food)} / ${formatCalories(goals.calories)} kcal"
+        } else when (val balance = calculateEnergyBalance(burn, food)) {
+            EnergyBalance.Unavailable -> "Burn unavailable"
+            is EnergyBalance.Cut -> "−${formatCalories(balance.calories)} kcal deficit"
+            is EnergyBalance.Surplus -> "+${formatCalories(balance.calories)} kcal surplus"
             is EnergyBalance.Maintenance -> "Maintenance"
         }
+        val spending = dao.spendingForDate(today)
+        fun percent(value: Double, target: Double) =
+            if (target <= 0.0) 0 else ((value / target) * 100).toInt().coerceIn(0, 100)
+        return TodayWidgetState(
+            balanceLabel,
+            allowance?.let { "${formatCalories(food)} / ${formatCalories(it)} kcal" } ?: "Intake ${formatCalories(food)} kcal",
+            allowance?.let { percent(food, it) } ?: 0,
+            "${formatDecimal(totals.proteinG)} / ${formatDecimal(goals.proteinG)} g protein",
+            percent(totals.proteinG, goals.proteinG),
+            if (goals.dailyBudgetMicros > 0L) {
+                "${formatMoney(spending.knownTotalMicros, goals.currencyCode)} / ${formatMoney(goals.dailyBudgetMicros, goals.currencyCode)}"
+            } else "Budget not set",
+            if (goals.dailyBudgetMicros > 0L) percent(spending.knownTotalMicros.toDouble(), goals.dailyBudgetMicros.toDouble()) else 0
+        )
     }
 }

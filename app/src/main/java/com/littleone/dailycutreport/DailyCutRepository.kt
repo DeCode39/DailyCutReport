@@ -23,6 +23,7 @@ interface DailyCutRepository {
     fun observeFoodLogs(date: LocalDate): Flow<List<FoodLogSnapshot>>
     fun observeProducts(query: String): Flow<List<ProductEntity>>
     fun observeRecentProducts(): Flow<List<ProductEntity>>
+    fun observeFavoriteProducts(): Flow<List<ProductEntity>>
     fun observeGoals(): Flow<UserGoals>
     fun observeHealthProfile(): Flow<HealthProfile>
     fun observeSpending(date: LocalDate): Flow<DailySpending>
@@ -34,6 +35,7 @@ interface DailyCutRepository {
     suspend fun lookupProduct(barcode: String): ProductWithExtras?
     suspend fun getProduct(productId: String): ProductWithExtras?
     suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult
+    suspend fun setProductFavorite(productId: String, favorite: Boolean)
     suspend fun addProduct(
         date: LocalDate,
         product: ProductWithExtras,
@@ -48,9 +50,12 @@ interface DailyCutRepository {
         actualPaidTotalMicros: Long? = null,
         excludeCostFromBudget: Boolean = false
     ): FoodMutationResult
+    suspend fun addProducts(date: LocalDate, entries: List<BulkLogSelection>): FoodMutationResult
     suspend fun updateFoodLog(edit: FoodQuantityEdit): FoodMutationResult
     suspend fun deleteFoodLog(id: Long): FoodMutationResult
     suspend fun restoreFoodLog(deleted: DeletedFoodLogSnapshot): FoodMutationResult
+    suspend fun deleteFoodLogGroup(mealId: String): FoodGroupMutationResult
+    suspend fun restoreFoodLogGroup(deleted: DeletedFoodLogGroup): FoodGroupMutationResult
     suspend fun saveReport(report: DailyReport): Uri?
     suspend fun writeReport(uri: Uri, report: DailyReport): Boolean
     suspend fun createShareUri(report: DailyReport): Uri?
@@ -65,9 +70,10 @@ interface DailyCutRepository {
     suspend fun nutritionSyncStatus(): String?
     suspend fun healthWeightPermissionGranted(): Boolean
     suspend fun updateHealthProfile(profile: HealthProfile)
-    suspend fun upsertManualWeight(date: LocalDate, weightKg: Double)
-    suspend fun deleteManualWeight(date: LocalDate)
+    suspend fun addManualWeight(date: LocalDate, time: LocalTime, weightKg: Double)
+    suspend fun deleteManualWeight(entryId: String)
     suspend fun syncHealthHistory(force: Boolean = false): Result<Unit>
+    suspend fun ensureHealthBootstrap(): Result<Unit>
     suspend fun healthHistoryStatus(): String?
 }
 
@@ -129,6 +135,9 @@ class DefaultDailyCutRepository(
 
     override fun observeRecentProducts(): Flow<List<ProductEntity>> =
         dao.observeRecentProducts().flowOn(Dispatchers.IO)
+
+    override fun observeFavoriteProducts(): Flow<List<ProductEntity>> =
+        dao.observeFavoriteProducts().flowOn(Dispatchers.IO)
 
     override fun observeGoals(): Flow<UserGoals> = dao.observeUserGoals()
         .map { (it ?: UserGoalsEntity()).toDomain().sanitized() }
@@ -279,6 +288,10 @@ class DefaultDailyCutRepository(
         ProductMutationResult(product, mutation.linkedEntriesUpdated, dates)
     }
 
+    override suspend fun setProductFavorite(productId: String, favorite: Boolean) = withContext(Dispatchers.IO) {
+        check(dao.updateProductFavorite(productId, favorite) == 1) { "Product no longer exists." }
+    }
+
     override suspend fun addProduct(
         date: LocalDate,
         product: ProductWithExtras,
@@ -327,6 +340,12 @@ class DefaultDailyCutRepository(
         ))
     }
 
+    override suspend fun addProducts(date: LocalDate, entries: List<BulkLogSelection>): FoodMutationResult = withContext(Dispatchers.IO) {
+        require(entries.isNotEmpty()) { "Scan at least one product." }
+        require(entries.all { it.quantity.isFinite() && it.quantity > 0.0 }) { "Quantities must be greater than zero." }
+        completeFoodMutation(dao.addMultipleProductsToDate(date.toString(), entries))
+    }
+
     override suspend fun deleteFoodLog(id: Long): FoodMutationResult = withContext(Dispatchers.IO) {
         val mutation = dao.deleteFoodLogSnapshot(id) ?: error("Food entry no longer exists.")
         completeFoodMutation(mutation)
@@ -335,6 +354,16 @@ class DefaultDailyCutRepository(
     override suspend fun restoreFoodLog(deleted: DeletedFoodLogSnapshot): FoodMutationResult = withContext(Dispatchers.IO) {
         val entity = deleted.log.toEntity()
         completeFoodMutation(dao.restoreFoodLogSnapshot(DeletedFoodLogEntity(entity, deleted.extras)))
+    }
+
+    override suspend fun deleteFoodLogGroup(mealId: String): FoodGroupMutationResult = withContext(Dispatchers.IO) {
+        completeFoodGroupMutation(dao.deleteFoodLogGroup(mealId) ?: error("Bulk order no longer exists."))
+    }
+
+    override suspend fun restoreFoodLogGroup(deleted: DeletedFoodLogGroup): FoodGroupMutationResult = withContext(Dispatchers.IO) {
+        completeFoodGroupMutation(dao.restoreFoodLogGroup(deleted.logs.map {
+            DeletedFoodLogEntity(it.log.toEntity(), it.extras)
+        }))
     }
 
     override suspend fun saveReport(report: DailyReport): Uri? = withContext(Dispatchers.IO) {
@@ -389,16 +418,17 @@ class DefaultDailyCutRepository(
         dao.upsertHealthProfile(profile.toEntity())
     }
 
-    override suspend fun upsertManualWeight(date: LocalDate, weightKg: Double) = withContext(Dispatchers.IO) {
+    override suspend fun addManualWeight(date: LocalDate, time: LocalTime, weightKg: Double) = withContext(Dispatchers.IO) {
         require(weightKg.isFinite() && weightKg in 10.0..1_000.0) { "Enter a valid body weight." }
-        val instant = date.atTime(LocalTime.NOON).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val instant = date.atTime(time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         dao.upsertWeightEntry(
-            WeightEntry("manual-$date", date, instant, weightKg, WeightSource.MANUAL).toEntity()
+            WeightEntry("manual-${java.util.UUID.randomUUID()}", date, instant, weightKg, WeightSource.MANUAL).toEntity()
         )
     }
 
-    override suspend fun deleteManualWeight(date: LocalDate) = withContext(Dispatchers.IO) {
-        dao.deleteWeightEntry("manual-$date")
+    override suspend fun deleteManualWeight(entryId: String) = withContext(Dispatchers.IO) {
+        require(entryId.startsWith("manual-")) { "Only manual weight entries can be deleted." }
+        dao.deleteWeightEntry(entryId)
     }
 
     override suspend fun syncHealthHistory(force: Boolean): Result<Unit> = runCatching {
@@ -409,12 +439,12 @@ class DefaultDailyCutRepository(
             if (!force && withContext(Dispatchers.IO) { dao.metadata(HEALTH_HISTORY_SYNC_DAY_KEY) } == today.toString()) {
                 return@withLock
             }
-            val start = today.minusDays(27)
+            val start = today.minusDays(29)
             val imported = healthConnect.readHealthHistory(start, today)
             withContext(Dispatchers.IO) {
                 val reports = imported.dailySummaries.map { (date, summary) ->
                     val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
-                    existing.withActivityHealth(summary)
+                    existing.withHealth(summary)
                 }
                 dao.replaceImportedHealthHistory(
                     start.toString(), today.toString(), reports,
@@ -424,6 +454,17 @@ class DefaultDailyCutRepository(
                 dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_DAY_KEY, today.toString()))
                 dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_STATUS_KEY, java.time.Instant.now().toString()))
             }
+        }
+    }
+
+    override suspend fun ensureHealthBootstrap(): Result<Unit> = runCatching {
+        if (!healthConnect.isAvailable() || !healthConnect.hasCorePermissions()) return@runCatching
+        val permissionFingerprint = "29:w${healthConnect.hasWeightPermission()}:n${healthConnect.hasNutritionPermission()}"
+        val complete = withContext(Dispatchers.IO) { dao.metadata(HEALTH_BOOTSTRAP_KEY) }
+        if (complete == permissionFingerprint) return@runCatching
+        syncHealthHistory(force = true).getOrThrow()
+        withContext(Dispatchers.IO) {
+            dao.upsertMetadata(AppMetadataEntity(HEALTH_BOOTSTRAP_KEY, permissionFingerprint))
         }
     }
 
@@ -446,6 +487,21 @@ class DefaultDailyCutRepository(
             deleted = mutation.deleted?.let { deleted ->
                 DeletedFoodLogSnapshot(deleted.log.toDomainSnapshot(), deleted.extras)
             }
+        )
+        DailyCutWidgetUpdater.updateAll(context)
+        nutritionSync.sync(date)
+        return result
+    }
+
+    private suspend fun completeFoodGroupMutation(mutation: DailyNutritionGroupMutation): FoodGroupMutationResult {
+        val date = LocalDate.parse(mutation.date)
+        val result = FoodGroupMutationResult(
+            date,
+            mutation.before.toSummary(emptyMap()),
+            mutation.after.toSummary(emptyMap()),
+            DeletedFoodLogGroup(mutation.deleted.map {
+                DeletedFoodLogSnapshot(it.log.toDomainSnapshot(), it.extras)
+            })
         )
         DailyCutWidgetUpdater.updateAll(context)
         nutritionSync.sync(date)
@@ -561,6 +617,8 @@ private fun FoodLogSnapshot.toEntity() = DailyFoodLogEntity(
 )
 
 private fun String.escapeLikePattern(): String = replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+private const val HEALTH_BOOTSTRAP_KEY = "health_bootstrap_0_11"
 
 fun UserGoalsEntity.toDomain() = UserGoals(
     GoalMode.entries.firstOrNull { it.name == mode } ?: GoalMode.CALORIE,

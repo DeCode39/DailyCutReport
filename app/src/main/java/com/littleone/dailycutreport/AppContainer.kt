@@ -26,6 +26,7 @@ class DailyCutApplication : Application() {
                     runCatching {
                         repository.initialize()
                         if (repository.healthConnectAvailable() && repository.healthCorePermissionsGranted()) {
+                            repository.ensureHealthBootstrap()
                             repository.refreshHealth(LocalDate.now())
                             repository.syncHealthHistory(force = false)
                         }

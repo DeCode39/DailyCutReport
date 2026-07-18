@@ -152,6 +152,16 @@ data class DailySpending(
 
 data class HealthWriteSummary(val recordsWritten: Int, val date: LocalDate)
 
+data class TodayWidgetState(
+    val balance: String,
+    val intakeProgress: String,
+    val intakePercent: Int,
+    val proteinProgress: String,
+    val proteinPercent: Int,
+    val spendingProgress: String,
+    val spendingPercent: Int
+)
+
 data class ManualOverrides(
     val foodCalories: Double? = null,
     val proteinG: Double? = null,
@@ -294,11 +304,33 @@ data class BulkLogEntryInput(
 
 data class BulkLogSelection(
     val productId: String,
-    val quantity: Double
+    val quantity: Double,
+    val actualPaidTotalMicros: Long? = null,
+    val excludeCostFromBudget: Boolean = false
+)
+
+data class MultiScanItem(
+    val product: ProductEntity,
+    val quantityText: String = "1",
+    val actualPaidText: String = "",
+    val excludeCostFromBudget: Boolean = false
+) {
+    val quantity: Double? get() = quantityText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 }
+    val actualPaidTotalMicros: Long?
+        get() = if (actualPaidText.isBlank()) null else runCatching { parseMoneyMicros(actualPaidText) }.getOrNull()
+    val actualPaidValid: Boolean
+        get() = actualPaidText.isBlank() || actualPaidTotalMicros != null
+}
+
+data class ScannerSessionState(
+    val multiEnabled: Boolean = false,
+    val target: ScanTarget = ScanTarget.STANDALONE,
+    val items: List<MultiScanItem> = emptyList(),
+    val status: String = "Point the camera at a barcode"
 )
 
 enum class FoodMode { NORMAL, BULK }
-enum class ProductSaveTarget { STANDALONE_LOG, BULK_CART, CATALOG_ONLY }
+enum class ProductSaveTarget { STANDALONE_LOG, BULK_CART, MULTI_SCAN_QUEUE, CATALOG_ONLY }
 enum class ScanTarget { STANDALONE, BULK_CART }
 
 data class BulkDraftItem(
@@ -384,12 +416,56 @@ data class DeletedFoodLogSnapshot(
     val extras: List<DailyExtraNutrientLogEntity>
 )
 
+data class DeletedFoodLogGroup(
+    val logs: List<DeletedFoodLogSnapshot>
+)
+
 data class FoodMutationResult(
     val date: LocalDate,
     val before: NutritionSummary,
     val after: NutritionSummary,
     val deleted: DeletedFoodLogSnapshot? = null
 )
+
+data class FoodGroupMutationResult(
+    val date: LocalDate,
+    val before: NutritionSummary,
+    val after: NutritionSummary,
+    val deleted: DeletedFoodLogGroup
+)
+
+sealed interface FoodLogGroup {
+    val key: String
+    val logs: List<FoodLogSnapshot>
+
+    data class Single(val log: FoodLogSnapshot) : FoodLogGroup {
+        override val key: String = "log-${log.id}"
+        override val logs: List<FoodLogSnapshot> = listOf(log)
+    }
+
+    data class Bulk(
+        val mealId: String,
+        val label: String,
+        override val logs: List<FoodLogSnapshot>
+    ) : FoodLogGroup {
+        override val key: String = "meal-$mealId"
+        val calories: Double get() = logs.sumOf(FoodLogSnapshot::calories)
+        val proteinG: Double get() = logs.sumOf(FoodLogSnapshot::proteinG)
+        val recordedCostMicros: Long? get() =
+            if (logs.all { it.recordedCostMicros != null }) logs.sumOf { requireNotNull(it.recordedCostMicros) } else null
+    }
+}
+
+fun List<FoodLogSnapshot>.groupForDisplay(): List<FoodLogGroup> {
+    val bulk = filter { it.mealId != null }.groupBy { requireNotNull(it.mealId) }
+    val emitted = mutableSetOf<String>()
+    return sortedByDescending(FoodLogSnapshot::loggedAt).mapNotNull { log ->
+        val mealId = log.mealId ?: return@mapNotNull FoodLogGroup.Single(log)
+        if (!emitted.add(mealId)) return@mapNotNull null
+        val rows = bulk.getValue(mealId).sortedWith(compareBy(FoodLogSnapshot::loggedAt, FoodLogSnapshot::id))
+        FoodLogGroup.Bulk(mealId, rows.firstNotNullOfOrNull(FoodLogSnapshot::mealName) ?: "Bulk purchase", rows)
+    }
+}
 
 data class ProductMutationResult(
     val product: ProductEntity,

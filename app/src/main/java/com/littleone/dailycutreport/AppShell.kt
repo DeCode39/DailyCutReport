@@ -56,6 +56,7 @@ fun DailyCutApp(
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
         var scannerTarget by remember { mutableStateOf(ScanTarget.STANDALONE) }
+        val scannerSession by foodsViewModel.scannerSession.collectAsStateWithLifecycle()
         val showMessage: (String) -> Unit = { message ->
             scope.launch { snackbarHostState.showSnackbar(message) }
         }
@@ -63,6 +64,7 @@ fun DailyCutApp(
         LaunchedEffect(externalScannerLaunch) {
             if (externalScannerLaunch > 0 && route != "scanner") {
                 scannerTarget = ScanTarget.STANDALONE
+                foodsViewModel.beginScanner(scannerTarget)
                 navController.navigate("scanner")
             }
         }
@@ -75,17 +77,23 @@ fun DailyCutApp(
                             message = event.text,
                             actionLabel = event.undo?.let { "Undo" }
                         )
-                        if (result == SnackbarResult.ActionPerformed) event.undo?.let(foodsViewModel::undoDelete)
+                        if (result == SnackbarResult.ActionPerformed) event.undo?.let(foodsViewModel::undo)
+                    }
+                    FoodUiEvent.ScannerNeedsEditor -> {
+                        if (navController.currentDestination?.route == "scanner") navController.popBackStack()
+                    }
+                    FoodUiEvent.ResumeScanner -> {
+                        if (navController.currentDestination?.route != "scanner") navController.navigate("scanner")
                     }
                 }
             }
         }
         val healthPermissionLauncher = rememberLauncherForActivityResult(
             PermissionController.createRequestPermissionResultContract()
-        ) { settingsViewModel.refresh() }
+        ) { settingsViewModel.permissionsChanged() }
         val nutritionWritePermissionLauncher = rememberLauncherForActivityResult(
             PermissionController.createRequestPermissionResultContract()
-        ) { settingsViewModel.refresh() }
+        ) { settingsViewModel.permissionsChanged() }
 
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -120,10 +128,12 @@ fun DailyCutApp(
                         selectedDate, dateViewModel, todayViewModel,
                         onScan = {
                             scannerTarget = ScanTarget.STANDALONE
+                            foodsViewModel.beginScanner(scannerTarget)
                             navController.navigate("scanner")
                         },
                         onEditLog = foodsViewModel::edit,
                         onDeleteLog = foodsViewModel::delete,
+                        onDeleteGroup = foodsViewModel::deleteGroup,
                         onMessage = showMessage
                     )
                 }
@@ -132,6 +142,7 @@ fun DailyCutApp(
                         selectedDate, dateViewModel, foodsViewModel,
                         onScan = { target ->
                             scannerTarget = target
+                            foodsViewModel.beginScanner(target)
                             navController.navigate("scanner")
                         },
                         onOcr = { navController.navigate("ocr") }
@@ -157,10 +168,29 @@ fun DailyCutApp(
                     )
                 }
                 composable("scanner") {
-                    BarcodeScannerScreen { result ->
-                        navController.popBackStack()
-                        if (result is ScannerResult.Found) foodsViewModel.handleBarcode(result.barcode, scannerTarget)
-                    }
+                    BarcodeScannerScreen(
+                        multiEnabled = scannerSession.multiEnabled,
+                        queueCount = scannerSession.items.size,
+                        sessionStatus = scannerSession.status,
+                        onMultiChange = { enabled ->
+                            if (!enabled && scannerSession.items.isNotEmpty()) {
+                                foodsViewModel.finishMultiScan()
+                                navController.popBackStack()
+                            } else foodsViewModel.setMultiScan(enabled)
+                        },
+                        onFound = { barcode ->
+                            if (scannerSession.multiEnabled) foodsViewModel.handleMultiScanBarcode(barcode)
+                            else {
+                                navController.popBackStack()
+                                foodsViewModel.handleBarcode(barcode, scannerTarget)
+                            }
+                        },
+                        onDone = {
+                            foodsViewModel.finishMultiScan()
+                            navController.popBackStack()
+                        },
+                        onCancel = { navController.popBackStack() }
+                    )
                 }
                 composable("ocr") {
                     OcrCaptureScreen(

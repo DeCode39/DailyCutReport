@@ -170,7 +170,7 @@ object BackupCrypto {
 }
 
 object BackupJson {
-    private const val SCHEMA_VERSION = 3
+    private const val SCHEMA_VERSION = 4
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
@@ -235,6 +235,7 @@ object BackupJson {
         put("saturatedFatG", saturatedFatG); putNullable("purchasePriceMicros", purchasePriceMicros)
         put("purchaseUnitServings", purchaseUnitServings); put("includeInPlanner", includeInPlanner)
         put("plannerItemType", plannerItemType); put("alwaysIncludeInPlanner", alwaysIncludeInPlanner)
+        put("favorite", favorite)
         put("notes", notes); put("createdAt", createdAt); put("updatedAt", updatedAt)
     }
 
@@ -302,6 +303,7 @@ object BackupJson {
             require(it in PlannerItemType.entries.map(PlannerItemType::name))
         },
         alwaysIncludeInPlanner = o.optBoolean("alwaysIncludeInPlanner", false),
+        favorite = o.optBoolean("favorite", false),
         notes = o.getString("notes"), createdAt = o.getLong("createdAt"), updatedAt = o.getLong("updatedAt")
     ).also { require(!it.alwaysIncludeInPlanner || it.includeInPlanner) }
 

@@ -17,3 +17,8 @@ fun formatDecimal(value: Double, maximumFractionDigits: Int = 2): String {
 }
 
 fun formatInteger(value: Long): String = NumberFormat.getIntegerInstance(Locale.getDefault()).format(value)
+
+fun formatCalories(value: Double): String {
+    if (!value.isFinite()) return "Unavailable"
+    return formatInteger(kotlin.math.round(value).toLong()).replace("-0", "0")
+}
