@@ -1,4 +1,4 @@
-# Daily Cut Report 0.11.0
+# Daily Cut Report 0.11.1
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 

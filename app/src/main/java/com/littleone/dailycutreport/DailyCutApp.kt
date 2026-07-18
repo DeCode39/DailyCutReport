@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -73,6 +75,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -426,9 +429,21 @@ internal fun FoodsScreen(
         }
     }
     if (showCart) {
+        val maximumCartHeight = (LocalConfiguration.current.screenHeightDp * 0.85f).dp
+        val cartScrollState = rememberScrollState()
         ModalBottomSheet(onDismissRequest = { showCart = false }) {
-            BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
-            Spacer(Modifier.height(24.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maximumCartHeight)
+                    .verticalScroll(cartScrollState)
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+            ) {
+                BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
+                Spacer(Modifier.height(24.dp))
+            }
         }
     }
 }
