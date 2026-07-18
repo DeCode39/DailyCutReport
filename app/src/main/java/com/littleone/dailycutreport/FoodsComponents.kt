@@ -24,6 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -219,8 +221,11 @@ private fun constraintTarget(impact: ConstraintImpact, currencyCode: String): St
 internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel, state: FoodsUiState) {
     val selected = state.bulkDraft.items.any { it.product.productId == product.productId }
     Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+        Column(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(Modifier.fillMaxWidth()) {
                 Text(product.name, fontWeight = FontWeight.Bold)
                 Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.barcode).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                 product.purchasePriceMicros?.let {
@@ -229,23 +234,40 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
                 Text(
                     when {
                         !product.includeInPlanner -> "Not used in planning"
-                        product.alwaysIncludeInPlanner -> "${product.plannerItemType.lowercase()} · fixed in plans"
+                        product.alwaysIncludeInPlanner ->
+                            "${product.plannerItemType.lowercase()} · fixed ${product.fixedPurchaseUnits} unit(s)"
                         else -> product.plannerItemType.lowercase().replaceFirstChar(Char::uppercase)
                     },
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            TextButton(onClick = { viewModel.toggleFavorite(product) }) {
-                Text(if (product.favorite) "★" else "☆")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = { viewModel.toggleFavorite(product) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .semantics {
+                            contentDescription = if (product.favorite) {
+                                "Remove ${product.name} from favorites"
+                            } else {
+                                "Add ${product.name} to favorites"
+                            }
+                        }
+                ) { Text(if (product.favorite) "★" else "☆") }
+                TextButton(
+                    onClick = { viewModel.editProduct(product) },
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                ) { Text("Edit") }
+                Button(
+                    onClick = {
+                        if (state.mode == FoodMode.BULK) viewModel.addProductToBulk(product)
+                        else viewModel.selectProduct(product)
+                    },
+                    enabled = state.mode != FoodMode.BULK || !selected,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                ) { Text(if (selected && state.mode == FoodMode.BULK) "Selected" else "Add") }
             }
-            TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit") }
-            Button(
-                onClick = {
-                    if (state.mode == FoodMode.BULK) viewModel.addProductToBulk(product)
-                    else viewModel.selectProduct(product)
-                },
-                enabled = state.mode != FoodMode.BULK || !selected
-            ) { Text(if (selected && state.mode == FoodMode.BULK) "Selected" else "Add") }
         }
     }
 }

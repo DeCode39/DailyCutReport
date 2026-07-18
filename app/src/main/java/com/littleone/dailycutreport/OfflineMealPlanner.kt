@@ -28,8 +28,10 @@ class OfflineMealPlanner(
         val eligible = products.filter(ProductEntity::includeInPlanner).sortedBy(ProductEntity::productId)
         val excludedFromPlanning = products.size - eligible.size
         val unpriced = eligible.count { it.purchasePriceMicros == null }
-        val requiredFixed = eligible.filter { product ->
-            product.alwaysIncludeInPlanner && !fixedRequirementSatisfied(product, context.loggedServingsByProductId)
+        val requiredFixed = eligible.mapNotNull { product ->
+            requiredFixedUnits(product, context.loggedServingsByProductId)
+                .takeIf { product.alwaysIncludeInPlanner && it > 0 }
+                ?.let { FixedRequirement(product, it) }
         }
         val existingViolations = existingUpperViolations(context, goals)
 
@@ -61,18 +63,25 @@ class OfflineMealPlanner(
     }
 
     private fun fixedRequirementSatisfied(product: ProductEntity, loggedServings: Map<String, Double>): Boolean =
-        (loggedServings[product.productId] ?: 0.0) + FIXED_EPSILON >= product.purchaseUnitServings
+        requiredFixedUnits(product, loggedServings) == 0
+
+    private fun requiredFixedUnits(product: ProductEntity, loggedServings: Map<String, Double>): Int {
+        if (!product.alwaysIncludeInPlanner) return 0
+        val requiredServings = product.purchaseUnitServings * product.fixedPurchaseUnits.coerceIn(1, maxUnitsPerProduct)
+        val remaining = requiredServings - (loggedServings[product.productId] ?: 0.0)
+        if (remaining <= FIXED_EPSILON) return 0
+        return ceil(remaining / product.purchaseUnitServings).toInt().coerceIn(1, maxUnitsPerProduct)
+    }
 
     private fun strictSetupBlock(
-        requiredFixed: List<ProductEntity>,
+        requiredFixed: List<FixedRequirement>,
         spending: DailySpending,
         goals: UserGoals
     ): String? {
         if (goals.dailyBudgetMicros <= 0L) return "Strict planning requires a daily budget."
-        if (requiredFixed.any { it.purchasePriceMicros == null }) return "Strict planning requires prices for fixed items."
-        if (requiredFixed.size > maxTotalUnits) return "Strict planning allows at most $maxTotalUnits fixed purchase units."
-        if (requiredFixed.count { it.plannerType == PlannerItemType.DRINK } > maxDrinkUnits) {
-            return "Strict planning allows at most $maxDrinkUnits fixed drinks."
+        if (requiredFixed.any { it.product.purchasePriceMicros == null }) return "Strict planning requires prices for fixed items."
+        if (requiredFixed.sumOf(FixedRequirement::units) > maxTotalUnits) {
+            return "Strict planning allows at most $maxTotalUnits fixed purchase units."
         }
         if (spending.knownTotalMicros > (goals.dailyBudgetMicros * 1.1).toLong()) {
             return "Current spending already exceeds the strict budget ceiling."
@@ -82,7 +91,7 @@ class OfflineMealPlanner(
 
     private fun strictPlans(
         eligible: List<ProductEntity>,
-        requiredFixed: List<ProductEntity>,
+        requiredFixed: List<FixedRequirement>,
         context: PlannerDayContext,
         goals: UserGoals
     ): StrictOutcome {
@@ -90,7 +99,9 @@ class OfflineMealPlanner(
             .filterNot(ProductEntity::alwaysIncludeInPlanner)
             .filter { it.purchasePriceMicros != null && it.purchasePriceMicros >= 0L && it.purchaseUnitServings > 0.0 }
             .toList()
-        val fixedState = requiredFixed.fold(PlanState()) { state, product -> state.add(product, 1, fixed = true) }
+        val fixedState = requiredFixed.fold(PlanState()) { state, requirement ->
+            state.add(requirement.product, requirement.units, fixed = true, countTowardTypeLimit = false)
+        }
         if (!withinHardCeilings(fixedState, context.consumed, context.spending, goals)) {
             return StrictOutcome(reason = "Required fixed items exceed a strict nutrition or budget ceiling.")
         }
@@ -393,6 +404,8 @@ class OfflineMealPlanner(
         val reason: String? = null
     )
 
+    private data class FixedRequirement(val product: ProductEntity, val units: Int)
+
     private data class Evaluation(val complete: Boolean, val withinBudget: Boolean, val misses: Int, val penalty: Double)
     private data class ScoredState(val state: PlanState, val evaluation: Evaluation)
     private data class BalancedEvaluation(val score: Double)
@@ -411,7 +424,12 @@ class OfflineMealPlanner(
         val favoriteCoverage: Double get() =
             if (totalUnits <= 0) 0.0 else favoriteUnits.toDouble() / totalUnits
 
-        fun add(product: ProductEntity, units: Int, fixed: Boolean = false): PlanState {
+        fun add(
+            product: ProductEntity,
+            units: Int,
+            fixed: Boolean = false,
+            countTowardTypeLimit: Boolean = true
+        ): PlanState {
             val servings = product.purchaseUnitServings * units
             val itemNutrition = product.nutrition(servings)
             val itemCost = product.purchasePriceMicros?.saturatedMultiply(units)
@@ -426,7 +444,9 @@ class OfflineMealPlanner(
                 unknownCostItems = unknownCostItems + if (itemCost == null) 1 else 0,
                 unknownCostUnits = unknownCostUnits.saturatedAdd(if (itemCost == null) units else 0),
                 totalUnits = totalUnits.saturatedAdd(units),
-                drinkUnits = drinkUnits.saturatedAdd(if (product.plannerType == PlannerItemType.DRINK) units else 0),
+                drinkUnits = drinkUnits.saturatedAdd(
+                    if (countTowardTypeLimit && product.plannerType == PlannerItemType.DRINK) units else 0
+                ),
                 favoriteUnits = favoriteUnits.saturatedAdd(if (product.favorite) units else 0)
             )
         }

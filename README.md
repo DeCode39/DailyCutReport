@@ -1,4 +1,4 @@
-# Daily Cut Report 0.11.1
+# Daily Cut Report 0.12.0
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -13,7 +13,8 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - The idle Foods catalog shows up to five recently used favorites followed by five recently logged products that do not duplicate them; typing in search queries the complete catalog.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
 - A deterministic offline remaining-day planner that ranks up to three strict purchase-unit suggestions. Already-logged fixed items count toward their requirement, and pre-existing target violations produce one baseline-aware balanced recovery option instead of a minimums-at-any-cost fallback.
-- Per-product planning controls: exclude an item, classify it as solid food or drink, or require one fixed purchase unit in every plan; recommendations allow at most two drink units.
+- A dedicated searchable Planner settings page controls inclusion, food/drink classification, fixed status, and one-to-six required purchase units per product. Fixed items are exempt from category caps, so two additional non-fixed drink units remain available.
+- Product rows use a compact two-row layout with equal Favorite, Edit, and Add actions. Every add workflow now defaults to one complete purchase unit while keeping quantities editable.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
 - Bulk Cart mode keeps normal search and barcode scanning available while a floating cart bubble holds an unfinished date-locked order. Its bottom sheet atomically logs several products with one final paid total, so multi-buy and whole-order discounts require no per-item arithmetic.
 - Bulk orders appear as one expandable Today card with aggregate nutrition and checkout cost. Individual rows or the complete order can be deleted and restored transactionally.
@@ -85,9 +86,9 @@ Public 0.8.5 APKs used the old debug certificate, so Android cannot install a pr
 
 ## Data upgrades
 
-Database version 7 adds product favorites. Version 6 added the health profile, manual/imported weight entries, and privacy-limited walking-session summaries; multiple readings per day use the existing timestamped entries. Version 5 added optional one-time bulk-log grouping fields. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
+Database version 8 adds configurable fixed purchase-unit amounts and defaults existing fixed products to one unit. Version 7 added product favorites. Version 6 added the health profile, manual/imported weight entries, and privacy-limited walking-session summaries; multiple readings per day use the existing timestamped entries. Version 5 added optional one-time bulk-log grouping fields. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
 
-The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Backup schema 4 includes favorites and every health entry while accepting schemas 1–3. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered.
+The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Backup schema 5 includes fixed purchase-unit amounts, favorites, and every health entry while accepting schemas 1–4. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered. The browser preview stores equivalent state in `dcr_v7`.
 
 Catalog schema 2 uses a stable ID and an optional physical barcode:
 
@@ -121,7 +122,7 @@ Catalog schema 2 uses a stable ID and an optional physical barcode:
 - `FoodsComponents.kt`: product catalog, persistent Bulk Cart sheet, search editor, and planner-result UI.
 - `ViewModels.kt`: shared date and screen state.
 - `DailyCutRepository.kt`: application data boundary.
-- `NutritionDatabase.kt`: Room schema, DAO, grouped mutations, and v1→v2→v3→v4→v5→v6→v7 migrations.
+- `NutritionDatabase.kt`: Room schema, DAO, grouped mutations, and v1→v2→v3→v4→v5→v6→v7→v8 migrations.
 - `HealthAnalytics.kt`: robust deficit, weight projection, and walking-estimate calculations.
 - `BarcodeScanner.kt`: lifecycle-safe on-device scanner.
 - `NutritionImagePreprocessor.kt`, `NutritionLabelOcr.kt`, and `NutritionLabelParser.kt`: guided local image preparation, bundled multilingual OCR, deterministic nutrient extraction, and review candidates.

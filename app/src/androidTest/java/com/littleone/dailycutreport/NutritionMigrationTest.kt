@@ -108,5 +108,26 @@ class NutritionMigrationTest {
         migrated.close()
     }
 
+    @Test fun migrationSevenToEightAddsOneFixedPurchaseUnitWithoutChangingProducts() {
+        helper.createDatabase("migration-7-8", 7).apply {
+            execSQL("INSERT INTO products (productId,barcode,name,brand,servingLabel,calories,proteinG,sodiumMg,carbsG,fatG,sugarG,fiberG,saturatedFatG,purchasePriceMicros,purchaseUnitServings,includeInPlanner,plannerItemType,alwaysIncludeInPlanner,favorite,notes,createdAt,updatedAt) VALUES ('fixed',NULL,'Fixed meal','','1 serving',100,10,20,0,0,0,0,0,NULL,2,1,'DRINK',1,1,'',1,1)")
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            "migration-7-8",
+            8,
+            true,
+            NutritionDatabase.MIGRATION_7_8
+        )
+        migrated.query("SELECT name,alwaysIncludeInPlanner,fixedPurchaseUnits FROM products WHERE productId='fixed'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("Fixed meal", cursor.getString(0))
+            assertEquals(1, cursor.getInt(1))
+            assertEquals(1, cursor.getInt(2))
+        }
+        migrated.close()
+    }
+
     private companion object { const val DATABASE_NAME = "migration-3-4" }
 }

@@ -21,6 +21,7 @@ class ProductDraftJsonTest {
                 .replace("\"barcode\": null", "\"barcode\": \"123456\"")
                 .replace("\"proteinG\": 0", "\"proteinG\": 18.25")
                 .replace("\"itemType\": \"FOOD\"", "\"itemType\": \"DRINK\"")
+                .replace("\"fixedPurchaseUnits\": 1", "\"fixedPurchaseUnits\": 4")
         )
 
         assertEquals(ProductSaveTarget.BULK_CART, imported.saveTarget)
@@ -28,6 +29,7 @@ class ProductDraftJsonTest {
         assertEquals("Photo estimate", imported.name)
         assertEquals("18.25", imported.protein)
         assertEquals(PlannerItemType.DRINK, imported.plannerItemType)
+        assertEquals("4", imported.fixedPurchaseUnits)
         assertTrue(imported.extras.contains("Potassium=0 mg"))
     }
 
@@ -48,6 +50,14 @@ class ProductDraftJsonTest {
         assertEquals("", imported.purchasePrice)
         assertFalse(imported.includeInPlanner)
         assertFalse(imported.alwaysIncludeInPlanner)
+        assertEquals("1", imported.fixedPurchaseUnits)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsFixedPurchaseUnitsOutsideSupportedRange() {
+        ProductEditorDraft().withProductJson(
+            """{"schemaVersion":1,"product":{"name":"Invalid","fixedPurchaseUnits":7}}"""
+        )
     }
 
     @Test(expected = IllegalArgumentException::class)

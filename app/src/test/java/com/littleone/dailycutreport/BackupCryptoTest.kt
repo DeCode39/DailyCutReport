@@ -22,11 +22,12 @@ class BackupCryptoTest {
         assertThrows(Throwable::class.java) { BackupCrypto.decrypt(encrypted, "correct horse".toCharArray()) }
     }
 
-    @Test fun schemaTwoRoundTripIncludesGoalsAndPricing() {
+    @Test fun currentSchemaRoundTripIncludesGoalsPricingAndPlannerSettings() {
         val payload = BackupPayload(
             products = listOf(ProductEntity(
                 "meal", name = "Meal", purchasePriceMicros = 12_000_000L, purchaseUnitServings = 2.0,
-                plannerItemType = PlannerItemType.DRINK.name, alwaysIncludeInPlanner = true
+                plannerItemType = PlannerItemType.DRINK.name, alwaysIncludeInPlanner = true,
+                fixedPurchaseUnits = 4
             )),
             productExtras = emptyList(), reports = emptyList(), foodLogs = listOf(DailyFoodLogEntity(
                 id = 1, date = "2026-01-02", productId = "meal", productName = "Meal",
@@ -39,6 +40,7 @@ class BackupCryptoTest {
         assertEquals(12_000_000L, decoded.products.single().purchasePriceMicros)
         assertEquals(PlannerItemType.DRINK.name, decoded.products.single().plannerItemType)
         assertEquals(true, decoded.products.single().alwaysIncludeInPlanner)
+        assertEquals(4, decoded.products.single().fixedPurchaseUnits)
         assertEquals(true, decoded.foodLogs.single().excludeCostFromBudget)
         assertEquals("meal-group", decoded.foodLogs.single().mealId)
         assertEquals("Lunch", decoded.foodLogs.single().mealName)

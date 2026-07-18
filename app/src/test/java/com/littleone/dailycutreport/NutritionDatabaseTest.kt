@@ -243,7 +243,8 @@ class NutritionDatabaseTest {
                 NutritionDatabase.MIGRATION_3_4,
                 NutritionDatabase.MIGRATION_4_5,
                 NutritionDatabase.MIGRATION_5_6,
-                NutritionDatabase.MIGRATION_6_7
+                NutritionDatabase.MIGRATION_6_7,
+                NutritionDatabase.MIGRATION_7_8
             )
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase
@@ -256,6 +257,36 @@ class NutritionDatabaseTest {
         migrated.close()
         context.deleteDatabase(name)
         database = Room.inMemoryDatabaseBuilder(context, NutritionDatabase::class.java).allowMainThreadQueries().build()
+    }
+
+    @Test fun plannerSettingsUpdateDoesNotRewriteLinkedFoodLogs() = runBlocking {
+        val dao = database.nutritionDao()
+        val product = ProductEntity(
+            productId = "meal",
+            name = "Meal",
+            calories = 100.0,
+            includeInPlanner = true,
+            alwaysIncludeInPlanner = false
+        )
+        dao.saveProductWithExtras(product, emptyList())
+        dao.addProductToDate("2026-01-02", product, 1.0, emptyList())
+        val loggedBefore = dao.foodLogsForDate("2026-01-02").single()
+
+        dao.updateProductPlannerSettings(
+            productId = "meal",
+            included = true,
+            itemType = PlannerItemType.DRINK.name,
+            fixed = true,
+            fixedUnits = 3,
+            updatedAt = 123L
+        )
+
+        val updated = dao.productById("meal")!!
+        val loggedAfter = dao.foodLogsForDate("2026-01-02").single()
+        assertEquals(PlannerItemType.DRINK.name, updated.plannerItemType)
+        assertEquals(true, updated.alwaysIncludeInPlanner)
+        assertEquals(3, updated.fixedPurchaseUnits)
+        assertEquals(loggedBefore, loggedAfter)
     }
 
     @Test fun productCorrectionPropagatesNutritionButPreservesLoggedCost() = runBlocking {

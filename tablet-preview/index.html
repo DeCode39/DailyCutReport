@@ -62,7 +62,8 @@
           <label>Minimum purchase servings<input id="productPurchaseServings" inputmode="decimal" value="1"></label>
           <label>Planner type<select id="productPlannerType"><option value="FOOD">Solid food</option><option value="DRINK">Drink</option></select></label>
           <label><input id="productIncludePlanner" type="checkbox" checked> Include in daily planning</label>
-          <label><input id="productFixedPlanner" type="checkbox"> Always include one purchase unit</label>
+          <label><input id="productFixedPlanner" type="checkbox"> Always include in plans</label>
+          <label>Fixed purchase units (1–6)<input id="productFixedUnits" type="number" min="1" max="6" step="1" value="1"></label>
           <label><input id="productFavorite" type="checkbox"> Favorite</label>
         </div>
         <p class="muted">Nutrition-label OCR is available in the Android app only.</p>
@@ -92,34 +93,75 @@
       <article class="card"><h2>Weight and expected change</h2><div class="grid">
         <label>Add weight for selected date<input id="manualWeight" inputmode="decimal"></label>
       </div><div class="actions"><button id="saveWeight">Save weight</button><button id="removeWeight" class="danger">Remove manual weight</button></div>
-      <p class="muted">Multiple readings are supported and their daily median drives trends. Health Connect import is Android-only. Browser weights stay in dcr_v6 local storage.</p>
+      <p class="muted">Multiple readings are supported and their daily median drives trends. Health Connect import is Android-only. Browser weights stay in dcr_v7 local storage.</p>
       <div id="weightProjection"></div></article>
       <article id="walkingGuidance" class="card"></article>
       <article class="card"><h2>28-day trend</h2><canvas id="healthChart" width="900" height="280"></canvas><p class="muted">Deficit/surplus and smoothed weight use separate scales. Estimates are for planning, not medical predictions.</p></article>
     </section>
 
     <section id="settingsTab" class="tab-panel hidden">
-      <article class="card"><h2>Goals and daily budget</h2><div class="grid">
-        <label>Goal mode<select id="goalMode"><option value="CALORIE">Calorie</option><option value="DEFICIT">Deficit</option></select></label>
-        <label>Calories<input id="goalCalories" inputmode="decimal"></label>
-        <label>Desired deficit<input id="goalDeficit" inputmode="decimal"></label>
-        <label>Protein minimum g<input id="goalProtein" inputmode="decimal"></label>
-        <label>Sodium maximum mg<input id="goalSodium" inputmode="decimal"></label>
-        <label>Carbs maximum g<input id="goalCarbs" inputmode="decimal"></label>
-        <label>Fat maximum g<input id="goalFat" inputmode="decimal"></label>
-        <label>Sugar maximum g<input id="goalSugar" inputmode="decimal"></label>
-        <label>Fiber minimum g<input id="goalFiber" inputmode="decimal"></label>
-        <label>Saturated fat maximum g<input id="goalSaturated" inputmode="decimal"></label>
-        <label>Weight unit<select id="goalWeightUnit"><option value="KG">kg</option><option value="LB">lb</option></select></label>
-        <label>Target weight (optional)<input id="targetWeight" inputmode="decimal"></label>
-        <label>Currency code<input id="currencyCode" maxlength="3"></label>
-        <label>Daily budget<input id="dailyBudget" inputmode="decimal"></label>
-      </div><p class="muted">Deficit mode calculates its allowance from the selected date's projected burn minus the desired deficit. Expected burn is no longer entered manually.</p><button id="saveGoals">Save goals</button></article>
-      <article class="card"><h2>Product JSON</h2><p>Copy the schema for an AI/photo nutrition estimate, then import the completed JSON in the product editor.</p><button id="copyProductSchema">Copy product JSON schema</button></article>
-      <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
-      <article class="card"><h2>Native capabilities</h2><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK. All manual report, product, log, date, and export workflows are available here.</p></article>
-      <article class="card"><h2>Encrypted backup</h2><p>Export or restore the same password-protected backup format used by Android.</p><div class="actions"><button id="exportBackup">Export backup</button><button id="importBackup">Restore backup</button></div><input id="backupFile" type="file" accept=".dcrbackup,application/octet-stream" class="hidden"></article>
-      <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v6</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
+      <div id="settingsHome">
+        <article class="card"><h2>Settings</h2><div class="settings-menu">
+          <button data-settings-page="goals">Goals &amp; budget</button>
+          <button data-settings-page="planner">Planner</button>
+          <button data-settings-page="health-connect">Health Connect</button>
+          <button data-settings-page="product-json">Product JSON</button>
+          <button data-settings-page="backup">Backup &amp; restore</button>
+          <button data-settings-page="privacy">Privacy &amp; offline</button>
+          <button data-settings-page="about">About</button>
+        </div></article>
+      </div>
+
+      <div id="settings-goals" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>Goals and daily budget</h2><div class="grid">
+          <label>Goal mode<select id="goalMode"><option value="CALORIE">Calorie</option><option value="DEFICIT">Deficit</option></select></label>
+          <label>Calories<input id="goalCalories" inputmode="decimal"></label>
+          <label>Desired deficit<input id="goalDeficit" inputmode="decimal"></label>
+          <label>Protein minimum g<input id="goalProtein" inputmode="decimal"></label>
+          <label>Sodium maximum mg<input id="goalSodium" inputmode="decimal"></label>
+          <label>Carbs maximum g<input id="goalCarbs" inputmode="decimal"></label>
+          <label>Fat maximum g<input id="goalFat" inputmode="decimal"></label>
+          <label>Sugar maximum g<input id="goalSugar" inputmode="decimal"></label>
+          <label>Fiber minimum g<input id="goalFiber" inputmode="decimal"></label>
+          <label>Saturated fat maximum g<input id="goalSaturated" inputmode="decimal"></label>
+          <label>Weight unit<select id="goalWeightUnit"><option value="KG">kg</option><option value="LB">lb</option></select></label>
+          <label>Target weight (optional)<input id="targetWeight" inputmode="decimal"></label>
+          <label>Currency code<input id="currencyCode" maxlength="3"></label>
+          <label>Daily budget<input id="dailyBudget" inputmode="decimal"></label>
+        </div><p class="muted">Deficit mode calculates its allowance from the selected date's projected burn minus the desired deficit.</p><button id="saveGoals">Save goals</button></article>
+      </div>
+
+      <div id="settings-planner" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>Planner products</h2><p class="muted">Changes save automatically. Fixed items do not consume food or drink limits.</p><input id="plannerSearch" placeholder="Search planner products"><div id="plannerProducts"></div></article>
+      </div>
+
+      <div id="settings-health-connect" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>Health Connect</h2><p>Activity, walking, weight, and optional nutrition synchronization require the Android APK. This browser preview never requests Health Connect permissions.</p></article>
+      </div>
+
+      <div id="settings-product-json" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>Product JSON</h2><p>Copy the schema for an AI/photo nutrition estimate, then import the completed JSON in the product editor.</p><button id="copyProductSchema">Copy product JSON schema</button></article>
+      </div>
+
+      <div id="settings-backup" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>Encrypted backup</h2><p>Export or restore the same password-protected backup format used by Android.</p><div class="actions"><button id="exportBackup">Export backup</button><button id="importBackup">Restore backup</button></div><input id="backupFile" type="file" accept=".dcrbackup,application/octet-stream" class="hidden"></article>
+      </div>
+
+      <div id="settings-privacy" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
+        <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v7</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
+      </div>
+
+      <div id="settings-about" class="settings-page hidden">
+        <button class="settings-back" data-settings-back>← Settings</button>
+        <article class="card"><h2>About</h2><p>DailyCutReport 0.12.0 · database schema 8 · backup schema 5.</p><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
+      </div>
     </section>
   </main>
   <nav><button data-tab="today" class="active">Today</button><button data-tab="foods">Foods</button><button data-tab="health">Health</button><button data-tab="settings">Settings</button></nav>

@@ -24,6 +24,7 @@ interface DailyCutRepository {
     fun observeProducts(query: String): Flow<List<ProductEntity>>
     fun observeRecentProducts(): Flow<List<ProductEntity>>
     fun observeFavoriteProducts(): Flow<List<ProductEntity>>
+    fun observePlannerProducts(): Flow<List<ProductEntity>>
     fun observeGoals(): Flow<UserGoals>
     fun observeHealthProfile(): Flow<HealthProfile>
     fun observeSpending(date: LocalDate): Flow<DailySpending>
@@ -36,6 +37,7 @@ interface DailyCutRepository {
     suspend fun getProduct(productId: String): ProductWithExtras?
     suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult
     suspend fun setProductFavorite(productId: String, favorite: Boolean)
+    suspend fun updatePlannerSettings(settings: PlannerProductSettings)
     suspend fun addProduct(
         date: LocalDate,
         product: ProductWithExtras,
@@ -92,6 +94,7 @@ class DefaultDailyCutRepository(
     private val mealPlanner = OfflineMealPlanner()
     private val healthAnalytics = HealthAnalyticsEngine()
     private val historySyncMutex = Mutex()
+    private val plannerSettingsMutex = Mutex()
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override suspend fun initialize() = initializationMutex.withLock {
@@ -135,6 +138,9 @@ class DefaultDailyCutRepository(
 
     override fun observeRecentProducts(): Flow<List<ProductEntity>> =
         dao.observeRecentProducts().flowOn(Dispatchers.IO)
+
+    override fun observePlannerProducts(): Flow<List<ProductEntity>> =
+        dao.observePlannerProducts().flowOn(Dispatchers.IO)
 
     override fun observeFavoriteProducts(): Flow<List<ProductEntity>> =
         dao.observeFavoriteProducts().flowOn(Dispatchers.IO)
@@ -272,24 +278,66 @@ class DefaultDailyCutRepository(
     }
 
     override suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult = withContext(Dispatchers.IO) {
-        require(product.purchasePriceMicros == null || product.purchasePriceMicros >= 0L) { "Price cannot be negative." }
-        require(product.purchaseUnitServings > 0.0) { "Minimum purchase servings must be greater than zero." }
-        require(product.plannerItemType in PlannerItemType.entries.map(PlannerItemType::name)) { "Invalid planner item type." }
-        require(!product.alwaysIncludeInPlanner || product.includeInPlanner) { "A fixed planner item must be enabled for planning." }
-        product.barcode?.let { barcode ->
-            val owner = dao.productByBarcode(barcode)
-            require(owner == null || owner.productId == product.productId) { "Barcode is already assigned to ${owner?.name}." }
+        plannerSettingsMutex.withLock {
+            require(product.purchasePriceMicros == null || product.purchasePriceMicros >= 0L) { "Price cannot be negative." }
+            require(product.purchaseUnitServings > 0.0) { "Minimum purchase servings must be greater than zero." }
+            require(product.fixedPurchaseUnits in 1..6) { "Fixed purchase units must be between 1 and 6." }
+            require(product.plannerItemType in PlannerItemType.entries.map(PlannerItemType::name)) { "Invalid planner item type." }
+            require(!product.alwaysIncludeInPlanner || product.includeInPlanner) { "A fixed planner item must be enabled for planning." }
+            val existingProducts = dao.allProducts()
+            val existingFixedTotal = existingProducts
+                .sumOf { if (it.includeInPlanner && it.alwaysIncludeInPlanner) it.fixedPurchaseUnits else 0 }
+            val fixedTotal = existingProducts
+                .filterNot { it.productId == product.productId }
+                .sumOf { if (it.includeInPlanner && it.alwaysIncludeInPlanner) it.fixedPurchaseUnits else 0 } +
+                if (product.includeInPlanner && product.alwaysIncludeInPlanner) product.fixedPurchaseUnits else 0
+            require(fixedTotal <= 20 || fixedTotal <= existingFixedTotal) {
+                "Fixed products may total at most 20 purchase units."
+            }
+            product.barcode?.let { barcode ->
+                val owner = dao.productByBarcode(barcode)
+                require(owner == null || owner.productId == product.productId) { "Barcode is already assigned to ${owner?.name}." }
+            }
+            val mutation = dao.saveProductAndUpdateLinkedLogs(product, extras)
+            val dates = mutation.affectedDates.map(LocalDate::parse).toSet()
+            DailyCutWidgetUpdater.updateAll(context)
+            nutritionSync.enqueue(dates)
+            syncScope.launch { nutritionSync.retryPending() }
+            ProductMutationResult(product, mutation.linkedEntriesUpdated, dates)
         }
-        val mutation = dao.saveProductAndUpdateLinkedLogs(product, extras)
-        val dates = mutation.affectedDates.map(LocalDate::parse).toSet()
-        DailyCutWidgetUpdater.updateAll(context)
-        nutritionSync.enqueue(dates)
-        syncScope.launch { nutritionSync.retryPending() }
-        ProductMutationResult(product, mutation.linkedEntriesUpdated, dates)
     }
 
     override suspend fun setProductFavorite(productId: String, favorite: Boolean) = withContext(Dispatchers.IO) {
         check(dao.updateProductFavorite(productId, favorite) == 1) { "Product no longer exists." }
+    }
+
+    override suspend fun updatePlannerSettings(settings: PlannerProductSettings) = withContext(Dispatchers.IO) {
+        plannerSettingsMutex.withLock {
+            require(settings.fixedPurchaseUnits in 1..6) { "Fixed purchase units must be between 1 and 6." }
+            require(!settings.fixedInPlanner || settings.includeInPlanner) { "A fixed item must be included in planning." }
+            val itemType = settings.itemType.name
+            val products = dao.allProducts()
+            val existingFixedTotal = products
+                .sumOf { if (it.includeInPlanner && it.alwaysIncludeInPlanner) it.fixedPurchaseUnits else 0 }
+            val fixedTotal = products.sumOf { product ->
+                when {
+                    product.productId == settings.productId ->
+                        if (settings.includeInPlanner && settings.fixedInPlanner) settings.fixedPurchaseUnits else 0
+                    product.includeInPlanner && product.alwaysIncludeInPlanner -> product.fixedPurchaseUnits
+                    else -> 0
+                }
+            }
+            require(fixedTotal <= 20 || fixedTotal <= existingFixedTotal) {
+                "Fixed products may total at most 20 purchase units."
+            }
+            check(dao.updateProductPlannerSettings(
+                productId = settings.productId,
+                included = settings.includeInPlanner,
+                itemType = itemType,
+                fixed = settings.fixedInPlanner,
+                fixedUnits = settings.fixedPurchaseUnits
+            ) == 1) { "Product no longer exists." }
+        }
     }
 
     override suspend fun addProduct(

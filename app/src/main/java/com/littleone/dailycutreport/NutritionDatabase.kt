@@ -39,6 +39,7 @@ data class ProductEntity(
     val includeInPlanner: Boolean = true,
     val plannerItemType: String = PlannerItemType.FOOD.name,
     val alwaysIncludeInPlanner: Boolean = false,
+    val fixedPurchaseUnits: Int = 1,
     val favorite: Boolean = false,
     val notes: String = "",
     val createdAt: Long = System.currentTimeMillis(),
@@ -312,6 +313,23 @@ interface NutritionDao {
     fun observeFavoriteProducts(): Flow<List<ProductEntity>>
     @Query("UPDATE products SET favorite = :favorite, updatedAt = :updatedAt WHERE productId = :productId")
     suspend fun updateProductFavorite(productId: String, favorite: Boolean, updatedAt: Long = System.currentTimeMillis()): Int
+
+    @Query("""
+        UPDATE products SET includeInPlanner = :included, plannerItemType = :itemType,
+            alwaysIncludeInPlanner = :fixed, fixedPurchaseUnits = :fixedUnits,
+            updatedAt = :updatedAt WHERE productId = :productId
+    """)
+    suspend fun updateProductPlannerSettings(
+        productId: String,
+        included: Boolean,
+        itemType: String,
+        fixed: Boolean,
+        fixedUnits: Int,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query("SELECT * FROM products ORDER BY name COLLATE NOCASE, brand COLLATE NOCASE, productId")
+    fun observePlannerProducts(): Flow<List<ProductEntity>>
 
     @Query("SELECT * FROM products ORDER BY productId") suspend fun allProducts(): List<ProductEntity>
     @Query("SELECT * FROM product_extra_nutrients ORDER BY productId, name") suspend fun allProductExtras(): List<ProductExtraNutrientEntity>
@@ -696,7 +714,7 @@ interface NutritionDao {
         DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class,
         UserGoalsEntity::class, HealthProfileEntity::class, WeightEntryEntity::class,
         WalkingSessionSampleEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class NutritionDatabase : RoomDatabase() {
@@ -789,11 +807,17 @@ abstract class NutritionDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `products` ADD COLUMN `fixedPurchaseUnits` INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
                 ).build().also { INSTANCE = it }
         }
     }

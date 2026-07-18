@@ -24,6 +24,7 @@ internal const val PRODUCT_JSON_TEMPLATE = """
     "includeInPlanner": true,
     "itemType": "FOOD",
     "fixedInPlanner": false,
+    "fixedPurchaseUnits": 1,
     "favorite": false,
     "extras": [
       { "name": "Potassium", "value": 0, "unit": "mg" }
@@ -69,6 +70,11 @@ internal fun ProductEditorDraft.withProductJson(input: String): ProductEditorDra
     } else plannerItemType
     val include = if (product.has("includeInPlanner")) product.getBoolean("includeInPlanner") else includeInPlanner
     val fixed = if (product.has("fixedInPlanner")) product.getBoolean("fixedInPlanner") else alwaysIncludeInPlanner
+    val fixedUnits = if (product.has("fixedPurchaseUnits")) {
+        product.getInt("fixedPurchaseUnits").also {
+            require(it in 1..6) { "fixedPurchaseUnits must be an integer from 1 to 6." }
+        }.toString()
+    } else fixedPurchaseUnits
 
     return copy(
         barcode = if (product.has("barcode")) product.optionalString("barcode") ?: "" else barcode,
@@ -88,6 +94,7 @@ internal fun ProductEditorDraft.withProductJson(input: String): ProductEditorDra
         includeInPlanner = include,
         plannerItemType = itemType,
         alwaysIncludeInPlanner = include && fixed,
+        fixedPurchaseUnits = fixedUnits,
         favorite = if (product.has("favorite")) product.getBoolean("favorite") else favorite,
         extras = if (product.has("extras")) product.getJSONArray("extras").toEditorText() else extras,
         ocrDraft = null

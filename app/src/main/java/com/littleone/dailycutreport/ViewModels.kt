@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import java.time.LocalDate
@@ -119,6 +120,7 @@ data class ProductEditorDraft(
     val includeInPlanner: Boolean = true,
     val plannerItemType: PlannerItemType = PlannerItemType.FOOD,
     val alwaysIncludeInPlanner: Boolean = false,
+    val fixedPurchaseUnits: String = "1",
     val favorite: Boolean = false,
     val extras: String = "",
     val ocrDraft: OcrNutritionDraft? = null
@@ -146,6 +148,7 @@ data class ProductEditorDraft(
                 includeInPlanner = product?.includeInPlanner ?: true,
                 plannerItemType = PlannerItemType.entries.firstOrNull { it.name == product?.plannerItemType } ?: PlannerItemType.FOOD,
                 alwaysIncludeInPlanner = product?.alwaysIncludeInPlanner ?: false,
+                fixedPurchaseUnits = (product?.fixedPurchaseUnits ?: 1).toString(),
                 favorite = product?.favorite ?: false,
                 extras = existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()
             )
@@ -270,11 +273,14 @@ class FoodsViewModel(
         val current = _scannerSession.value
         val existing = current.items.firstOrNull { it.product.productId == product.productId }
         val items = if (existing == null) {
-            current.items + MultiScanItem(product)
+            current.items + MultiScanItem(product, product.purchaseUnitServings.toDisplay())
         } else {
             current.items.map {
                 if (it.product.productId == product.productId) {
-                    it.copy(quantityText = ((it.quantity ?: 1.0) + 1.0).toDisplay())
+                    it.copy(
+                        quantityText = ((it.quantity ?: product.purchaseUnitServings) +
+                            product.purchaseUnitServings).toDisplay()
+                    )
                 } else it
             }
         }
@@ -404,7 +410,7 @@ class FoodsViewModel(
         }
         bulkDraft.value = current.copy(
             date = current.date ?: uiState.value.date,
-            items = current.items + BulkDraftItem(product)
+            items = current.items + BulkDraftItem(product, product.purchaseUnitServings.toDisplay())
         )
     }
 
@@ -809,6 +815,94 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
     fun clearMessage() { _uiState.value = _uiState.value.copy(message = null) }
 }
 
+data class PlannerSettingsUiState(
+    val query: String = "",
+    val products: List<ProductEntity> = emptyList(),
+    val amountDrafts: Map<String, String> = emptyMap(),
+    val errors: Map<String, String> = emptyMap()
+) {
+    val visibleProducts: List<ProductEntity>
+        get() {
+            val normalized = query.trim().lowercase()
+            return if (normalized.isBlank()) products else products.filter { product ->
+                product.name.lowercase().contains(normalized) ||
+                    product.brand.lowercase().contains(normalized) ||
+                    product.barcode.orEmpty().lowercase().contains(normalized)
+            }
+        }
+}
+
+class PlannerSettingsViewModel(private val repository: DailyCutRepository) : ViewModel() {
+    private val query = MutableStateFlow("")
+    private val products = repository.observePlannerProducts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val amountDrafts = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val errors = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val saveJobs = mutableMapOf<String, Job>()
+    private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val events: SharedFlow<String> = _events.asSharedFlow()
+
+    val uiState: StateFlow<PlannerSettingsUiState> =
+        combine(query, products, amountDrafts, errors, ::PlannerSettingsUiState)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlannerSettingsUiState())
+
+    fun setQuery(value: String) { query.value = value }
+
+    fun setIncluded(product: ProductEntity, included: Boolean) {
+        save(product, included = included, fixed = product.alwaysIncludeInPlanner && included)
+    }
+
+    fun setItemType(product: ProductEntity, itemType: PlannerItemType) {
+        save(product, itemType = itemType)
+    }
+
+    fun setFixed(product: ProductEntity, fixed: Boolean) {
+        if (!product.includeInPlanner) return
+        save(product, fixed = fixed)
+    }
+
+    fun setFixedUnitsText(product: ProductEntity, value: String) {
+        amountDrafts.value = amountDrafts.value + (product.productId to value)
+        val units = value.toIntOrNull()?.takeIf { it in 1..6 }
+        if (units == null) {
+            errors.value = errors.value + (product.productId to "Enter a whole number from 1 to 6.")
+            saveJobs.remove(product.productId)?.cancel()
+            return
+        }
+        errors.value = errors.value - product.productId
+        saveJobs.remove(product.productId)?.cancel()
+        saveJobs[product.productId] = viewModelScope.launch {
+            delay(300)
+            save(product, fixedUnits = units, clearDraftOnSuccess = true)
+        }
+    }
+
+    private fun save(
+        product: ProductEntity,
+        included: Boolean = product.includeInPlanner,
+        itemType: PlannerItemType = PlannerItemType.entries.firstOrNull { it.name == product.plannerItemType }
+            ?: PlannerItemType.FOOD,
+        fixed: Boolean = product.alwaysIncludeInPlanner,
+        fixedUnits: Int = amountDrafts.value[product.productId]?.toIntOrNull() ?: product.fixedPurchaseUnits,
+        clearDraftOnSuccess: Boolean = false
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                repository.updatePlannerSettings(
+                    PlannerProductSettings(product.productId, included, itemType, fixed && included, fixedUnits)
+                )
+            }.onSuccess {
+                errors.value = errors.value - product.productId
+                if (clearDraftOnSuccess) amountDrafts.value = amountDrafts.value - product.productId
+            }.onFailure { error ->
+                amountDrafts.value = amountDrafts.value - product.productId
+                errors.value = errors.value + (product.productId to (error.message ?: "Could not save planner settings."))
+                _events.emit(error.message ?: "Could not save planner settings.")
+            }
+        }
+    }
+}
+
 data class HealthUiState(
     val dashboard: HealthDashboard? = null,
     val refreshing: Boolean = false,
@@ -883,6 +977,7 @@ class AppViewModelFactory(
         modelClass.isAssignableFrom(FoodsViewModel::class.java) -> FoodsViewModel(repository, requireNotNull(selectedDate)) as T
         modelClass.isAssignableFrom(HealthViewModel::class.java) -> HealthViewModel(repository, requireNotNull(selectedDate)) as T
         modelClass.isAssignableFrom(SettingsViewModel::class.java) -> SettingsViewModel(repository) as T
+        modelClass.isAssignableFrom(PlannerSettingsViewModel::class.java) -> PlannerSettingsViewModel(repository) as T
         modelClass.isAssignableFrom(OcrViewModel::class.java) -> OcrViewModel(requireNotNull(ocr), requireNotNull(preprocessor)) as T
         else -> error("Unknown ViewModel: ${modelClass.name}")
     }

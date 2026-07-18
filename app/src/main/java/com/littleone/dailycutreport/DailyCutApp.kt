@@ -1183,15 +1183,15 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.End
                 ) {
-                    listOf(maxDeficit, maxDeficit / 2, 0.0, -maxDeficit / 2, -maxDeficit).forEach {
+                    listOf(maxDeficit, 0.0, -maxDeficit).forEach {
                         Text(formatCalories(it), style = MaterialTheme.typography.labelSmall)
                     }
                 }
                 Canvas(Modifier.weight(1f).height(112.dp).padding(start = 6.dp)) {
                     val middle = size.height / 2f
-                    repeat(5) { tick ->
-                        val y = size.height * tick / 4f
-                        drawLine(gridColor.copy(alpha = if (tick == 2) 0.35f else 0.12f),
+                    repeat(3) { tick ->
+                        val y = size.height * tick / 2f
+                        drawLine(gridColor.copy(alpha = if (tick == 1) 0.35f else 0.12f),
                             androidx.compose.ui.geometry.Offset(0f, y),
                             androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
                     }
@@ -1231,14 +1231,13 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.End
                 ) {
-                    (0..4).forEach { tick ->
-                        Text(formatDecimal(axisMax - (axisMax - axisMin) * tick / 4.0), style = MaterialTheme.typography.labelSmall)
-                    }
+                    Text(formatDecimal(axisMax), style = MaterialTheme.typography.labelSmall)
+                    Text(formatDecimal(axisMin), style = MaterialTheme.typography.labelSmall)
                 }
                 Canvas(Modifier.weight(1f).height(112.dp).padding(start = 6.dp)) {
                     val xStep = size.width / (points.size - 1).coerceAtLeast(1)
-                    repeat(5) { line ->
-                        val y = size.height * line / 4f
+                    repeat(2) { line ->
+                        val y = size.height * line
                         drawLine(gridColor.copy(alpha = 0.12f),
                             androidx.compose.ui.geometry.Offset(0f, y),
                             androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
@@ -1265,10 +1264,23 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
     }
 }
 
+internal enum class SettingsPage(val route: String, val title: String, val summary: String) {
+    GOALS("settings/goals", "Goals & budget", "Calories, deficit, macros, currency, and weight target"),
+    PLANNER("settings/planner", "Planner", "Choose included, fixed, food, and drink products"),
+    HEALTH_CONNECT("settings/health-connect", "Health Connect", "Permissions, refresh, bootstrap, and nutrition sync"),
+    PRODUCT_JSON("settings/product-json", "Product JSON", "Copy the schema for fast AI-assisted product entry"),
+    BACKUP("settings/backup", "Backup & restore", "Encrypted local export and device migration"),
+    PRIVACY("settings/privacy", "Privacy & offline", "Offline guarantees and local data handling"),
+    ABOUT("settings/about", "About", "Version and database information")
+}
+
 @Composable
 internal fun SettingsScreen(
     selectedDate: LocalDate,
     viewModel: SettingsViewModel,
+    page: SettingsPage?,
+    onNavigate: (SettingsPage) -> Unit,
+    onBack: () -> Unit,
     onMessage: (String) -> Unit,
     onGrantCorePermissions: () -> Unit,
     onGrantNutritionPermission: () -> Unit,
@@ -1292,12 +1304,24 @@ internal fun SettingsScreen(
         state.message?.let { onMessage(it); viewModel.clearMessage() }
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-        item { GoalsSettingsCard(state.goals, state.healthProfile, viewModel::saveGoalsAndProfile) }
-        item {
-            Card(Modifier.fillMaxWidth()) {
+        if (page == null) {
+            item { Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+            SettingsPage.entries.forEach { destination ->
+                item(destination.route) {
+                    SettingsMenuButton(destination.title, destination.summary) { onNavigate(destination) }
+                }
+            }
+        } else {
+            item { SettingsPageHeader(page.title, onBack) }
+        }
+        when (page) {
+            null -> Unit
+            SettingsPage.GOALS -> item {
+                GoalsSettingsCard(state.goals, state.healthProfile, viewModel::saveGoalsAndProfile)
+            }
+            SettingsPage.PLANNER -> Unit
+            SettingsPage.HEALTH_CONNECT -> item {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Health Connect", style = MaterialTheme.typography.titleLarge)
                     Text(if (state.healthAvailable) "Available" else "Unavailable")
                     Text(if (state.corePermissionsGranted) "Activity permissions granted" else "Activity permissions required")
                     Button(
@@ -1332,12 +1356,9 @@ internal fun SettingsScreen(
                     state.healthHistoryStatus?.let { Text("28-day history: $it", style = MaterialTheme.typography.bodySmall) }
                 }
             }
-        }
-        item {
+            SettingsPage.PRODUCT_JSON -> item {
             val clipboard = LocalClipboardManager.current
-            Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Product JSON", style = MaterialTheme.typography.titleLarge)
                     Text("Copy this schema when asking an AI tool to estimate nutrition from a photo, then import its response in the manual product editor.")
                     OutlinedButton(
                         onClick = {
@@ -1348,11 +1369,8 @@ internal fun SettingsScreen(
                     ) { Text("Copy product JSON schema") }
                 }
             }
-        }
-        item {
-            Card(Modifier.fillMaxWidth()) {
+            SettingsPage.BACKUP -> item {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Encrypted local backup", style = MaterialTheme.typography.titleLarge)
                     Text("System cloud backup is disabled. Export a password-protected file for device migration.")
                     Button(
                         onClick = { createBackup.launch("DailyCutReport_${LocalDate.now()}.dcrbackup") },
@@ -1364,11 +1382,8 @@ internal fun SettingsScreen(
                     ) { Text("Restore full backup") }
                 }
             }
-        }
-        item {
-            Card(Modifier.fillMaxWidth()) {
+            SettingsPage.PRIVACY -> item {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Strictly offline", style = MaterialTheme.typography.titleLarge)
                     Text("The packaged app has no Internet or network-state permission. Barcode recognition runs from the bundled on-device model.")
                     Text("Food data and reports stay in the app's local Room database. Android cloud backup is disabled.")
                     Text("Chinese, English, and Japanese label OCR uses bundled on-device models.")
@@ -1376,12 +1391,10 @@ internal fun SettingsScreen(
                     Text("The Today summary widget shows local progress and opens the same offline scanner directly.")
                 }
             }
-        }
-        item {
-            Card(Modifier.fillMaxWidth()) {
+            SettingsPage.ABOUT -> item {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 7 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 8 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -1395,6 +1408,100 @@ internal fun SettingsScreen(
                 pendingBackupAction = null
             }
         )
+    }
+}
+
+@Composable
+private fun SettingsMenuButton(title: String, summary: String, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp)) {
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Text(summary, style = MaterialTheme.typography.bodySmall)
+        }
+        Text("›", style = MaterialTheme.typography.headlineSmall)
+    }
+}
+
+@Composable
+private fun SettingsPageHeader(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 48.dp)) { Text("‹ Back") }
+        Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+internal fun PlannerSettingsScreen(
+    viewModel: PlannerSettingsViewModel,
+    onBack: () -> Unit,
+    onMessage: (String) -> Unit
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.events.collect(onMessage) }
+    LazyColumn(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { SettingsPageHeader(SettingsPage.PLANNER.title, onBack) }
+        item {
+            OutlinedTextField(
+                value = state.query,
+                onValueChange = viewModel::setQuery,
+                label = { Text("Search planner products") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "${state.visibleProducts.size} product${if (state.visibleProducts.size == 1) "" else "s"}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        items(state.visibleProducts, key = ProductEntity::productId) { product ->
+            val itemType = PlannerItemType.entries.firstOrNull { it.name == product.plannerItemType }
+                ?: PlannerItemType.FOOD
+            val fixedText = state.amountDrafts[product.productId] ?: product.fixedPurchaseUnits.toString()
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(product.name, fontWeight = FontWeight.Bold)
+                    product.brand.takeIf(String::isNotBlank)?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        "One purchase unit = ${product.purchaseUnitServings.toDisplay()} serving(s)",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    ToggleRow("Include in planning", product.includeInPlanner) {
+                        viewModel.setIncluded(product, it)
+                    }
+                    Text("Item type", style = MaterialTheme.typography.labelLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = itemType == PlannerItemType.FOOD,
+                            onClick = { viewModel.setItemType(product, PlannerItemType.FOOD) }
+                        )
+                        Text("Food", Modifier.weight(1f))
+                        RadioButton(
+                            selected = itemType == PlannerItemType.DRINK,
+                            onClick = { viewModel.setItemType(product, PlannerItemType.DRINK) }
+                        )
+                        Text("Drink")
+                    }
+                    ToggleRow(
+                        "Fixed in strict plans",
+                        product.alwaysIncludeInPlanner,
+                        enabled = product.includeInPlanner
+                    ) { viewModel.setFixed(product, it) }
+                    if (product.alwaysIncludeInPlanner) {
+                        DecimalField("Fixed purchase units (1–6)", fixedText) {
+                            viewModel.setFixedUnitsText(product, it)
+                        }
+                        state.errors[product.productId]?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(32.dp)) }
     }
 }
 
@@ -1552,7 +1659,9 @@ private fun QuantityDialog(
     onDismiss: () -> Unit,
     onConfirm: (Double, Long?, Boolean) -> Unit
 ) {
-    var quantity by remember { mutableStateOf("1") }
+    var quantity by remember(product.product.productId) {
+        mutableStateOf(product.product.purchaseUnitServings.toDisplay())
+    }
     var actualPaid by remember { mutableStateOf("") }
     var excludeCostFromBudget by remember { mutableStateOf(false) }
     val parsedQuantity = quantity.numberOrNull()?.takeIf { it > 0.0 }
@@ -1595,8 +1704,10 @@ private fun ProductEditorDialog(
     val nutrientInputs = listOf(draft.calories, draft.protein, draft.sodium, draft.carbs, draft.fat, draft.sugar, draft.fiber, draft.saturatedFat)
     val parsedPrice = runCatching { parseMoneyMicros(draft.purchasePrice) }.getOrNull()
     val parsedPurchaseServings = draft.purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
+    val parsedFixedUnits = draft.fixedPurchaseUnits.toIntOrNull()?.takeIf { it in 1..6 }
     val valid = draft.name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
-        (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null
+        (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null &&
+        parsedFixedUnits != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1635,8 +1746,13 @@ private fun ProductEditorDialog(
                     RadioButton(selected = draft.plannerItemType == PlannerItemType.DRINK, onClick = { onDraftChange(draft.copy(plannerItemType = PlannerItemType.DRINK)) })
                     Text("Drink")
                 }
-                ToggleRow("Always include one purchase unit in plans", draft.alwaysIncludeInPlanner, enabled = draft.includeInPlanner) {
+                ToggleRow("Always include in plans", draft.alwaysIncludeInPlanner, enabled = draft.includeInPlanner) {
                     onDraftChange(draft.copy(alwaysIncludeInPlanner = it))
+                }
+                if (draft.alwaysIncludeInPlanner) {
+                    DecimalField("Fixed purchase units (1–6)", draft.fixedPurchaseUnits) {
+                        onDraftChange(draft.copy(fixedPurchaseUnits = it))
+                    }
                 }
                 OutlinedTextField(draft.extras, { onDraftChange(draft.copy(extras = it)) }, label = { Text("Extra nutrients: Name=12 unit") })
             }
@@ -1663,6 +1779,7 @@ private fun ProductEditorDialog(
                     includeInPlanner = draft.includeInPlanner,
                     plannerItemType = draft.plannerItemType.name,
                     alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner,
+                    fixedPurchaseUnits = parsedFixedUnits ?: 1,
                     favorite = draft.favorite,
                     notes = product?.notes.orEmpty(),
                     createdAt = product?.createdAt ?: System.currentTimeMillis(),

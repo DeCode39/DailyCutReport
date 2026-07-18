@@ -45,6 +45,7 @@ fun DailyCutApp(
     foodsViewModel: FoodsViewModel,
     healthViewModel: HealthViewModel,
     settingsViewModel: SettingsViewModel,
+    plannerSettingsViewModel: PlannerSettingsViewModel,
     ocrViewModel: OcrViewModel,
     scannerLaunchRequests: State<Int>? = null
 ) {
@@ -102,7 +103,8 @@ fun DailyCutApp(
                     NavigationBar {
                         Destination.entries.forEach { destination ->
                             NavigationBarItem(
-                                selected = route == destination.route,
+                                selected = route == destination.route ||
+                                    (destination == Destination.SETTINGS && route.startsWith("settings/")),
                                 onClick = {
                                     navController.navigate(destination.route) {
                                         popUpTo(navController.graph.findStartDestination().id) { saveState = true }
@@ -152,11 +154,37 @@ fun DailyCutApp(
                     SettingsScreen(
                         selectedDate = selectedDate,
                         viewModel = settingsViewModel,
+                        page = null,
+                        onNavigate = { navController.navigate(it.route) },
+                        onBack = { navController.popBackStack() },
                         onMessage = showMessage,
                         onGrantCorePermissions = { healthPermissionLauncher.launch(HealthConnectManager.CORE_PERMISSIONS) },
                         onGrantNutritionPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_PERMISSION)) },
                         onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) },
                         onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) }
+                    )
+                }
+                SettingsPage.entries.filterNot { it == SettingsPage.PLANNER }.forEach { page ->
+                    composable(page.route) {
+                        SettingsScreen(
+                            selectedDate = selectedDate,
+                            viewModel = settingsViewModel,
+                            page = page,
+                            onNavigate = { navController.navigate(it.route) },
+                            onBack = { navController.popBackStack() },
+                            onMessage = showMessage,
+                            onGrantCorePermissions = { healthPermissionLauncher.launch(HealthConnectManager.CORE_PERMISSIONS) },
+                            onGrantNutritionPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_PERMISSION)) },
+                            onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) },
+                            onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) }
+                        )
+                    }
+                }
+                composable(SettingsPage.PLANNER.route) {
+                    PlannerSettingsScreen(
+                        viewModel = plannerSettingsViewModel,
+                        onBack = { navController.popBackStack() },
+                        onMessage = showMessage
                     )
                 }
                 composable(Destination.HEALTH.route) {

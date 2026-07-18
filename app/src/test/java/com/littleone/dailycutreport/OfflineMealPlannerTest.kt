@@ -202,6 +202,51 @@ class OfflineMealPlannerTest {
         assertEquals(listOf("optional"), plan.items.map { it.productId })
     }
 
+    @Test fun configuredFixedUnitsRecommendOnlyWholeUnitsStillRequired() {
+        val fixed = ProductEntity(
+            "fixed", name = "Fixed multipack", calories = 100.0, proteinG = 8.0,
+            purchasePriceMicros = 10_000_000L, purchaseUnitServings = 2.0,
+            alwaysIncludeInPlanner = true, fixedPurchaseUnits = 3
+        )
+        val result = planner.generate(
+            listOf(fixed),
+            PlannerDayContext(
+                consumed = NutritionSummary(calories = 250.0, proteinG = 20.0),
+                spending = DailySpending(budgetMicros = goals.dailyBudgetMicros),
+                loggedServingsByProductId = mapOf("fixed" to 2.5)
+            ),
+            goals.copy(calories = 650.0, proteinG = 50.0, fiberG = 0.0)
+        )
+
+        val item = result.plans.first().items.single { it.productId == "fixed" }
+        assertEquals(2, item.purchaseUnits)
+        assertEquals(4.0, item.servings, 0.0)
+        assertTrue(item.fixed)
+    }
+
+    @Test fun fixedDrinksDoNotConsumeTwoAdditionalDrinkUnits() {
+        val fixedDrink = ProductEntity(
+            "fixed-drink", name = "Fixed drink", calories = 100.0, proteinG = 10.0,
+            purchasePriceMicros = 1_000_000L, plannerItemType = PlannerItemType.DRINK.name,
+            alwaysIncludeInPlanner = true, fixedPurchaseUnits = 2
+        )
+        val optionalDrink = ProductEntity(
+            "optional-drink", name = "Optional drink", calories = 100.0, proteinG = 10.0,
+            purchasePriceMicros = 1_000_000L, plannerItemType = PlannerItemType.DRINK.name
+        )
+        val result = planner.generate(
+            listOf(fixedDrink, optionalDrink),
+            NutritionSummary(),
+            DailySpending(budgetMicros = goals.dailyBudgetMicros),
+            goals.copy(calories = 400.0, proteinG = 40.0, fiberG = 0.0)
+        )
+
+        val plan = result.plans.first()
+        assertEquals(2, plan.items.single { it.productId == "fixed-drink" }.purchaseUnits)
+        assertEquals(2, plan.items.single { it.productId == "optional-drink" }.purchaseUnits)
+        assertEquals(4, plan.items.sumOf { it.purchaseUnits })
+    }
+
     @Test fun partialOrDetachedFixedLogStillRequiresOneWholeUnit() {
         val fixed = ProductEntity(
             "fixed", name = "Fixed", calories = 1_000.0, proteinG = 80.0, fiberG = 10.0,

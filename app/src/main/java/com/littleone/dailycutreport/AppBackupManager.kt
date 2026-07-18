@@ -170,7 +170,7 @@ object BackupCrypto {
 }
 
 object BackupJson {
-    private const val SCHEMA_VERSION = 4
+    private const val SCHEMA_VERSION = 5
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
@@ -221,6 +221,8 @@ object BackupJson {
         products.forEach {
             require(it.purchasePriceMicros == null || it.purchasePriceMicros >= 0L)
             require(it.purchaseUnitServings > 0.0)
+            require(it.fixedPurchaseUnits in 1..6)
+            require(!it.alwaysIncludeInPlanner || it.includeInPlanner)
         }
         logs.forEach {
             require(it.catalogCostPerServingMicros == null || it.catalogCostPerServingMicros >= 0L)
@@ -235,6 +237,7 @@ object BackupJson {
         put("saturatedFatG", saturatedFatG); putNullable("purchasePriceMicros", purchasePriceMicros)
         put("purchaseUnitServings", purchaseUnitServings); put("includeInPlanner", includeInPlanner)
         put("plannerItemType", plannerItemType); put("alwaysIncludeInPlanner", alwaysIncludeInPlanner)
+        put("fixedPurchaseUnits", fixedPurchaseUnits)
         put("favorite", favorite)
         put("notes", notes); put("createdAt", createdAt); put("updatedAt", updatedAt)
     }
@@ -303,6 +306,7 @@ object BackupJson {
             require(it in PlannerItemType.entries.map(PlannerItemType::name))
         },
         alwaysIncludeInPlanner = o.optBoolean("alwaysIncludeInPlanner", false),
+        fixedPurchaseUnits = o.optInt("fixedPurchaseUnits", 1).also { require(it in 1..6) },
         favorite = o.optBoolean("favorite", false),
         notes = o.getString("notes"), createdAt = o.getLong("createdAt"), updatedAt = o.getLong("updatedAt")
     ).also { require(!it.alwaysIncludeInPlanner || it.includeInPlanner) }

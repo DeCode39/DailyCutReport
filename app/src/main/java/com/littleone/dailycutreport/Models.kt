@@ -333,6 +333,14 @@ enum class FoodMode { NORMAL, BULK }
 enum class ProductSaveTarget { STANDALONE_LOG, BULK_CART, MULTI_SCAN_QUEUE, CATALOG_ONLY }
 enum class ScanTarget { STANDALONE, BULK_CART }
 
+data class PlannerProductSettings(
+    val productId: String,
+    val includeInPlanner: Boolean,
+    val itemType: PlannerItemType,
+    val fixedInPlanner: Boolean,
+    val fixedPurchaseUnits: Int
+)
+
 data class BulkDraftItem(
     val product: ProductEntity,
     val quantityText: String = "1"
