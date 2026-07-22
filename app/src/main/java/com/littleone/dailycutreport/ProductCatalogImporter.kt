@@ -26,7 +26,7 @@ object ProductCatalogParser {
     fun parse(json: String): List<ProductWithExtras> {
         val root = JSONObject(json)
         val schema = root.getInt("schemaVersion")
-        require(schema == 1 || schema == 2) { "Unsupported catalog schema $schema" }
+        require(schema in 1..3) { "Unsupported catalog schema $schema" }
         val products = root.getJSONArray("products")
         val seenIds = mutableSetOf<String>()
         val seenBarcodes = mutableSetOf<String>()
@@ -46,12 +46,34 @@ object ProductCatalogParser {
             if (barcode != null) require(seenBarcodes.add(barcode)) { "Duplicate barcode $barcode" }
             val name = item.getString("name").trim()
             require(name.isNotBlank()) { "Product $productId has no name" }
+            val inferred = inferQuantitySpec(item.optString("servingLabel", "1 serving")).spec
+            val quantityMode = if (schema >= 3 && item.has("quantityMode")) {
+                runCatching { QuantityMode.valueOf(item.getString("quantityMode").uppercase()) }
+                    .getOrElse { error("Product $productId has an invalid quantityMode") }
+            } else inferred.mode
+            val measurePerServing = if (schema >= 3 && item.has("measurePerServing") && !item.isNull("measurePerServing")) {
+                item.getDouble("measurePerServing").also {
+                    require(it.isFinite() && it > 0.0) { "Product $productId has an invalid measurePerServing" }
+                }
+            } else inferred.measurePerServing
+            val quantitySpec = ProductQuantitySpec(quantityMode, measurePerServing)
+            require(!quantityMode.measureAvailable || quantitySpec.measureAvailable) {
+                "Product $productId requires measurePerServing"
+            }
+            val preferred = if (schema >= 3 && item.has("preferredLogUnit")) {
+                QuantityUnit.valueOf(item.getString("preferredLogUnit").uppercase()).also {
+                    require(quantitySpec.supports(it)) { "Product $productId has an unavailable preferredLogUnit" }
+                }
+            } else quantitySpec.preferredOrFallback(QuantityUnit.SERVINGS)
             val product = ProductEntity(
                 productId = productId,
                 barcode = barcode,
                 name = name,
                 brand = item.optString("brand"),
                 servingLabel = item.optString("servingLabel", "1 serving").ifBlank { "1 serving" },
+                quantityMode = quantityMode.name,
+                measurePerServing = measurePerServing,
+                preferredLogUnit = preferred.name,
                 calories = item.nonNegative("calories"),
                 proteinG = item.nonNegative("proteinG"),
                 sodiumMg = item.nonNegative("sodiumMg"),

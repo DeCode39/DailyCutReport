@@ -110,7 +110,10 @@ class NutritionDatabaseTest {
             productId = "meal", name = "Meal", purchasePriceMicros = 20_000_000L,
             purchaseUnitServings = 2.0
         )
-        dao.addProductToDate("2026-01-02", product, 2.0, emptyList(), 15_000_000L, true)
+        dao.addProductToDate(
+            "2026-01-02", product, 2.0, emptyList(),
+            actualPaidTotalMicros = 15_000_000L, excludeCostFromBudget = true
+        )
 
         val spending = dao.spendingForDate("2026-01-02")
         val log = dao.foodLogsForDate("2026-01-02").single()
@@ -230,8 +233,10 @@ class NutritionDatabaseTest {
         helper.writableDatabase.apply {
             execSQL("INSERT INTO products VALUES ('4711089912108','Meal','','1 serving',100,10,20,0,0,0,0,0,'',1,1)")
             execSQL("INSERT INTO products VALUES ('CUSTOM-MEAL','Custom','','1 serving',50,5,10,0,0,0,0,0,'',1,1)")
+            execSQL("INSERT INTO products VALUES ('CUSTOM-WEIGHT','Rice','','100 g',130,3,0,28,0,0,1,0,'',1,1)")
             execSQL("INSERT INTO product_extra_nutrients VALUES ('CUSTOM-MEAL','BCAA',300,'mg')")
             execSQL("INSERT INTO daily_food_logs VALUES (1,'2026-01-02','4711089912108','Meal','','1 serving',2,200,20,40,0,0,0,0,0,1)")
+            execSQL("INSERT INTO daily_food_logs VALUES (2,'2026-01-02','CUSTOM-WEIGHT','Rice','','100 g',1.5,195,4.5,0,42,0,0,1.5,0,2)")
             execSQL("INSERT INTO daily_extra_nutrient_logs VALUES (1,1,'Potassium',400,'mg')")
         }
         helper.close()
@@ -244,16 +249,23 @@ class NutritionDatabaseTest {
                 NutritionDatabase.MIGRATION_4_5,
                 NutritionDatabase.MIGRATION_5_6,
                 NutritionDatabase.MIGRATION_6_7,
-                NutritionDatabase.MIGRATION_7_8
+                NutritionDatabase.MIGRATION_7_8,
+                NutritionDatabase.MIGRATION_8_9
             )
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase
-        val log = migrated.nutritionDao().observeLogsForDate("2026-01-02").first().single()
+        val log = migrated.nutritionDao().observeLogsForDate("2026-01-02").first().single { it.id == 1L }
         assertEquals(100.0, log.caloriesPerServing, 0.0)
         assertEquals(2.0, log.quantity, 0.0)
         assertEquals("4711089912108", migrated.nutritionDao().productById("4711089912108")?.barcode)
         assertEquals(null, migrated.nutritionDao().productById("CUSTOM-MEAL")?.barcode)
         assertEquals(1, migrated.nutritionDao().extrasForProduct("CUSTOM-MEAL").size)
+        val measured = migrated.nutritionDao().productById("CUSTOM-WEIGHT")!!
+        assertEquals(QuantityMode.WEIGHT_ONLY.name, measured.quantityMode)
+        assertEquals(100.0, measured.measurePerServing!!, 0.0)
+        val measuredLog = migrated.nutritionDao().foodLogById(2)!!
+        assertEquals(QuantityUnit.GRAMS.name, measuredLog.enteredUnit)
+        assertEquals(150.0, measuredLog.enteredAmount, 0.0)
         migrated.close()
         context.deleteDatabase(name)
         database = Room.inMemoryDatabaseBuilder(context, NutritionDatabase::class.java).allowMainThreadQueries().build()
@@ -296,7 +308,10 @@ class NutritionDatabaseTest {
             purchasePriceMicros = 20_000_000L, purchaseUnitServings = 2.0
         )
         dao.saveProductWithExtras(original, listOf(ProductExtraNutrientEntity("meal", "BCAA", 1.0, "g")))
-        dao.addProductToDate("2026-01-02", original, 2.0, dao.extrasForProduct("meal"), 15_000_000L)
+        dao.addProductToDate(
+            "2026-01-02", original, 2.0, dao.extrasForProduct("meal"),
+            actualPaidTotalMicros = 15_000_000L
+        )
 
         val mutation = dao.saveProductAndUpdateLinkedLogs(
             original.copy(name = "Corrected", calories = 150.0, purchasePriceMicros = 30_000_000L),
@@ -313,6 +328,31 @@ class NutritionDatabaseTest {
         assertEquals("Potassium", dao.dailyExtrasForLog(log.id).single().name)
     }
 
+    @Test fun measuredProductCorrectionPreservesEnteredWeightAndEstimatedTotal() = runBlocking {
+        val dao = database.nutritionDao()
+        val original = ProductEntity(
+            productId = "oats", name = "Oats", calories = 100.0,
+            quantityMode = QuantityMode.SERVING_AND_WEIGHT.name,
+            measurePerServing = 40.0,
+            preferredLogUnit = QuantityUnit.GRAMS.name,
+            purchasePriceMicros = 30_000_000L,
+            purchaseUnitServings = 10.0
+        )
+        dao.saveProductWithExtras(original, emptyList())
+        dao.addProductToDate(
+            date = "2026-01-02", product = original, quantity = 2.0, extras = emptyList(),
+            enteredUnit = QuantityUnit.GRAMS.name, enteredAmount = 80.0
+        )
+
+        dao.saveProductAndUpdateLinkedLogs(original.copy(calories = 120.0, measurePerServing = 50.0), emptyList())
+        val log = dao.foodLogsForDate("2026-01-02").single()
+
+        assertEquals(80.0, log.enteredAmount, 0.0)
+        assertEquals(1.6, log.quantity, 1e-9)
+        assertEquals(192.0, log.caloriesPerServing * log.quantity, 1e-9)
+        assertEquals(6_000_000L, log.catalogEstimatedTotalMicros)
+    }
+
     @Test fun spendingUsesActualPaidIncludingExplicitFreeItems() = runBlocking {
         val dao = database.nutritionDao()
         val priced = ProductEntity(productId = "priced", name = "Priced", purchasePriceMicros = 12_000_000L, purchaseUnitServings = 2.0)
@@ -320,7 +360,7 @@ class NutritionDatabaseTest {
         dao.saveProductWithExtras(priced, emptyList())
         dao.saveProductWithExtras(unknown, emptyList())
         dao.addProductToDate("2026-01-02", priced, 2.0, emptyList())
-        dao.addProductToDate("2026-01-02", priced, 1.0, emptyList(), 0L)
+        dao.addProductToDate("2026-01-02", priced, 1.0, emptyList(), actualPaidTotalMicros = 0L)
         dao.addProductToDate("2026-01-02", unknown, 1.0, emptyList())
 
         val spending = dao.spendingForDate("2026-01-02")

@@ -433,9 +433,11 @@ class OfflineMealPlanner(
             val servings = product.purchaseUnitServings * units
             val itemNutrition = product.nutrition(servings)
             val itemCost = product.purchasePriceMicros?.saturatedMultiply(units)
+            val preferredUnit = product.preferredQuantityUnit()
+            val displayAmount = product.quantitySpec().amountFor(servings, preferredUnit) ?: servings
             val item = RecommendationItem(
                 product.productId, product.name, units, servings, itemCost, itemNutrition,
-                product.plannerType, fixed
+                product.plannerType, fixed, "${displayAmount.toDisplay()} ${preferredUnit.shortLabel}"
             )
             return copy(
                 items = items + item,

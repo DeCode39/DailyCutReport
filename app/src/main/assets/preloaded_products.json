@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "products": [
     {"id":"CUSTOM-BASEU-NORMAL-300ML","barcode":null,"name":"Base&U Protein Milk - Normal Version","brand":"Base&U","servingLabel":"1 bottle (300 ml)","calories":232.5,"proteinG":22.2,"sodiumMg":168,"carbsG":25.8,"fatG":4.5,"sugarG":11.4,"fiberG":0,"saturatedFatG":2.7,"notes":"Regular Base&U value from previously logged label. Barcode not reliably captured, so custom ID used.","extras":[{"name":"BCAA","value":4038,"unit":"mg"}]},
     {"id":"4711089912108","barcode":"4711089912108","name":"Base&U Protein Milk - Lower Calorie Version","brand":"Base&U","servingLabel":"1 bottle (300 ml)","calories":148.8,"proteinG":22.2,"sodiumMg":273,"carbsG":9.6,"fatG":2.4,"sugarG":4.5,"fiberG":0,"saturatedFatG":1.8,"notes":"Lower-calorie Base&U from photographed label. Same protein as normal Base&U, lower kcal, higher sodium.","extras":[{"name":"BCAA","value":3957,"unit":"mg"}]},

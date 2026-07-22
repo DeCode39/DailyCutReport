@@ -30,6 +30,9 @@ class ProductDraftJsonTest {
         assertEquals("18.25", imported.protein)
         assertEquals(PlannerItemType.DRINK, imported.plannerItemType)
         assertEquals("4", imported.fixedPurchaseUnits)
+        assertEquals(QuantityMode.SERVING_AND_WEIGHT, imported.quantityMode)
+        assertEquals("100", imported.measurePerServing)
+        assertEquals(QuantityUnit.GRAMS, imported.preferredLogUnit)
         assertTrue(imported.extras.contains("Potassium=0 mg"))
     }
 

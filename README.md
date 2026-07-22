@@ -1,4 +1,4 @@
-# Daily Cut Report 0.12.0
+# Daily Cut Report 0.13.0
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
 
@@ -86,21 +86,24 @@ Public 0.8.5 APKs used the old debug certificate, so Android cannot install a pr
 
 ## Data upgrades
 
-Database version 8 adds configurable fixed purchase-unit amounts and defaults existing fixed products to one unit. Version 7 added product favorites. Version 6 added the health profile, manual/imported weight entries, and privacy-limited walking-session summaries; multiple readings per day use the existing timestamped entries. Version 5 added optional one-time bulk-log grouping fields. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
+Database version 9 adds flexible serving, gram, and milliliter quantity metadata while preserving how historical entries were logged. Version 8 added configurable fixed purchase-unit amounts and defaults existing fixed products to one unit. Version 7 added product favorites. Version 6 added the health profile, manual/imported weight entries, and privacy-limited walking-session summaries; multiple readings per day use the existing timestamped entries. Version 5 added optional one-time bulk-log grouping fields. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
 
-The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Backup schema 5 includes fixed purchase-unit amounts, favorites, and every health entry while accepting schemas 1–4. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered. The browser preview stores equivalent state in `dcr_v7`.
+The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Products may be logged by servings, grams, or milliliters when their measurement basis is configured; historical logs retain the unit actually entered. Backup schema 6 includes quantity metadata, fixed purchase-unit amounts, favorites, and every health entry while accepting schemas 1–5. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered. The browser preview stores equivalent state in `dcr_v8`.
 
-Catalog schema 2 uses a stable ID and an optional physical barcode:
+Catalog schema 3 uses a stable ID, an optional physical barcode, and optional quantity-basis fields:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "products": [{
     "id": "CUSTOM-STABLE-ID",
     "barcode": null,
     "name": "Food name",
     "brand": "Brand",
     "servingLabel": "1 serving",
+    "quantityMode": "SERVING_AND_WEIGHT",
+    "measurePerServing": 40,
+    "preferredLogUnit": "GRAMS",
     "calories": 0,
     "proteinG": 0,
     "sodiumMg": 0,
@@ -122,7 +125,7 @@ Catalog schema 2 uses a stable ID and an optional physical barcode:
 - `FoodsComponents.kt`: product catalog, persistent Bulk Cart sheet, search editor, and planner-result UI.
 - `ViewModels.kt`: shared date and screen state.
 - `DailyCutRepository.kt`: application data boundary.
-- `NutritionDatabase.kt`: Room schema, DAO, grouped mutations, and v1→v2→v3→v4→v5→v6→v7→v8 migrations.
+- `NutritionDatabase.kt`: Room schema, DAO, grouped mutations, and v1→v2→v3→v4→v5→v6→v7→v8→v9 migrations.
 - `HealthAnalytics.kt`: robust deficit, weight projection, and walking-estimate calculations.
 - `BarcodeScanner.kt`: lifecycle-safe on-device scanner.
 - `NutritionImagePreprocessor.kt`, `NutritionLabelOcr.kt`, and `NutritionLabelParser.kt`: guided local image preparation, bundled multilingual OCR, deterministic nutrient extraction, and review candidates.

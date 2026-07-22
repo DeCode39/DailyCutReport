@@ -26,12 +26,17 @@ class BackupCryptoTest {
         val payload = BackupPayload(
             products = listOf(ProductEntity(
                 "meal", name = "Meal", purchasePriceMicros = 12_000_000L, purchaseUnitServings = 2.0,
+                quantityMode = QuantityMode.SERVING_AND_VOLUME.name, measurePerServing = 300.0,
+                preferredLogUnit = QuantityUnit.MILLILITERS.name,
                 plannerItemType = PlannerItemType.DRINK.name, alwaysIncludeInPlanner = true,
                 fixedPurchaseUnits = 4
             )),
             productExtras = emptyList(), reports = emptyList(), foodLogs = listOf(DailyFoodLogEntity(
                 id = 1, date = "2026-01-02", productId = "meal", productName = "Meal",
                 actualPaidTotalMicros = 10_000_000L, excludeCostFromBudget = true,
+                quantityMode = QuantityMode.SERVING_AND_VOLUME.name, measurePerServing = 300.0,
+                enteredUnit = QuantityUnit.MILLILITERS.name, enteredAmount = 600.0,
+                catalogEstimatedTotalMicros = 12_000_000L,
                 mealId = "meal-group", mealName = "Lunch"
             )), dailyExtras = emptyList(),
             goals = UserGoals(currencyCode = "JPY", dailyBudgetMicros = 2_000_000_000L).toEntity()
@@ -41,6 +46,10 @@ class BackupCryptoTest {
         assertEquals(PlannerItemType.DRINK.name, decoded.products.single().plannerItemType)
         assertEquals(true, decoded.products.single().alwaysIncludeInPlanner)
         assertEquals(4, decoded.products.single().fixedPurchaseUnits)
+        assertEquals(QuantityMode.SERVING_AND_VOLUME.name, decoded.products.single().quantityMode)
+        assertEquals(300.0, decoded.products.single().measurePerServing!!, 0.0)
+        assertEquals(QuantityUnit.MILLILITERS.name, decoded.foodLogs.single().enteredUnit)
+        assertEquals(600.0, decoded.foodLogs.single().enteredAmount, 0.0)
         assertEquals(true, decoded.foodLogs.single().excludeCostFromBudget)
         assertEquals("meal-group", decoded.foodLogs.single().mealId)
         assertEquals("Lunch", decoded.foodLogs.single().mealName)

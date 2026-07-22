@@ -170,7 +170,7 @@ object BackupCrypto {
 }
 
 object BackupJson {
-    private const val SCHEMA_VERSION = 5
+    private const val SCHEMA_VERSION = 6
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
@@ -190,10 +190,10 @@ object BackupJson {
         val root = JSONObject(json)
         val schema = root.getInt("schemaVersion")
         require(schema in 1..SCHEMA_VERSION) { "Unsupported backup schema." }
-        val products = root.getJSONArray("products").objects(::productFromJson)
+        val products = root.getJSONArray("products").objects { productFromJson(it, schema) }
         val productExtras = root.getJSONArray("productExtras").objects(::productExtraFromJson)
         val reports = root.getJSONArray("dailyReports").objects(::reportFromJson)
-        val logs = root.getJSONArray("foodLogs").objects(::foodLogFromJson)
+        val logs = root.getJSONArray("foodLogs").objects { foodLogFromJson(it, schema) }
         val dailyExtras = root.getJSONArray("dailyExtras").objects(::dailyExtraFromJson)
         validate(products, productExtras, reports, logs, dailyExtras)
         val goals = if (schema >= 2) goalsFromJson(root.getJSONObject("settings")) else UserGoalsEntity()
@@ -226,13 +226,16 @@ object BackupJson {
         }
         logs.forEach {
             require(it.catalogCostPerServingMicros == null || it.catalogCostPerServingMicros >= 0L)
+            require(it.catalogEstimatedTotalMicros == null || it.catalogEstimatedTotalMicros >= 0L)
             require(it.actualPaidTotalMicros == null || it.actualPaidTotalMicros >= 0L)
+            require(it.enteredAmount.isFinite() && it.enteredAmount > 0.0)
         }
     }
 
     private fun ProductEntity.toJson() = JSONObject().apply {
         put("productId", productId); putNullable("barcode", barcode); put("name", name); put("brand", brand)
         put("servingLabel", servingLabel); put("calories", calories); put("proteinG", proteinG); put("sodiumMg", sodiumMg)
+        put("quantityMode", quantityMode); putNullable("measurePerServing", measurePerServing); put("preferredLogUnit", preferredLogUnit)
         put("carbsG", carbsG); put("fatG", fatG); put("sugarG", sugarG); put("fiberG", fiberG)
         put("saturatedFatG", saturatedFatG); putNullable("purchasePriceMicros", purchasePriceMicros)
         put("purchaseUnitServings", purchaseUnitServings); put("includeInPlanner", includeInPlanner)
@@ -259,10 +262,13 @@ object BackupJson {
     private fun DailyFoodLogEntity.toJson() = JSONObject().apply {
         put("id", id); put("date", date); putNullable("productId", productId); putNullable("barcode", barcode)
         put("productName", productName); put("brand", brand); put("servingLabel", servingLabel); put("quantity", quantity)
+        put("quantityMode", quantityMode); putNullable("measurePerServing", measurePerServing)
+        put("enteredUnit", enteredUnit); put("enteredAmount", enteredAmount)
         put("caloriesPerServing", caloriesPerServing); put("proteinGPerServing", proteinGPerServing); put("sodiumMgPerServing", sodiumMgPerServing)
         put("carbsGPerServing", carbsGPerServing); put("fatGPerServing", fatGPerServing); put("sugarGPerServing", sugarGPerServing)
         put("fiberGPerServing", fiberGPerServing); put("saturatedFatGPerServing", saturatedFatGPerServing)
         putNullable("catalogCostPerServingMicros", catalogCostPerServingMicros)
+        putNullable("catalogEstimatedTotalMicros", catalogEstimatedTotalMicros)
         putNullable("actualPaidTotalMicros", actualPaidTotalMicros)
         put("excludeCostFromBudget", excludeCostFromBudget)
         putNullable("mealId", mealId); putNullable("mealName", mealName); put("loggedAt", loggedAt)
@@ -294,9 +300,17 @@ object BackupJson {
         put("id", id); put("logId", logId); put("name", name); put("valuePerServing", valuePerServing); put("unit", unit)
     }
 
-    private fun productFromJson(o: JSONObject) = ProductEntity(
+    private fun productFromJson(o: JSONObject, schema: Int): ProductEntity {
+        val inferred = inferQuantitySpec(o.requiredText("servingLabel")).spec
+        val mode = if (schema >= 6) o.optString("quantityMode", QuantityMode.SERVING_ONLY.name) else inferred.mode.name
+        val measure = if (schema >= 6) o.nullableDouble("measurePerServing") else inferred.measurePerServing
+        val spec = ProductQuantitySpec(QuantityMode.valueOf(mode), measure)
+        val preferred = if (schema >= 6) o.optString("preferredLogUnit", QuantityUnit.SERVINGS.name)
+        else spec.preferredOrFallback(QuantityUnit.SERVINGS).name
+        return ProductEntity(
         productId = o.requiredText("productId"), barcode = o.nullableText("barcode"), name = o.requiredText("name"),
         brand = o.getString("brand"), servingLabel = o.requiredText("servingLabel"), calories = o.nonNegative("calories"),
+        quantityMode = mode, measurePerServing = measure, preferredLogUnit = preferred,
         proteinG = o.nonNegative("proteinG"), sodiumMg = o.nonNegative("sodiumMg"), carbsG = o.nonNegative("carbsG"),
         fatG = o.nonNegative("fatG"), sugarG = o.nonNegative("sugarG"), fiberG = o.nonNegative("fiberG"),
         saturatedFatG = o.nonNegative("saturatedFatG"), purchasePriceMicros = o.optionalLong("purchasePriceMicros"),
@@ -309,7 +323,12 @@ object BackupJson {
         fixedPurchaseUnits = o.optInt("fixedPurchaseUnits", 1).also { require(it in 1..6) },
         favorite = o.optBoolean("favorite", false),
         notes = o.getString("notes"), createdAt = o.getLong("createdAt"), updatedAt = o.getLong("updatedAt")
-    ).also { require(!it.alwaysIncludeInPlanner || it.includeInPlanner) }
+        ).also {
+            require(!it.alwaysIncludeInPlanner || it.includeInPlanner)
+            require(!it.quantitySpec().mode.measureAvailable || it.quantitySpec().measureAvailable)
+            require(it.quantitySpec().supports(it.preferredQuantityUnit()))
+        }
+    }
 
     private fun productExtraFromJson(o: JSONObject) = ProductExtraNutrientEntity(
         o.requiredText("productId"), o.requiredText("name"), o.nonNegative("value"), o.getString("unit")
@@ -326,18 +345,32 @@ object BackupJson {
         manualBurnCalories = o.nullableDouble("manualBurnCalories"), notes = o.getString("notes"), savedAtEpochMs = o.getLong("savedAtEpochMs")
     )
 
-    private fun foodLogFromJson(o: JSONObject) = DailyFoodLogEntity(
+    private fun foodLogFromJson(o: JSONObject, schema: Int): DailyFoodLogEntity {
+        val quantity = o.positive("quantity")
+        val inferred = inferQuantitySpec(o.requiredText("servingLabel"))
+        val mode = if (schema >= 6) o.optString("quantityMode", QuantityMode.SERVING_ONLY.name) else inferred.spec.mode.name
+        val measure = if (schema >= 6) o.nullableDouble("measurePerServing") else inferred.spec.measurePerServing
+        val enteredUnit = if (schema >= 6) o.optString("enteredUnit", QuantityUnit.SERVINGS.name)
+        else if (inferred.exactMeasuredOnly) requireNotNull(inferred.spec.measureUnit).name else QuantityUnit.SERVINGS.name
+        val enteredAmount = if (schema >= 6) o.positive("enteredAmount")
+        else if (inferred.exactMeasuredOnly) quantity * requireNotNull(measure) else quantity
+        val estimatedTotal = if (schema >= 6) o.optionalLong("catalogEstimatedTotalMicros")
+        else o.optionalLong("catalogCostPerServingMicros")?.let { (it.toDouble() * quantity).toLong() }
+        return DailyFoodLogEntity(
         id = o.getLong("id"), date = o.requiredText("date"), productId = o.nullableText("productId"), barcode = o.nullableText("barcode"),
         productName = o.requiredText("productName"), brand = o.getString("brand"), servingLabel = o.requiredText("servingLabel"),
-        quantity = o.positive("quantity"), caloriesPerServing = o.nonNegative("caloriesPerServing"), proteinGPerServing = o.nonNegative("proteinGPerServing"),
+        quantity = quantity, quantityMode = mode, measurePerServing = measure, enteredUnit = enteredUnit, enteredAmount = enteredAmount,
+        caloriesPerServing = o.nonNegative("caloriesPerServing"), proteinGPerServing = o.nonNegative("proteinGPerServing"),
         sodiumMgPerServing = o.nonNegative("sodiumMgPerServing"), carbsGPerServing = o.nonNegative("carbsGPerServing"),
         fatGPerServing = o.nonNegative("fatGPerServing"), sugarGPerServing = o.nonNegative("sugarGPerServing"),
         fiberGPerServing = o.nonNegative("fiberGPerServing"), saturatedFatGPerServing = o.nonNegative("saturatedFatGPerServing"),
         catalogCostPerServingMicros = o.optionalLong("catalogCostPerServingMicros"),
+        catalogEstimatedTotalMicros = estimatedTotal,
         actualPaidTotalMicros = o.optionalLong("actualPaidTotalMicros"),
         excludeCostFromBudget = o.optBoolean("excludeCostFromBudget", false),
         mealId = o.nullableText("mealId"), mealName = o.nullableText("mealName"), loggedAt = o.getLong("loggedAt")
-    )
+        )
+    }
 
     private fun goalsFromJson(o: JSONObject) = UserGoalsEntity(
         mode = o.getString("mode").also { require(it in GoalMode.entries.map(GoalMode::name)) },

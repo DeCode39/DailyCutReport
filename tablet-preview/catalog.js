@@ -18,5 +18,5 @@
     ['MCD-TW-SWEET-SOUR-SAUCE',null,'Sweet and Sour Sauce',"McDonald's Taiwan",'1 sauce cup',44,0,157,11,0,9.8,0,0],
     ['MCD-TW-BBQ-SAUCE-ESTIMATE',null,'BBQ Sauce',"McDonald's Taiwan",'1 sauce cup',45,0,200,11,0,9,0,0]
   ];
-  return raw.map(x=>({productId:x[0],barcode:x[1],name:x[2],brand:x[3],servingLabel:x[4],calories:x[5],protein:x[6],sodium:x[7],carbs:x[8],fat:x[9],sugar:x[10],fiber:x[11],saturated:x[12]}));
+  return raw.map(x=>({productId:x[0],barcode:x[1],name:x[2],brand:x[3],servingLabel:x[4],calories:x[5],protein:x[6],sodium:x[7],carbs:x[8],fat:x[9],sugar:x[10],fiber:x[11],saturated:x[12],...(x[0].includes('BASEU')||x[0]==='4711089912108'?{quantityMode:'SERVING_AND_VOLUME',measurePerServing:300,preferredLogUnit:'SERVINGS'}:{})}));
 });

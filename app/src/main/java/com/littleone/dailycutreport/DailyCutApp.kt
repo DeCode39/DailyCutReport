@@ -493,7 +493,7 @@ private fun MultiScanReviewDialog(
     items: List<MultiScanItem>,
     currencyCode: String,
     onDismiss: () -> Unit,
-    onQuantity: (String, String) -> Unit,
+    onQuantity: (String, QuantityUnit, String) -> Unit,
     onActualPaid: (String, String) -> Unit,
     onBudgetExclusion: (String, Boolean) -> Unit,
     onConfirm: () -> Unit
@@ -508,8 +508,18 @@ private fun MultiScanReviewDialog(
             ) {
                 items.forEach { item ->
                     Text(item.product.name, fontWeight = FontWeight.Bold)
-                    DecimalField("Servings", item.quantityText) {
-                        onQuantity(item.product.productId, it)
+                    QuantityInputFields(
+                        state = item.quantityInput,
+                        onChange = { unit, value -> onQuantity(item.product.productId, unit, value) },
+                        onPurchaseUnit = {
+                            onQuantity(item.product.productId, QuantityUnit.SERVINGS, item.product.purchaseUnitServings.toDisplay())
+                        }
+                    )
+                    item.quantity?.let { servings ->
+                        Text(
+                            "${formatCalories(item.product.calories * servings)} kcal · ${formatDecimal(item.product.proteinG * servings)} g protein",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                     DecimalField("Actual paid total ($currencyCode, optional)", item.actualPaidText) {
                         onActualPaid(item.product.productId, it)
@@ -543,7 +553,8 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.Bold)
+                Text(log.productName, fontWeight = FontWeight.Bold)
+                Text(log.loggedQuantity().displayParts().joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                 log.mealName?.let { Text("Bulk log · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
                 Text("${formatCalories(log.calories)} kcal · ${formatDecimal(log.proteinG)} g protein", style = MaterialTheme.typography.bodyMedium)
                 Text("${formatDecimal(log.sodiumMg)} mg sodium · ${formatDecimal(log.carbsG)} g carbs", style = MaterialTheme.typography.bodySmall)
@@ -558,7 +569,7 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
                     Icon(painterResource(R.drawable.ic_more), contentDescription = "Food entry actions")
                 }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                    DropdownMenuItem(text = { Text("Edit servings") }, onClick = { menuExpanded = false; onEdit() })
+                    DropdownMenuItem(text = { Text("Edit amount") }, onClick = { menuExpanded = false; onEdit() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menuExpanded = false; onDelete() })
                 }
             }
@@ -606,7 +617,8 @@ private fun BulkFoodLogCard(
             if (expanded) group.logs.forEach { log ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("${log.quantity.toDisplay()} × ${log.productName}", fontWeight = FontWeight.SemiBold)
+                        Text(log.productName, fontWeight = FontWeight.SemiBold)
+                        Text(log.loggedQuantity().displayParts().joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                         Text(
                             "${formatCalories(log.calories)} kcal · ${log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "unknown cost"}",
                             style = MaterialTheme.typography.bodySmall
@@ -1394,7 +1406,7 @@ internal fun SettingsScreen(
             SettingsPage.ABOUT -> item {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 8 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 9 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -1657,14 +1669,14 @@ private fun QuantityDialog(
     product: ProductWithExtras,
     currencyCode: String,
     onDismiss: () -> Unit,
-    onConfirm: (Double, Long?, Boolean) -> Unit
+    onConfirm: (LoggedQuantity, Long?, Boolean) -> Unit
 ) {
     var quantity by remember(product.product.productId) {
-        mutableStateOf(product.product.purchaseUnitServings.toDisplay())
+        mutableStateOf(QuantityInputState.forProduct(product.product))
     }
     var actualPaid by remember { mutableStateOf("") }
     var excludeCostFromBudget by remember { mutableStateOf(false) }
-    val parsedQuantity = quantity.numberOrNull()?.takeIf { it > 0.0 }
+    val parsedQuantity = quantity.servings
     val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
     val priceValid = actualPaid.isBlank() || parsedPaid != null
     val estimated = product.product.purchasePriceMicros?.let { price ->
@@ -1676,14 +1688,30 @@ private fun QuantityDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(product.product.servingLabel)
-                DecimalField("Quantity", quantity) { quantity = it }
+                QuantityInputFields(
+                    state = quantity,
+                    onChange = { unit, value -> quantity = quantity.edit(unit, value) },
+                    onPurchaseUnit = { quantity = quantity.withServings(product.product.purchaseUnitServings) }
+                )
+                parsedQuantity?.let { servings ->
+                    Text(
+                        "${formatCalories(product.product.calories * servings)} kcal · ${formatDecimal(product.product.proteinG * servings)} g protein",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 estimated?.let { Text("Catalog estimate: ${formatMoney(it, currencyCode)}", style = MaterialTheme.typography.bodySmall) }
                 DecimalField("Actual paid total (optional)", actualPaid) { actualPaid = it }
                 Text("Leave blank for the catalog estimate. Enter 0 for a free item.", style = MaterialTheme.typography.bodySmall)
                 ToggleRow("Ignore this price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
             }
         },
-        confirmButton = { Button(enabled = parsedQuantity != null && priceValid, onClick = { parsedQuantity?.let { onConfirm(it, parsedPaid, excludeCostFromBudget) } }) { Text("Add") } },
+        confirmButton = { Button(enabled = quantity.valid && priceValid, onClick = {
+            val servings = parsedQuantity
+            val entered = quantity.enteredAmount
+            if (servings != null && entered != null) {
+                onConfirm(LoggedQuantity(servings, quantity.activeUnit, entered, quantity.spec), parsedPaid, excludeCostFromBudget)
+            }
+        }) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -1699,14 +1727,24 @@ private fun ProductEditorDialog(
 ) {
     val product = draft.existing?.product
     var showJsonImport by remember { mutableStateOf(false) }
+    var quantityModeExpanded by remember { mutableStateOf(false) }
     var jsonInput by remember { mutableStateOf("") }
     var jsonError by remember { mutableStateOf<String?>(null) }
     val nutrientInputs = listOf(draft.calories, draft.protein, draft.sodium, draft.carbs, draft.fat, draft.sugar, draft.fiber, draft.saturatedFat)
     val parsedPrice = runCatching { parseMoneyMicros(draft.purchasePrice) }.getOrNull()
     val parsedPurchaseServings = draft.purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
+    val parsedMeasure = draft.measurePerServing.numberOrNull()?.takeIf { it > 0.0 }
     val parsedFixedUnits = draft.fixedPurchaseUnits.toIntOrNull()?.takeIf { it in 1..6 }
+    val quantitySpec = ProductQuantitySpec(draft.quantityMode, parsedMeasure)
+    val purchaseInput = QuantityInputState(
+        servingsText = draft.purchaseServings,
+        measureText = draft.purchaseMeasure,
+        activeUnit = quantitySpec.preferredOrFallback(draft.preferredLogUnit),
+        spec = quantitySpec
+    )
     val valid = draft.name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
         (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null &&
+        (!draft.quantityMode.measureAvailable || parsedMeasure != null) &&
         parsedFixedUnits != null
 
     AlertDialog(
@@ -1717,7 +1755,66 @@ private fun ProductEditorDialog(
                 OutlinedTextField(draft.barcode, { onDraftChange(draft.copy(barcode = it)) }, label = { Text("Barcode (optional)") })
                 OutlinedTextField(draft.name, { onDraftChange(draft.copy(name = it)) }, label = { Text("Product name") })
                 OutlinedTextField(draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") })
-                OutlinedTextField(draft.servingLabel, { onDraftChange(draft.copy(servingLabel = it)) }, label = { Text("Serving label") })
+                Box(Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { quantityModeExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Quantity basis · ${draft.quantityMode.editorLabel}")
+                    }
+                    DropdownMenu(expanded = quantityModeExpanded, onDismissRequest = { quantityModeExpanded = false }) {
+                        QuantityMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.editorLabel) },
+                                onClick = {
+                                    val measure = if (mode.measureAvailable && draft.measurePerServing.isBlank()) "100" else draft.measurePerServing
+                                    val preferred = ProductQuantitySpec(mode, measure.numberOrNull())
+                                        .preferredOrFallback(draft.preferredLogUnit)
+                                    val spec = ProductQuantitySpec(mode, measure.numberOrNull())
+                                    val servingLabel = when (mode) {
+                                        QuantityMode.WEIGHT_ONLY -> "${measure.ifBlank { "100" }} g"
+                                        QuantityMode.VOLUME_ONLY -> "${measure.ifBlank { "100" }} ml"
+                                        else -> draft.servingLabel
+                                    }
+                                    onDraftChange(draft.copy(
+                                        quantityMode = mode,
+                                        measurePerServing = measure,
+                                        servingLabel = servingLabel,
+                                        preferredLogUnit = preferred,
+                                        purchaseMeasure = spec.measureUnit
+                                            ?.let { spec.amountFor(draft.purchaseServings.numberOrNull() ?: 1.0, it)?.toDisplay() }.orEmpty()
+                                    ))
+                                    quantityModeExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    draft.servingLabel,
+                    { onDraftChange(draft.copy(servingLabel = it)) },
+                    enabled = draft.quantityMode.servingAvailable,
+                    label = { Text("Serving label") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (draft.quantityMode.measureAvailable) {
+                    DecimalField(
+                        if (draft.quantityMode.servingAvailable) "${draft.quantityMode.measureUnit?.shortLabel} per serving"
+                        else "Nutrition basis amount (${draft.quantityMode.measureUnit?.shortLabel})",
+                        draft.measurePerServing
+                    ) { value ->
+                        val measure = value.numberOrNull()?.takeIf { it > 0.0 }
+                        val servingLabel = when (draft.quantityMode) {
+                            QuantityMode.WEIGHT_ONLY -> value.numberOrNull()?.takeIf { it > 0.0 }?.let { "${it.toDisplay()} g" } ?: draft.servingLabel
+                            QuantityMode.VOLUME_ONLY -> value.numberOrNull()?.takeIf { it > 0.0 }?.let { "${it.toDisplay()} ml" } ?: draft.servingLabel
+                            else -> draft.servingLabel
+                        }
+                        onDraftChange(draft.copy(
+                            measurePerServing = value,
+                            servingLabel = servingLabel,
+                            purchaseMeasure = measure?.let { amount ->
+                                draft.purchaseServings.numberOrNull()?.let { servings -> (amount * servings).toDisplay() }
+                            } ?: draft.purchaseMeasure
+                        ))
+                    }
+                }
                 if (product == null) {
                     OutlinedButton(onClick = { showJsonImport = true }, modifier = Modifier.fillMaxWidth()) {
                         Text("Import product JSON")
@@ -1734,7 +1831,18 @@ private fun ProductEditorDialog(
                 DecimalField("Fiber g", draft.fiber) { onDraftChange(draft.copy(fiber = it)) }
                 DecimalField("Saturated fat g", draft.saturatedFat) { onDraftChange(draft.copy(saturatedFat = it)) }
                 DecimalField("Purchase price ($currencyCode, optional)", draft.purchasePrice) { onDraftChange(draft.copy(purchasePrice = it)) }
-                DecimalField("Minimum purchase servings", draft.purchaseServings) { onDraftChange(draft.copy(purchaseServings = it)) }
+                Text("One purchase unit", style = MaterialTheme.typography.labelLarge)
+                QuantityInputFields(
+                    state = purchaseInput,
+                    onChange = { unit, value ->
+                        val updated = purchaseInput.edit(unit, value)
+                        onDraftChange(draft.copy(
+                            purchaseServings = updated.servingsText,
+                            purchaseMeasure = updated.measureText
+                        ))
+                    },
+                    onPurchaseUnit = null
+                )
                 ToggleRow("Favorite", draft.favorite) { onDraftChange(draft.copy(favorite = it)) }
                 ToggleRow("Include in daily planning", draft.includeInPlanner) {
                     onDraftChange(draft.copy(includeInPlanner = it, alwaysIncludeInPlanner = if (it) draft.alwaysIncludeInPlanner else false))
@@ -1766,6 +1874,10 @@ private fun ProductEditorDialog(
                     name = draft.name.trim(),
                     brand = draft.brand.trim(),
                     servingLabel = draft.servingLabel.ifBlank { "1 serving" },
+                    quantityMode = draft.quantityMode.name,
+                    measurePerServing = parsedMeasure,
+                    preferredLogUnit = ProductQuantitySpec(draft.quantityMode, parsedMeasure)
+                        .preferredOrFallback(draft.preferredLogUnit).name,
                     calories = draft.calories.number(),
                     proteinG = draft.protein.number(),
                     sodiumMg = draft.sodium.number(),
@@ -1829,21 +1941,31 @@ private fun ProductEditorDialog(
 
 @Composable
 private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDismiss: () -> Unit, onSave: (FoodQuantityEdit) -> Unit) {
-    var quantity by remember { mutableStateOf(log.quantity.toInput()) }
+    var quantity by remember(log.id) { mutableStateOf(QuantityInputState.forLog(log)) }
     var actualPaid by remember { mutableStateOf(log.actualPaidTotalMicros?.toMoneyInput().orEmpty()) }
     var excludeCostFromBudget by remember { mutableStateOf(log.excludeCostFromBudget) }
-    val parsedQuantity = quantity.numberOrNull()?.takeIf { it > 0.0 }
+    val parsedQuantity = quantity.servings
     val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
     val priceValid = actualPaid.isBlank() || parsedPaid != null
     val estimate = log.catalogCostPerServingMicros?.let { cost -> parsedQuantity?.let { (cost * it).toLong() } }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit servings") },
+        title = { Text("Edit amount") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(log.productName, fontWeight = FontWeight.Bold)
                 Text(log.servingLabel, style = MaterialTheme.typography.bodySmall)
-                DecimalField("Quantity", quantity) { quantity = it }
+                QuantityInputFields(
+                    state = quantity,
+                    onChange = { unit, value -> quantity = quantity.edit(unit, value) },
+                    onPurchaseUnit = null
+                )
+                parsedQuantity?.let { servings ->
+                    Text(
+                        "${formatCalories(log.caloriesPerServing * servings)} kcal · ${formatDecimal(log.proteinGPerServing * servings)} g protein",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 estimate?.let { Text("Catalog estimate: ${formatMoney(it, currencyCode)}", style = MaterialTheme.typography.bodySmall) }
                 DecimalField("Actual paid total (optional)", actualPaid) { actualPaid = it }
                 Text("Blank uses the catalog estimate; 0 records a free item.", style = MaterialTheme.typography.bodySmall)
@@ -1851,8 +1973,16 @@ private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDism
             }
         },
         confirmButton = {
-            Button(enabled = parsedQuantity != null && priceValid, onClick = {
-                parsedQuantity?.let { onSave(log.quantityEdit(it, parsedPaid, excludeCostFromBudget)) }
+            Button(enabled = quantity.valid && priceValid, onClick = {
+                parsedQuantity?.let {
+                    onSave(log.quantityEdit(
+                        quantity = it,
+                        enteredUnit = quantity.activeUnit,
+                        enteredAmount = requireNotNull(quantity.enteredAmount),
+                        actualPaidTotalMicros = parsedPaid,
+                        excludeCostFromBudget = excludeCostFromBudget
+                    ))
+                }
             }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
@@ -1876,6 +2006,41 @@ internal fun DecimalField(label: String, value: String, onValueChange: (String) 
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+@Composable
+internal fun QuantityInputFields(
+    state: QuantityInputState,
+    onChange: (QuantityUnit, String) -> Unit,
+    onPurchaseUnit: (() -> Unit)?
+) {
+    val measureUnit = state.spec.measureUnit
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = state.servingsText,
+            onValueChange = { onChange(QuantityUnit.SERVINGS, it) },
+            enabled = state.spec.servingAvailable,
+            label = { Text("Servings") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            supportingText = if (!state.spec.servingAvailable) ({ Text("Unavailable") }) else null
+        )
+        OutlinedTextField(
+            value = state.measureText,
+            onValueChange = { value -> measureUnit?.let { onChange(it, value) } },
+            enabled = state.spec.measureAvailable,
+            label = { Text(measureUnit?.shortLabel ?: "g/ml") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            supportingText = if (!state.spec.measureAvailable) ({ Text("Not configured") }) else null
+        )
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("Logging in ${state.activeUnit.shortLabel}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        onPurchaseUnit?.let { TextButton(onClick = it) { Text("1 purchase unit") } }
+    }
 }
 
 private fun String.numberOrNull(): Double? = trim().replace(',', '.').takeIf { it.isNotEmpty() }?.toDoubleOrNull()

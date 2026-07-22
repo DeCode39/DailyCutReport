@@ -107,6 +107,9 @@ data class ProductEditorDraft(
     val name: String = "",
     val brand: String = "",
     val servingLabel: String = "1 serving",
+    val quantityMode: QuantityMode = QuantityMode.SERVING_ONLY,
+    val measurePerServing: String = "",
+    val preferredLogUnit: QuantityUnit = QuantityUnit.SERVINGS,
     val calories: String = "",
     val protein: String = "",
     val sodium: String = "",
@@ -117,6 +120,7 @@ data class ProductEditorDraft(
     val saturatedFat: String = "",
     val purchasePrice: String = "",
     val purchaseServings: String = "1",
+    val purchaseMeasure: String = "",
     val includeInPlanner: Boolean = true,
     val plannerItemType: PlannerItemType = PlannerItemType.FOOD,
     val alwaysIncludeInPlanner: Boolean = false,
@@ -128,6 +132,9 @@ data class ProductEditorDraft(
     companion object {
         fun create(initialBarcode: String, existing: ProductWithExtras?, saveTarget: ProductSaveTarget): ProductEditorDraft {
             val product = existing?.product
+            val mode = QuantityMode.entries.firstOrNull { it.name == product?.quantityMode } ?: QuantityMode.SERVING_ONLY
+            val measure = product?.measurePerServing
+            val purchaseServings = product?.purchaseUnitServings ?: 1.0
             return ProductEditorDraft(
                 existing = existing,
                 saveTarget = saveTarget,
@@ -135,6 +142,9 @@ data class ProductEditorDraft(
                 name = product?.name.orEmpty(),
                 brand = product?.brand.orEmpty(),
                 servingLabel = product?.servingLabel ?: "1 serving",
+                quantityMode = mode,
+                measurePerServing = measure?.editableNumber().orEmpty(),
+                preferredLogUnit = product?.preferredQuantityUnit() ?: QuantityUnit.SERVINGS,
                 calories = product?.calories.editableNumber(),
                 protein = product?.proteinG.editableNumber(),
                 sodium = product?.sodiumMg.editableNumber(),
@@ -144,7 +154,9 @@ data class ProductEditorDraft(
                 fiber = product?.fiberG.editableNumber(),
                 saturatedFat = product?.saturatedFatG.editableNumber(),
                 purchasePrice = product?.purchasePriceMicros?.let { it / 1_000_000.0 }?.editableNumber().orEmpty(),
-                purchaseServings = product?.purchaseUnitServings?.editableNumber().ifNullOrBlank("1"),
+                purchaseServings = purchaseServings.editableNumber().ifNullOrBlank("1"),
+                purchaseMeasure = ProductQuantitySpec(mode, measure).measureUnit
+                    ?.let { ProductQuantitySpec(mode, measure).amountFor(purchaseServings, it)?.editableNumber() }.orEmpty(),
                 includeInPlanner = product?.includeInPlanner ?: true,
                 plannerItemType = PlannerItemType.entries.firstOrNull { it.name == product?.plannerItemType } ?: PlannerItemType.FOOD,
                 alwaysIncludeInPlanner = product?.alwaysIncludeInPlanner ?: false,
@@ -273,14 +285,13 @@ class FoodsViewModel(
         val current = _scannerSession.value
         val existing = current.items.firstOrNull { it.product.productId == product.productId }
         val items = if (existing == null) {
-            current.items + MultiScanItem(product, product.purchaseUnitServings.toDisplay())
+            current.items + MultiScanItem(product)
         } else {
             current.items.map {
                 if (it.product.productId == product.productId) {
-                    it.copy(
-                        quantityText = ((it.quantity ?: product.purchaseUnitServings) +
-                            product.purchaseUnitServings).toDisplay()
-                    )
+                    it.copy(quantityInput = it.quantityInput.withServings(
+                        (it.quantity ?: product.purchaseUnitServings) + product.purchaseUnitServings
+                    ))
                 } else it
             }
         }
@@ -300,12 +311,14 @@ class FoodsViewModel(
                 draft = if (existing == null) {
                     draft.copy(
                         date = draft.date ?: uiState.value.date,
-                        items = draft.items + BulkDraftItem(scanned.product, scanned.quantityText)
+                        items = draft.items + BulkDraftItem(scanned.product, scanned.quantityInput)
                     )
                 } else {
                     draft.copy(items = draft.items.map {
                         if (it.product.productId == scanned.product.productId) {
-                            it.copy(quantityText = ((it.quantity ?: 0.0) + (scanned.quantity ?: 0.0)).toDisplay())
+                            it.copy(quantityInput = it.quantityInput.withServings(
+                                (it.quantity ?: 0.0) + (scanned.quantity ?: 0.0)
+                            ))
                         } else it
                     })
                 }
@@ -318,10 +331,10 @@ class FoodsViewModel(
         _scannerSession.value = ScannerSessionState(target = session.target)
     }
 
-    fun updateMultiScanQuantity(productId: String, value: String) {
+    fun updateMultiScanQuantity(productId: String, unit: QuantityUnit, value: String) {
         val review = workflow.value as? FoodWorkflowState.ReviewMultiScan ?: return
         workflow.value = review.copy(items = review.items.map {
-            if (it.product.productId == productId) it.copy(quantityText = value) else it
+            if (it.product.productId == productId) it.copy(quantityInput = it.quantityInput.edit(unit, value)) else it
         })
     }
 
@@ -350,6 +363,8 @@ class FoodsViewModel(
                         BulkLogSelection(
                             productId = it.product.productId,
                             quantity = requireNotNull(it.quantity),
+                            enteredUnit = it.quantityInput.activeUnit.name,
+                            enteredAmount = requireNotNull(it.quantityInput.enteredAmount),
                             actualPaidTotalMicros = it.actualPaidTotalMicros,
                             excludeCostFromBudget = it.excludeCostFromBudget
                         )
@@ -410,7 +425,7 @@ class FoodsViewModel(
         }
         bulkDraft.value = current.copy(
             date = current.date ?: uiState.value.date,
-            items = current.items + BulkDraftItem(product, product.purchaseUnitServings.toDisplay())
+            items = current.items + BulkDraftItem(product)
         )
     }
 
@@ -420,9 +435,17 @@ class FoodsViewModel(
         bulkDraft.value = current.copy(items = remaining, date = current.date.takeIf { remaining.isNotEmpty() })
     }
 
-    fun updateBulkQuantity(productId: String, value: String) {
+    fun updateBulkQuantity(productId: String, unit: QuantityUnit, value: String) {
         bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
-            if (it.product.productId == productId) it.copy(quantityText = value) else it
+            if (it.product.productId == productId) it.copy(quantityInput = it.quantityInput.edit(unit, value)) else it
+        })
+    }
+
+    fun resetBulkQuantity(productId: String) {
+        bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
+            if (it.product.productId == productId) it.copy(
+                quantityInput = it.quantityInput.withServings(it.product.purchaseUnitServings)
+            ) else it
         })
     }
 
@@ -442,7 +465,14 @@ class FoodsViewModel(
                 repository.addBulkPurchase(
                     date = date,
                     label = draft.label,
-                    entries = draft.items.map { BulkLogSelection(it.product.productId, requireNotNull(it.quantity)) },
+                    entries = draft.items.map {
+                        BulkLogSelection(
+                            productId = it.product.productId,
+                            quantity = requireNotNull(it.quantity),
+                            enteredUnit = it.quantityInput.activeUnit.name,
+                            enteredAmount = requireNotNull(it.quantityInput.enteredAmount)
+                        )
+                    },
                     actualPaidTotalMicros = paid,
                     excludeCostFromBudget = draft.excludeCostFromBudget
                 )
@@ -469,11 +499,16 @@ class FoodsViewModel(
     }
     fun cancelDialogs() { workflow.value = FoodWorkflowState.Idle }
 
-    fun confirmAdd(quantity: Double, actualPaidTotalMicros: Long?, excludeCostFromBudget: Boolean) {
+    fun confirmAdd(quantity: LoggedQuantity, actualPaidTotalMicros: Long?, excludeCostFromBudget: Boolean) {
         val selected = (workflow.value as? FoodWorkflowState.ConfirmQuantity)?.product ?: return
         val date = uiState.value.date
         viewModelScope.launch {
-            runCatching { repository.addProduct(date, selected, quantity, actualPaidTotalMicros, excludeCostFromBudget) }
+            runCatching {
+                repository.addProduct(
+                    date, selected, quantity.servings, actualPaidTotalMicros, excludeCostFromBudget,
+                    quantity.enteredUnit, quantity.enteredAmount
+                )
+            }
                 .onSuccess { result ->
                     workflow.value = FoodWorkflowState.Idle
                     afterFoodChange(result)
@@ -593,8 +628,17 @@ class FoodsViewModel(
 
 internal fun ProductEditorDraft.mergeOcr(ocr: OcrNutritionDraft): ProductEditorDraft {
     fun accepted(field: OcrField, previous: String): String = ocr.values[field]?.let(::formatDecimal) ?: previous
+    val inferred = when (ocr.basis) {
+        OcrBasis.PER_100_G -> ProductQuantitySpec(QuantityMode.WEIGHT_ONLY, 100.0)
+        OcrBasis.PER_100_ML -> ProductQuantitySpec(QuantityMode.VOLUME_ONLY, 100.0)
+        OcrBasis.PER_SERVING -> inferQuantitySpec(ocr.servingLabel).spec
+    }
+    val canSeedQuantity = existing == null && quantityMode == QuantityMode.SERVING_ONLY && measurePerServing.isBlank()
     return copy(
         servingLabel = ocr.servingLabel?.takeIf(String::isNotBlank) ?: servingLabel,
+        quantityMode = if (canSeedQuantity) inferred.mode else quantityMode,
+        measurePerServing = if (canSeedQuantity) inferred.measurePerServing?.let(::formatDecimal).orEmpty() else measurePerServing,
+        preferredLogUnit = if (canSeedQuantity && !inferred.mode.servingAvailable) inferred.measureUnit ?: QuantityUnit.SERVINGS else preferredLogUnit,
         calories = accepted(OcrField.CALORIES, calories),
         protein = accepted(OcrField.PROTEIN, protein),
         sodium = accepted(OcrField.SODIUM, sodium),

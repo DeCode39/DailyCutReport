@@ -63,8 +63,16 @@ internal fun BulkDraftCard(
                             }
                             TextButton(onClick = { viewModel.removeBulkProduct(item.product.productId) }) { Text("Remove") }
                         }
-                        DecimalField("Servings", item.quantityText) {
-                            viewModel.updateBulkQuantity(item.product.productId, it)
+                        QuantityInputFields(
+                            state = item.quantityInput,
+                            onChange = { unit, value -> viewModel.updateBulkQuantity(item.product.productId, unit, value) },
+                            onPurchaseUnit = { viewModel.resetBulkQuantity(item.product.productId) }
+                        )
+                        item.quantity?.let { servings ->
+                            Text(
+                                "${formatCalories(item.product.calories * servings)} kcal · ${formatDecimal(item.product.proteinG * servings)} g protein",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -158,7 +166,7 @@ internal fun RecommendationDialog(result: RecommendationResult, currencyCode: St
                                 fontWeight = FontWeight.Bold
                             )
                             plan.items.forEach { item ->
-                                Text("${item.purchaseUnits} × ${item.name} · ${item.servings.toDisplay()} servings" +
+                                Text("${item.purchaseUnits} × ${item.name} · ${item.quantityLabel}" +
                                     when {
                                         item.fixed -> " · fixed"
                                         item.costMicros == null -> " · cost unknown"

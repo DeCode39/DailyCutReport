@@ -43,8 +43,11 @@ interface DailyCutRepository {
         product: ProductWithExtras,
         quantity: Double,
         actualPaidTotalMicros: Long? = null,
-        excludeCostFromBudget: Boolean = false
+        excludeCostFromBudget: Boolean = false,
+        enteredUnit: QuantityUnit = QuantityUnit.SERVINGS,
+        enteredAmount: Double = quantity
     ): FoodMutationResult
+    suspend fun setPreferredLogUnit(productId: String, unit: QuantityUnit)
     suspend fun addBulkPurchase(
         date: LocalDate,
         label: String,
@@ -281,6 +284,9 @@ class DefaultDailyCutRepository(
         plannerSettingsMutex.withLock {
             require(product.purchasePriceMicros == null || product.purchasePriceMicros >= 0L) { "Price cannot be negative." }
             require(product.purchaseUnitServings > 0.0) { "Minimum purchase servings must be greater than zero." }
+            val quantitySpec = product.quantitySpec()
+            require(!quantitySpec.mode.measureAvailable || quantitySpec.measureAvailable) { "Enter a valid weight or volume basis." }
+            require(quantitySpec.supports(product.preferredQuantityUnit())) { "Preferred logging unit is unavailable." }
             require(product.fixedPurchaseUnits in 1..6) { "Fixed purchase units must be between 1 and 6." }
             require(product.plannerItemType in PlannerItemType.entries.map(PlannerItemType::name)) { "Invalid planner item type." }
             require(!product.alwaysIncludeInPlanner || product.includeInPlanner) { "A fixed planner item must be enabled for planning." }
@@ -345,23 +351,50 @@ class DefaultDailyCutRepository(
         product: ProductWithExtras,
         quantity: Double,
         actualPaidTotalMicros: Long?,
-        excludeCostFromBudget: Boolean
+        excludeCostFromBudget: Boolean,
+        enteredUnit: QuantityUnit,
+        enteredAmount: Double
     ): FoodMutationResult = withContext(Dispatchers.IO) {
         require(quantity > 0.0) { "Quantity must be greater than zero" }
+        require(enteredAmount.isFinite() && enteredAmount > 0.0) { "Entered amount must be greater than zero." }
+        val spec = product.product.quantitySpec()
+        require(spec.supports(enteredUnit)) { "That unit is not available for this product." }
+        require(spec.servingsFor(enteredAmount, enteredUnit)?.let { quantitiesEquivalent(it, quantity) } == true) {
+            "Entered amount does not match the normalized quantity."
+        }
         require(actualPaidTotalMicros == null || actualPaidTotalMicros >= 0L) { "Actual paid cannot be negative." }
-        completeFoodMutation(dao.addProductToDate(
+        val result = completeFoodMutation(dao.addProductToDate(
             date.toString(), product.product, quantity, product.extras,
-            actualPaidTotalMicros, excludeCostFromBudget
+            enteredUnit.name, enteredAmount, actualPaidTotalMicros, excludeCostFromBudget
         ))
+        dao.updatePreferredLogUnit(product.product.productId, enteredUnit.name)
+        result
+    }
+
+    override suspend fun setPreferredLogUnit(productId: String, unit: QuantityUnit) = withContext(Dispatchers.IO) {
+        val product = dao.productById(productId) ?: return@withContext
+        require(product.quantitySpec().supports(unit)) { "That unit is not available for this product." }
+        check(dao.updatePreferredLogUnit(productId, unit.name) == 1) { "Product no longer exists." }
     }
 
     override suspend fun updateFoodLog(edit: FoodQuantityEdit): FoodMutationResult = withContext(Dispatchers.IO) {
         require(edit.quantity > 0.0) { "Quantity must be greater than zero" }
+        require(edit.enteredAmount.isFinite() && edit.enteredAmount > 0.0) { "Entered amount must be greater than zero." }
         require(edit.actualPaidTotalMicros == null || edit.actualPaidTotalMicros >= 0L) { "Actual paid cannot be negative." }
+        val existing = dao.foodLogById(edit.id) ?: error("Food entry no longer exists.")
+        val enteredUnit = QuantityUnit.entries.firstOrNull { it.name == edit.enteredUnit }
+            ?: error("Unsupported quantity unit.")
+        val spec = existing.toDomainSnapshot().quantitySpec()
+        require(spec.supports(enteredUnit)) { "That unit is not available for this entry." }
+        require(spec.servingsFor(edit.enteredAmount, enteredUnit)?.let { quantitiesEquivalent(it, edit.quantity) } == true) {
+            "Entered amount does not match the normalized quantity."
+        }
         val mutation = dao.updateFoodLogQuantitySnapshot(
-            edit.id, edit.quantity, edit.actualPaidTotalMicros, edit.excludeCostFromBudget
+            edit.id, edit.quantity, edit.enteredUnit, edit.enteredAmount,
+            edit.actualPaidTotalMicros, edit.excludeCostFromBudget
         )
             ?: error("Food entry no longer exists.")
+        existing.productId?.let { dao.updatePreferredLogUnit(it, edit.enteredUnit) }
         completeFoodMutation(mutation)
     }
 
@@ -377,8 +410,9 @@ class DefaultDailyCutRepository(
             "Use one cart row per product and adjust its quantity."
         }
         require(entries.all { it.quantity > 0.0 && it.quantity.isFinite() }) { "Item quantities must be greater than zero." }
+        validateQuantitySelections(entries)
         require(actualPaidTotalMicros == null || actualPaidTotalMicros >= 0L) { "Actual paid cannot be negative." }
-        completeFoodMutation(dao.addBulkPurchaseToDate(
+        val result = completeFoodMutation(dao.addBulkPurchaseToDate(
             date = date.toString(),
             groupId = java.util.UUID.randomUUID().toString(),
             groupLabel = label.trim().ifBlank { "Bulk purchase" },
@@ -386,12 +420,33 @@ class DefaultDailyCutRepository(
             actualPaidTotalMicros = actualPaidTotalMicros,
             excludeCostFromBudget = excludeCostFromBudget
         ))
+        entries.forEach { dao.updatePreferredLogUnit(it.productId, it.enteredUnit) }
+        result
     }
 
     override suspend fun addProducts(date: LocalDate, entries: List<BulkLogSelection>): FoodMutationResult = withContext(Dispatchers.IO) {
         require(entries.isNotEmpty()) { "Scan at least one product." }
         require(entries.all { it.quantity.isFinite() && it.quantity > 0.0 }) { "Quantities must be greater than zero." }
-        completeFoodMutation(dao.addMultipleProductsToDate(date.toString(), entries))
+        validateQuantitySelections(entries)
+        val result = completeFoodMutation(dao.addMultipleProductsToDate(date.toString(), entries))
+        entries.forEach { dao.updatePreferredLogUnit(it.productId, it.enteredUnit) }
+        result
+    }
+
+    private suspend fun validateQuantitySelections(entries: List<BulkLogSelection>) {
+        entries.forEach { entry ->
+            require(entry.enteredAmount.isFinite() && entry.enteredAmount > 0.0) {
+                "Entered amounts must be greater than zero."
+            }
+            val product = dao.productById(entry.productId) ?: error("Product no longer exists.")
+            val unit = QuantityUnit.entries.firstOrNull { it.name == entry.enteredUnit }
+                ?: error("Unsupported quantity unit.")
+            val spec = product.quantitySpec()
+            require(spec.supports(unit)) { "That unit is not available for ${product.name}." }
+            require(spec.servingsFor(entry.enteredAmount, unit)?.let { quantitiesEquivalent(it, entry.quantity) } == true) {
+                "Entered amount does not match the normalized quantity for ${product.name}."
+            }
+        }
     }
 
     override suspend fun deleteFoodLog(id: Long): FoodMutationResult = withContext(Dispatchers.IO) {
@@ -648,6 +703,10 @@ private fun FoodLogSnapshot.toEntity() = DailyFoodLogEntity(
     brand = brand,
     servingLabel = servingLabel,
     quantity = quantity,
+    quantityMode = quantityMode,
+    measurePerServing = measurePerServing,
+    enteredUnit = enteredUnit,
+    enteredAmount = enteredAmount,
     caloriesPerServing = caloriesPerServing,
     proteinGPerServing = proteinGPerServing,
     sodiumMgPerServing = sodiumMgPerServing,
@@ -657,6 +716,7 @@ private fun FoodLogSnapshot.toEntity() = DailyFoodLogEntity(
     fiberGPerServing = fiberGPerServing,
     saturatedFatGPerServing = saturatedFatGPerServing,
     catalogCostPerServingMicros = catalogCostPerServingMicros,
+    catalogEstimatedTotalMicros = catalogEstimatedTotalMicros,
     actualPaidTotalMicros = actualPaidTotalMicros,
     excludeCostFromBudget = excludeCostFromBudget,
     mealId = mealId,

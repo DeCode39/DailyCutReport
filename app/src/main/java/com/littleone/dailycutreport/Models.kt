@@ -265,6 +265,10 @@ data class FoodLogSnapshot(
     val brand: String = "",
     val servingLabel: String = "1 serving",
     val quantity: Double = 1.0,
+    val quantityMode: String = QuantityMode.SERVING_ONLY.name,
+    val measurePerServing: Double? = null,
+    val enteredUnit: String = QuantityUnit.SERVINGS.name,
+    val enteredAmount: Double = quantity,
     val caloriesPerServing: Double = 0.0,
     val proteinGPerServing: Double = 0.0,
     val sodiumMgPerServing: Double = 0.0,
@@ -274,6 +278,7 @@ data class FoodLogSnapshot(
     val fiberGPerServing: Double = 0.0,
     val saturatedFatGPerServing: Double = 0.0,
     val catalogCostPerServingMicros: Long? = null,
+    val catalogEstimatedTotalMicros: Long? = null,
     val actualPaidTotalMicros: Long? = null,
     val excludeCostFromBudget: Boolean = false,
     val mealId: String? = null,
@@ -288,8 +293,14 @@ data class FoodLogSnapshot(
     val sugarG: Double get() = sugarGPerServing * quantity
     val fiberG: Double get() = fiberGPerServing * quantity
     val saturatedFatG: Double get() = saturatedFatGPerServing * quantity
-    val effectiveCostMicros: Long? get() = LoggedCost(catalogCostPerServingMicros, actualPaidTotalMicros, excludeCostFromBudget).effectiveTotalMicros(quantity)
-    val recordedCostMicros: Long? get() = LoggedCost(catalogCostPerServingMicros, actualPaidTotalMicros).recordedTotalMicros(quantity)
+    val effectiveCostMicros: Long? get() = when {
+        excludeCostFromBudget -> 0L
+        actualPaidTotalMicros != null -> actualPaidTotalMicros
+        catalogEstimatedTotalMicros != null -> catalogEstimatedTotalMicros
+        else -> catalogCostPerServingMicros?.let { (it.toDouble() * quantity).toLong() }
+    }
+    val recordedCostMicros: Long? get() = actualPaidTotalMicros ?: catalogEstimatedTotalMicros
+        ?: catalogCostPerServingMicros?.let { (it.toDouble() * quantity).toLong() }
 }
 
 data class ProductWithExtras(
@@ -305,17 +316,19 @@ data class BulkLogEntryInput(
 data class BulkLogSelection(
     val productId: String,
     val quantity: Double,
+    val enteredUnit: String = QuantityUnit.SERVINGS.name,
+    val enteredAmount: Double = quantity,
     val actualPaidTotalMicros: Long? = null,
     val excludeCostFromBudget: Boolean = false
 )
 
 data class MultiScanItem(
     val product: ProductEntity,
-    val quantityText: String = "1",
+    val quantityInput: QuantityInputState = QuantityInputState.forProduct(product),
     val actualPaidText: String = "",
     val excludeCostFromBudget: Boolean = false
 ) {
-    val quantity: Double? get() = quantityText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 }
+    val quantity: Double? get() = quantityInput.servings
     val actualPaidTotalMicros: Long?
         get() = if (actualPaidText.isBlank()) null else runCatching { parseMoneyMicros(actualPaidText) }.getOrNull()
     val actualPaidValid: Boolean
@@ -343,9 +356,9 @@ data class PlannerProductSettings(
 
 data class BulkDraftItem(
     val product: ProductEntity,
-    val quantityText: String = "1"
+    val quantityInput: QuantityInputState = QuantityInputState.forProduct(product)
 ) {
-    val quantity: Double? get() = quantityText.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 && it.isFinite() }
+    val quantity: Double? get() = quantityInput.servings
 }
 
 data class BulkDraft(
@@ -404,17 +417,23 @@ fun allocateBulkPaidTotal(totalMicros: Long?, entries: List<BulkLogEntryInput>):
 data class FoodQuantityEdit(
     val id: Long,
     val quantity: Double,
+    val enteredUnit: String = QuantityUnit.SERVINGS.name,
+    val enteredAmount: Double = quantity,
     val actualPaidTotalMicros: Long? = null,
     val excludeCostFromBudget: Boolean = false
 )
 
 fun FoodLogSnapshot.quantityEdit(
     quantity: Double,
+    enteredUnit: QuantityUnit = QuantityUnit.entries.firstOrNull { it.name == this.enteredUnit } ?: QuantityUnit.SERVINGS,
+    enteredAmount: Double = quantity,
     actualPaidTotalMicros: Long? = this.actualPaidTotalMicros,
     excludeCostFromBudget: Boolean = this.excludeCostFromBudget
 ) = FoodQuantityEdit(
     id = id,
     quantity = quantity,
+    enteredUnit = enteredUnit.name,
+    enteredAmount = enteredAmount,
     actualPaidTotalMicros = actualPaidTotalMicros,
     excludeCostFromBudget = excludeCostFromBudget
 )
@@ -504,7 +523,8 @@ data class RecommendationItem(
     val costMicros: Long?,
     val nutrition: NutritionSummary,
     val itemType: PlannerItemType = PlannerItemType.FOOD,
-    val fixed: Boolean = false
+    val fixed: Boolean = false,
+    val quantityLabel: String = "${servings.toDisplay()} servings"
 )
 
 enum class RecommendationMode { STRICT, BALANCED_FALLBACK }

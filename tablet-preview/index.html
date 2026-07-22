@@ -49,7 +49,10 @@
           <label>Name<input id="productName"></label>
           <label>Brand<input id="productBrand"></label>
           <label>Serving label<input id="productServing" value="1 serving"></label>
-          <label>Quantity<input id="productQuantity" inputmode="decimal" value="1"></label>
+          <label>Quantity basis<select id="productQuantityMode"><option value="SERVING_ONLY">Servings only</option><option value="WEIGHT_ONLY">Weight only</option><option value="VOLUME_ONLY">Volume only</option><option value="SERVING_AND_WEIGHT">Servings + weight</option><option value="SERVING_AND_VOLUME">Servings + volume</option></select></label>
+          <label>g/ml per serving or basis<input id="productMeasurePerServing" inputmode="decimal" placeholder="Required for weight/volume"></label>
+          <label>Servings<input id="productQuantity" inputmode="decimal" value="1"></label>
+          <label>Weight / volume<input id="productMeasureQuantity" inputmode="decimal" disabled></label>
           <label>Calories<input id="productCalories" inputmode="decimal"></label>
           <label>Protein g<input id="productProtein" inputmode="decimal"></label>
           <label>Sodium mg<input id="productSodium" inputmode="decimal"></label>
@@ -93,7 +96,7 @@
       <article class="card"><h2>Weight and expected change</h2><div class="grid">
         <label>Add weight for selected date<input id="manualWeight" inputmode="decimal"></label>
       </div><div class="actions"><button id="saveWeight">Save weight</button><button id="removeWeight" class="danger">Remove manual weight</button></div>
-      <p class="muted">Multiple readings are supported and their daily median drives trends. Health Connect import is Android-only. Browser weights stay in dcr_v7 local storage.</p>
+      <p class="muted">Multiple readings are supported and their daily median drives trends. Health Connect import is Android-only. Browser weights stay in dcr_v8 local storage.</p>
       <div id="weightProjection"></div></article>
       <article id="walkingGuidance" class="card"></article>
       <article class="card"><h2>28-day trend</h2><canvas id="healthChart" width="900" height="280"></canvas><p class="muted">Deficit/surplus and smoothed weight use separate scales. Estimates are for planning, not medical predictions.</p></article>
@@ -155,12 +158,12 @@
       <div id="settings-privacy" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
         <article class="card"><h2>Strictly offline</h2><p>This preview has no external assets, makes no network requests, and blocks connections with Content Security Policy.</p></article>
-        <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v7</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
+        <article class="card"><h2>Local data</h2><p>Versioned <code>dcr_v8</code> data is stored in this browser only.</p><button id="clearData" class="danger">Clear preview data</button></article>
       </div>
 
       <div id="settings-about" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
-        <article class="card"><h2>About</h2><p>DailyCutReport 0.12.0 · database schema 8 · backup schema 5.</p><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
+        <article class="card"><h2>About</h2><p>DailyCutReport 0.13.0 · database schema 9 · backup schema 6.</p><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
       </div>
     </section>
   </main>
