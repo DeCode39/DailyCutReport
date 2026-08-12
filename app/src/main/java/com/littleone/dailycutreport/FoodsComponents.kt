@@ -1,17 +1,24 @@
 package com.littleone.dailycutreport
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,15 +27,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -44,7 +60,7 @@ internal fun BulkDraftCard(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
-                    Text("Bulk cart · ${draft.items.size} selected", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Cart · ${draft.items.size} item${if (draft.items.size == 1) "" else "s"}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
                         draft.date?.let { "Locked to ${it.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}" }
                             ?: "Add the first item to lock the destination date",
@@ -57,9 +73,18 @@ internal fun BulkDraftCard(
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { viewModel.decrementCartProduct(item.product.productId) },
+                                enabled = (item.quantity ?: 0.0) > 1.0
+                            ) {
+                                Icon(painterResource(R.drawable.ic_remove_circle), contentDescription = "Remove one serving of ${item.product.name}")
+                            }
                             Column(Modifier.weight(1f)) {
                                 Text(item.product.name, fontWeight = FontWeight.Bold)
                                 Text(item.product.servingLabel, style = MaterialTheme.typography.bodySmall)
+                            }
+                            AcceleratingAddButton(item.product.name) { units ->
+                                viewModel.incrementCartProduct(item.product.productId, units)
                             }
                             TextButton(onClick = { viewModel.removeBulkProduct(item.product.productId) }) { Text("Remove") }
                         }
@@ -78,7 +103,7 @@ internal fun BulkDraftCard(
                 }
             }
             if (draft.items.isEmpty()) {
-                Text("No products selected. Use Add in the search results.", style = MaterialTheme.typography.bodySmall)
+                Text("No products selected. Tap a catalog item to add it.", style = MaterialTheme.typography.bodySmall)
             }
             OutlinedTextField(
                 draft.label,
@@ -102,9 +127,48 @@ internal fun BulkDraftCard(
                 onClick = viewModel::confirmBulkPurchase,
                 enabled = draft.isValid,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Log ${draft.items.size} items") }
-            if (draft.items.size < 2) Text("Select at least two products.", style = MaterialTheme.typography.bodySmall)
+            ) { Text(if (draft.items.size == 1) "Log item" else "Log ${draft.items.size} items") }
         }
+    }
+}
+
+@Composable
+private fun AcceleratingAddButton(productName: String, onAdd: (Int) -> Unit) {
+    val currentOnAdd by rememberUpdatedState(onAdd)
+    Box(
+        Modifier
+            .size(48.dp)
+            .semantics {
+                contentDescription = "Add one serving of $productName"
+                onClick { currentOnAdd(1); true }
+            }
+            .pointerInput(productName) {
+                detectTapGestures(onPress = {
+                    currentOnAdd(1)
+                    coroutineScope {
+                        val repeater = launch {
+                            delay(500)
+                            var repeats = 0
+                            while (true) {
+                                val units = when {
+                                    repeats < 3 -> 1
+                                    repeats < 6 -> 2
+                                    repeats < 9 -> 5
+                                    else -> 10
+                                }
+                                currentOnAdd(units)
+                                repeats++
+                                delay(250)
+                            }
+                        }
+                        tryAwaitRelease()
+                        repeater.cancel()
+                    }
+                })
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(painterResource(R.drawable.ic_add_circle), contentDescription = null)
     }
 }
 
@@ -225,17 +289,40 @@ private fun constraintTarget(impact: ConstraintImpact, currencyCode: String): St
     else -> "${impact.target.toDisplay()} g"
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel, state: FoodsUiState) {
-    val selected = state.bulkDraft.items.any { it.product.productId == product.productId }
-    Card(Modifier.fillMaxWidth()) {
-        Column(
-            Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Column(Modifier.fillMaxWidth()) {
+internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel) {
+    val haptics = LocalHapticFeedback.current
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = { viewModel.addProductToCart(product) },
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.editProduct(product)
+                }
+            )
+    ) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                IconButton(onClick = { viewModel.addProductToCart(product) }) {
+                    Icon(painterResource(R.drawable.ic_add_circle), contentDescription = "Add ${product.name} to cart")
+                }
+                IconButton(onClick = { viewModel.editProduct(product) }) {
+                    Icon(painterResource(R.drawable.ic_edit), contentDescription = "Edit ${product.name}")
+                }
+            }
+            Column(Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
                 Text(product.name, fontWeight = FontWeight.Bold)
                 Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.barcode).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = { viewModel.toggleFavorite(product) }) {
+                        Text(if (product.favorite) "★" else "☆", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 product.purchasePriceMicros?.let {
                     Text("${formatMoney(it, currencyCode)} / ${product.purchaseUnitServings.toDisplay()} serving(s)", style = MaterialTheme.typography.bodySmall)
                 }
@@ -248,33 +335,6 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
                     },
                     style = MaterialTheme.typography.bodySmall
                 )
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(
-                    onClick = { viewModel.toggleFavorite(product) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .semantics {
-                            contentDescription = if (product.favorite) {
-                                "Remove ${product.name} from favorites"
-                            } else {
-                                "Add ${product.name} to favorites"
-                            }
-                        }
-                ) { Text(if (product.favorite) "★" else "☆") }
-                TextButton(
-                    onClick = { viewModel.editProduct(product) },
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
-                ) { Text("Edit") }
-                Button(
-                    onClick = {
-                        if (state.mode == FoodMode.BULK) viewModel.addProductToBulk(product)
-                        else viewModel.selectProduct(product)
-                    },
-                    enabled = state.mode != FoodMode.BULK || !selected,
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
-                ) { Text(if (selected && state.mode == FoodMode.BULK) "Selected" else "Add") }
             }
         }
     }

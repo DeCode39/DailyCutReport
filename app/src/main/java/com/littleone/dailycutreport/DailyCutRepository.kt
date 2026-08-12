@@ -1,7 +1,6 @@
 package com.littleone.dailycutreport
 
 import android.content.Context
-import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -48,6 +47,8 @@ interface DailyCutRepository {
         enteredAmount: Double = quantity
     ): FoodMutationResult
     suspend fun setPreferredLogUnit(productId: String, unit: QuantityUnit)
+    suspend fun loadCartDraft(): BulkDraft
+    suspend fun saveCartDraft(draft: BulkDraft)
     suspend fun addBulkPurchase(
         date: LocalDate,
         label: String,
@@ -61,11 +62,8 @@ interface DailyCutRepository {
     suspend fun restoreFoodLog(deleted: DeletedFoodLogSnapshot): FoodMutationResult
     suspend fun deleteFoodLogGroup(mealId: String): FoodGroupMutationResult
     suspend fun restoreFoodLogGroup(deleted: DeletedFoodLogGroup): FoodGroupMutationResult
-    suspend fun saveReport(report: DailyReport): Uri?
-    suspend fun writeReport(uri: Uri, report: DailyReport): Boolean
-    suspend fun createShareUri(report: DailyReport): Uri?
-    suspend fun exportBackup(uri: Uri, password: CharArray): Result<Unit>
-    suspend fun restoreBackup(uri: Uri, password: CharArray): Result<Unit>
+    suspend fun exportBackup(uri: android.net.Uri, password: CharArray): Result<Unit>
+    suspend fun restoreBackup(uri: android.net.Uri, password: CharArray): Result<Unit>
     fun healthConnectAvailable(): Boolean
     suspend fun healthCorePermissionsGranted(): Boolean
     suspend fun healthNutritionPermissionGranted(): Boolean
@@ -88,7 +86,6 @@ class DefaultDailyCutRepository(
     private val healthConnect: HealthDataSource,
     private val legacyImporter: LegacyReportImporter,
     private val catalogImporter: ProductCatalogImporter,
-    private val exporter: ReportImageExporter,
     private val backupManager: AppBackupManager
 ) : DailyCutRepository {
     private val initializationMutex = Mutex()
@@ -377,6 +374,15 @@ class DefaultDailyCutRepository(
         check(dao.updatePreferredLogUnit(productId, unit.name) == 1) { "Product no longer exists." }
     }
 
+    override suspend fun loadCartDraft(): BulkDraft = withContext(Dispatchers.IO) {
+        val encoded = dao.metadata(CART_DRAFT_KEY) ?: return@withContext BulkDraft()
+        CartDraftCodec.decode(encoded) { productId -> dao.productById(productId) }
+    }
+
+    override suspend fun saveCartDraft(draft: BulkDraft) = withContext(Dispatchers.IO) {
+        dao.upsertMetadata(AppMetadataEntity(CART_DRAFT_KEY, CartDraftCodec.encode(draft)))
+    }
+
     override suspend fun updateFoodLog(edit: FoodQuantityEdit): FoodMutationResult = withContext(Dispatchers.IO) {
         require(edit.quantity > 0.0) { "Quantity must be greater than zero" }
         require(edit.enteredAmount.isFinite() && edit.enteredAmount > 0.0) { "Entered amount must be greater than zero." }
@@ -469,26 +475,11 @@ class DefaultDailyCutRepository(
         }))
     }
 
-    override suspend fun saveReport(report: DailyReport): Uri? = withContext(Dispatchers.IO) {
-        val (goals, spending) = reportContext(report.date)
-        exporter.saveReportToPictures(report, goals, spending)
-    }
-
-    override suspend fun writeReport(uri: Uri, report: DailyReport): Boolean = withContext(Dispatchers.IO) {
-        val (goals, spending) = reportContext(report.date)
-        exporter.writeReport(uri, report, goals, spending)
-    }
-
-    override suspend fun createShareUri(report: DailyReport): Uri? = withContext(Dispatchers.IO) {
-        val (goals, spending) = reportContext(report.date)
-        exporter.createShareUri(report, goals, spending)
-    }
-
-    override suspend fun exportBackup(uri: Uri, password: CharArray): Result<Unit> = runCatching {
+    override suspend fun exportBackup(uri: android.net.Uri, password: CharArray): Result<Unit> = runCatching {
         backupManager.export(uri, password)
     }
 
-    override suspend fun restoreBackup(uri: Uri, password: CharArray): Result<Unit> = runCatching {
+    override suspend fun restoreBackup(uri: android.net.Uri, password: CharArray): Result<Unit> = runCatching {
         backupManager.restore(uri, password)
         DailyCutWidgetUpdater.updateAll(context)
     }
@@ -611,16 +602,8 @@ class DefaultDailyCutRepository(
         return result
     }
 
-    private suspend fun reportContext(date: LocalDate): Pair<UserGoals, DailySpending> {
-        val goals = (dao.userGoals() ?: UserGoalsEntity()).toDomain()
-        val raw = dao.spendingForDate(date.toString())
-        return goals to DailySpending(
-            raw.knownTotalMicros, raw.unknownEntries, goals.dailyBudgetMicros,
-            raw.catalogEstimatedMicros, raw.actualPaidMicros, raw.actualPaidEntries
-        )
-    }
-
     private companion object {
+        const val CART_DRAFT_KEY = "pending_cart_v1"
         const val CLEAR_OVERRIDES_KEY = "manual_overrides_cleared_0_8_5"
         const val HEALTH_HISTORY_SYNC_DAY_KEY = "health_history_sync_day_v1"
         const val HEALTH_HISTORY_SYNC_STATUS_KEY = "health_history_sync_status_v1"

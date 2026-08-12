@@ -129,6 +129,7 @@ class BarcodeAnalyzer(
 
 @Composable
 fun BarcodeScannerScreen(
+    multiAllowed: Boolean = true,
     multiEnabled: Boolean,
     queueCount: Int,
     sessionStatus: String,
@@ -204,7 +205,7 @@ fun BarcodeScannerScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(if (multiEnabled) sessionStatus else status, color = Color.White, style = MaterialTheme.typography.titleMedium)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (multiAllowed) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Multi-scan", color = Color.White)
                 Switch(checked = multiEnabled, onCheckedChange = onMultiChange)
                 if (multiEnabled) Text("$queueCount queued", color = Color.White)

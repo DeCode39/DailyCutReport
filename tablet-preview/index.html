@@ -17,35 +17,27 @@
     </section>
 
     <section id="todayTab" class="tab-panel">
+      <div class="actions"><button id="refreshReport">Refresh</button><button id="copyReport">Copy JSON</button></div>
       <article id="resultCard" class="card hero"></article>
       <article id="nutritionCard" class="card"></article>
       <article class="card"><h2>Remaining-day planner</h2><button id="planDay">Generate suggestions</button><div id="planResults"></div></article>
       <article class="card">
-        <h2>Manual activity and overrides</h2>
+        <h2>Manual preview activity</h2>
         <div class="grid">
           <label>Steps<input id="steps" inputmode="numeric"></label>
           <label>Distance km<input id="distance" inputmode="decimal"></label>
-          <label>Final burn kcal<input id="burn" inputmode="decimal"></label>
-          <label>Food override kcal<input id="foodOverride" inputmode="decimal" placeholder="Use food log"></label>
-          <label>Protein override g<input id="proteinOverride" inputmode="decimal" placeholder="Use food log"></label>
-          <label>Sodium override mg<input id="sodiumOverride" inputmode="decimal" placeholder="Use food log"></label>
+          <label>Projected final burn kcal<input id="burn" inputmode="decimal"></label>
         </div>
-        <label>Notes<textarea id="notes"></textarea></label>
         <button id="saveReport">Save report</button>
       </article>
-      <div class="actions"><button id="exportPng">Export PNG</button></div>
     </section>
 
     <section id="foodsTab" class="tab-panel hidden">
-      <article class="card">
-        <h2>Add by barcode</h2>
-        <p class="muted">Camera scanning is available in the Android app. Enter the code here for the same saved-product workflow.</p>
-        <div class="inline"><input id="barcodeLookup" placeholder="Barcode / product code"><button id="useBarcode">Use</button></div>
-      </article>
-      <article class="card">
+      <article id="productEditor" class="card hidden">
+        <button id="closeProductEditor" class="settings-back">← Foods</button>
         <h2 id="productFormTitle">Product editor</h2>
         <div class="grid">
-          <label>Barcode (optional)<input id="productBarcode"></label>
+          <label>Barcode (optional)<span class="inline"><input id="productBarcode"><button id="previewBarcodeScan" type="button">Scan</button></span></label>
           <label>Name<input id="productName"></label>
           <label>Brand<input id="productBrand"></label>
           <label>Serving label<input id="productServing" value="1 serving"></label>
@@ -70,15 +62,15 @@
           <label><input id="productFavorite" type="checkbox"> Favorite</label>
         </div>
         <p class="muted">Nutrition-label OCR is available in the Android app only.</p>
-        <div class="actions"><button id="importProductJson">Import product JSON</button><button id="saveProduct">Save product</button><button id="saveAndAddProduct">Save and add</button></div>
+        <div class="actions"><button id="importProductJson">Import product JSON</button><button id="saveProduct">Save product</button></div>
       </article>
+      <div id="foodsCatalog">
       <article class="card">
-        <h2>Saved products</h2>
-        <label><input id="bulkMode" type="checkbox"> Bulk purchase mode</label>
-        <p id="bulkHelp" class="muted hidden">Search and add products, then enter the final checkout total once.</p>
+        <div class="actions"><h2>Saved products</h2><button id="newProduct">Add</button></div>
+        <p class="muted">Tap a product to add one purchase unit. Use the pen to edit.</p>
         <input id="productSearch" placeholder="Search products">
-        <div id="bulkCart" class="hidden">
-          <h3>Bulk cart</h3><p id="bulkDate" class="muted"></p><div id="bulkItems"></div>
+        <div id="bulkCart" class="card hidden">
+          <h3>Cart</h3><p id="bulkDate" class="muted"></p><div id="bulkItems"></div>
           <div class="grid">
             <label>Store or group label<input id="bulkLabel" placeholder="e.g. 7-Eleven"></label>
             <label>Final checkout total<input id="bulkPaid" inputmode="decimal" placeholder="Blank uses estimates"></label>
@@ -89,6 +81,7 @@
         <div id="productList"></div>
       </article>
       <article class="card"><h2>Food log</h2><div id="foodLog"></div></article>
+      </div>
     </section>
 
     <section id="healthTab" class="tab-panel hidden">
@@ -163,12 +156,11 @@
 
       <div id="settings-about" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
-        <article class="card"><h2>About</h2><p>DailyCutReport 0.13.0 · database schema 9 · backup schema 6.</p><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
+        <article class="card"><h2>About</h2><p>DailyCutReport 0.14.0 · database schema 9 · backup schema 6.</p><p>Health Connect, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
       </div>
     </section>
   </main>
   <nav><button data-tab="today" class="active">Today</button><button data-tab="foods">Foods</button><button data-tab="health">Health</button><button data-tab="settings">Settings</button></nav>
-  <canvas id="reportCanvas"></canvas>
   <script src="catalog.js"></script>
   <script src="model.js"></script>
   <script src="backup.js"></script>

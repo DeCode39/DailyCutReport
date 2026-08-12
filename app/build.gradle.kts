@@ -17,8 +17,8 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 32
-        versionName = "0.13.0"
+        versionCode = 33
+        versionName = "0.14.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         providers.gradleProperty("dcrAbi").orNull?.let { requestedAbi ->
             require(requestedAbi == "arm64-v8a") { "Unsupported dcrAbi: $requestedAbi" }
@@ -150,8 +150,10 @@ fun registerOfflineVerification(name: String, assembleTask: String, apkPath: Str
     dependsOn(assembleTask)
 
     doLast {
-        val apk = layout.buildDirectory.file(apkPath).get().asFile
-        check(apk.isFile) { "APK not found at ${apk.absolutePath}" }
+        val expectedApk = layout.buildDirectory.file(apkPath).get().asFile
+        val unsignedApk = expectedApk.resolveSibling("${expectedApk.nameWithoutExtension}-unsigned.apk")
+        val apk = expectedApk.takeIf { it.isFile } ?: unsignedApk
+        check(apk.isFile) { "APK not found at ${expectedApk.absolutePath} or ${unsignedApk.absolutePath}" }
 
         val executable = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "aapt.exe" else "aapt"
         val aapt = android.sdkDirectory.resolve("build-tools/${android.buildToolsVersion}/$executable")

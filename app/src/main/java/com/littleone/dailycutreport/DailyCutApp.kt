@@ -2,9 +2,13 @@ package com.littleone.dailycutreport
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PersistableBundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -146,14 +150,7 @@ internal fun TodayScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var expandedTargets by remember { mutableStateOf(false) }
-    val createDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
-        if (uri != null) scope.launch {
-            val saved = viewModel.writeReport(uri)
-            onMessage(if (saved) "Report saved" else "Could not save report")
-        }
-    }
 
     LaunchedEffect(state.message) {
         state.message?.let { onMessage(it); viewModel.clearMessage() }
@@ -172,29 +169,26 @@ internal fun TodayScreen(
             DateHeader(selectedDate, dateViewModel) {
                 FilledIconButton(
                     modifier = Modifier.size(48.dp),
-                    onClick = {
-                        scope.launch {
-                            viewModel.createShareUri()?.let { uri ->
-                                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                                    type = "image/png"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }, "Share daily report"))
-                            }
-                        }
-                    }
-                ) { Icon(painterResource(R.drawable.ic_share), contentDescription = "Share report") }
+                    enabled = !state.refreshing,
+                    onClick = viewModel::refreshHealth
+                ) {
+                    if (state.refreshing) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    else Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Refresh selected date")
+                }
                 FilledIconButton(
                     modifier = Modifier.size(48.dp),
                     onClick = {
-                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                            createDocumentLauncher.launch("DailyCutReport_${state.report.date}.png")
-                        } else scope.launch {
-                            val uri = viewModel.saveReport()
-                            onMessage(if (uri == null) "Could not save report" else "Report saved")
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        val clip = ClipData.newPlainText("DailyCutReport ${state.report.date}", viewModel.reportJson())
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            clip.description.extras = PersistableBundle().apply {
+                                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                            }
                         }
+                        clipboard.setPrimaryClip(clip)
+                        onMessage("Daily report JSON copied.")
                     }
-                ) { Icon(painterResource(R.drawable.ic_download), contentDescription = "Save report") }
+                ) { Icon(painterResource(R.drawable.ic_copy), contentDescription = "Copy daily report JSON") }
             }
         }
         item {
@@ -341,17 +335,14 @@ internal fun FoodsScreen(
     selectedDate: LocalDate,
     dateViewModel: ReportDateViewModel,
     viewModel: FoodsViewModel,
-    onScan: (ScanTarget) -> Unit,
-    onOcr: () -> Unit
+    onCreateProduct: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var manualCode by remember { mutableStateOf("") }
-    var showManualTools by remember { mutableStateOf(false) }
     var showCart by remember { mutableStateOf(false) }
 
     Scaffold(floatingActionButton = {
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (state.mode == FoodMode.BULK || state.bulkDraft.items.isNotEmpty()) {
+            if (state.bulkDraft.items.isNotEmpty()) {
                 ExtendedFloatingActionButton(
                     onClick = { showCart = true },
                     icon = { Text("●") },
@@ -363,7 +354,7 @@ internal fun FoodsScreen(
                     }
                 )
             }
-            FloatingActionButton(onClick = { onScan(viewModel.scanTarget()) }) { Text("Scan") }
+            FloatingActionButton(onClick = onCreateProduct) { Text("Add") }
         }
     }) { inner ->
         LazyColumn(
@@ -376,38 +367,15 @@ internal fun FoodsScreen(
                 DateHeader(selectedDate, dateViewModel)
             }
             item {
-                FilterChip(
-                    selected = state.mode == FoodMode.BULK,
-                    onClick = {
-                        viewModel.setMode(if (state.mode == FoodMode.BULK) FoodMode.NORMAL else FoodMode.BULK)
-                    },
-                    label = { Text(if (state.mode == FoodMode.BULK) "Bulk cart active" else "Bulk cart") }
-                )
-                if (state.mode == FoodMode.BULK) Text(
-                    "Search and add products below, then enter one final checkout total.",
-                    style = MaterialTheme.typography.bodySmall
-                )
                 ProductSearchField(state.query, viewModel::setQuery)
-                TextButton(onClick = { showManualTools = !showManualTools }) {
-                    Text(if (showManualTools) "Hide manual options" else "Manual options")
-                }
-                if (showManualTools) {
-                    OutlinedTextField(
-                        value = manualCode,
-                        onValueChange = { manualCode = it },
-                        label = { Text("Barcode / product code") },
-                        trailingIcon = { TextButton(onClick = { viewModel.handleBarcode(manualCode, viewModel.scanTarget()) }) { Text("Use") } },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    TextButton(onClick = viewModel::createProduct) { Text("Create product manually") }
-                }
+                Text("Tap a product to add one purchase unit. Hold to edit.", style = MaterialTheme.typography.bodySmall)
             }
             if (state.query.isBlank()) {
                 val favoriteIds = state.favoriteProducts.map(ProductEntity::productId).toSet()
                 if (state.favoriteProducts.isNotEmpty()) {
                     item { Text("Favorites", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
                     items(state.favoriteProducts, key = { "favorite-${it.productId}" }) { product ->
-                        ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
+                        ProductCatalogRow(product, state.goals.currencyCode, viewModel)
                     }
                 }
                 val recent = state.recentProducts.filterNot { it.productId in favoriteIds }.take(5)
@@ -415,14 +383,14 @@ internal fun FoodsScreen(
                 if (recent.isEmpty()) {
                     item { Text("Search the catalog to add your first food.", style = MaterialTheme.typography.bodySmall) }
                 } else items(recent, key = { "recent-${it.productId}" }) { product ->
-                    ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
+                    ProductCatalogRow(product, state.goals.currencyCode, viewModel)
                 }
             } else {
                 item { Text("Search results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
                 if (state.products.isEmpty()) {
                     item { Text("No matching products.", style = MaterialTheme.typography.bodySmall) }
                 } else items(state.products, key = { it.productId }) { product ->
-                    ProductCatalogRow(product, state.goals.currencyCode, viewModel, state)
+                    ProductCatalogRow(product, state.goals.currencyCode, viewModel)
                 }
             }
             item { Spacer(Modifier.height(80.dp)) }
@@ -450,8 +418,7 @@ internal fun FoodsScreen(
 
 @Composable
 internal fun FoodWorkflowDialogs(
-    viewModel: FoodsViewModel,
-    onOcr: () -> Unit
+    viewModel: FoodsViewModel
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     when (val workflow = state.workflow) {
@@ -462,14 +429,7 @@ internal fun FoodWorkflowDialogs(
             onDismiss = viewModel::cancelDialogs,
             onConfirm = viewModel::confirmAdd
         )
-        is FoodWorkflowState.EditProduct -> ProductEditorDialog(
-            draft = workflow.draft,
-            currencyCode = state.goals.currencyCode,
-            onDraftChange = viewModel::updateProductDraft,
-            onScanNutrition = onOcr,
-            onDismiss = viewModel::cancelDialogs,
-            onSave = viewModel::saveProduct
-        )
+        is FoodWorkflowState.EditProduct -> Unit
         is FoodWorkflowState.EditQuantity -> FoodLogEditDialog(
             workflow.log,
             state.goals.currencyCode,
@@ -1716,11 +1676,13 @@ private fun QuantityDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ProductEditorDialog(
+internal fun ProductEditorScreen(
     draft: ProductEditorDraft,
     currencyCode: String,
     onDraftChange: (ProductEditorDraft) -> Unit,
+    onScanBarcode: () -> Unit,
     onScanNutrition: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (ProductEntity, List<ProductExtraNutrientEntity>, Double) -> Unit
@@ -1746,13 +1708,69 @@ private fun ProductEditorDialog(
         (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null &&
         (!draft.quantityMode.measureAvailable || parsedMeasure != null) &&
         parsedFixedUnits != null
+    val saveDraft = {
+        val productId = product?.productId ?: UUID.randomUUID().toString()
+        val entity = ProductEntity(
+            productId = productId,
+            barcode = draft.barcode.trim().ifBlank { null },
+            name = draft.name.trim(),
+            brand = draft.brand.trim(),
+            servingLabel = draft.servingLabel.ifBlank { "1 serving" },
+            quantityMode = draft.quantityMode.name,
+            measurePerServing = parsedMeasure,
+            preferredLogUnit = ProductQuantitySpec(draft.quantityMode, parsedMeasure)
+                .preferredOrFallback(draft.preferredLogUnit).name,
+            calories = draft.calories.number(),
+            proteinG = draft.protein.number(),
+            sodiumMg = draft.sodium.number(),
+            carbsG = draft.carbs.number(),
+            fatG = draft.fat.number(),
+            sugarG = draft.sugar.number(),
+            fiberG = draft.fiber.number(),
+            saturatedFatG = draft.saturatedFat.number(),
+            purchasePriceMicros = parsedPrice,
+            purchaseUnitServings = parsedPurchaseServings ?: 1.0,
+            includeInPlanner = draft.includeInPlanner,
+            plannerItemType = draft.plannerItemType.name,
+            alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner,
+            fixedPurchaseUnits = parsedFixedUnits ?: 1,
+            favorite = draft.favorite,
+            notes = product?.notes.orEmpty(),
+            createdAt = product?.createdAt ?: System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        onSave(entity, parseExtras(productId, draft.extras), 1.0)
+    }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (product == null) "New product" else "Edit product") },
-        text = {
-            Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(draft.barcode, { onDraftChange(draft.copy(barcode = it)) }, label = { Text("Barcode (optional)") })
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (product == null) "New product" else "Edit product") },
+                navigationIcon = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+                actions = {
+                    TextButton(enabled = valid, onClick = saveDraft) {
+                        Text(if (draft.saveTarget == ProductSaveTarget.CATALOG_ONLY) "Save" else "Save & continue")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+            Column(
+                Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    draft.barcode,
+                    { onDraftChange(draft.copy(barcode = it)) },
+                    label = { Text("Barcode (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        IconButton(onClick = onScanBarcode) {
+                            Icon(painterResource(R.drawable.ic_barcode_scan), contentDescription = "Scan product barcode")
+                        }
+                    }
+                )
                 OutlinedTextField(draft.name, { onDraftChange(draft.copy(name = it)) }, label = { Text("Product name") })
                 OutlinedTextField(draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") })
                 Box(Modifier.fillMaxWidth()) {
@@ -1863,45 +1881,9 @@ private fun ProductEditorDialog(
                     }
                 }
                 OutlinedTextField(draft.extras, { onDraftChange(draft.copy(extras = it)) }, label = { Text("Extra nutrients: Name=12 unit") })
+                Spacer(Modifier.height(32.dp))
             }
-        },
-        confirmButton = {
-            Button(enabled = valid, onClick = {
-                val productId = product?.productId ?: UUID.randomUUID().toString()
-                val entity = ProductEntity(
-                    productId = productId,
-                    barcode = draft.barcode.trim().ifBlank { null },
-                    name = draft.name.trim(),
-                    brand = draft.brand.trim(),
-                    servingLabel = draft.servingLabel.ifBlank { "1 serving" },
-                    quantityMode = draft.quantityMode.name,
-                    measurePerServing = parsedMeasure,
-                    preferredLogUnit = ProductQuantitySpec(draft.quantityMode, parsedMeasure)
-                        .preferredOrFallback(draft.preferredLogUnit).name,
-                    calories = draft.calories.number(),
-                    proteinG = draft.protein.number(),
-                    sodiumMg = draft.sodium.number(),
-                    carbsG = draft.carbs.number(),
-                    fatG = draft.fat.number(),
-                    sugarG = draft.sugar.number(),
-                    fiberG = draft.fiber.number(),
-                    saturatedFatG = draft.saturatedFat.number(),
-                    purchasePriceMicros = parsedPrice,
-                    purchaseUnitServings = parsedPurchaseServings ?: 1.0,
-                    includeInPlanner = draft.includeInPlanner,
-                    plannerItemType = draft.plannerItemType.name,
-                    alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner,
-                    fixedPurchaseUnits = parsedFixedUnits ?: 1,
-                    favorite = draft.favorite,
-                    notes = product?.notes.orEmpty(),
-                    createdAt = product?.createdAt ?: System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis()
-                )
-                onSave(entity, parseExtras(productId, draft.extras), 1.0)
-            }) { Text(if (draft.saveTarget == ProductSaveTarget.CATALOG_ONLY) "Save" else "Save and continue") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+    }
     if (showJsonImport) {
         AlertDialog(
             onDismissRequest = { showJsonImport = false },

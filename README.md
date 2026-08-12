@@ -1,6 +1,6 @@
-# Daily Cut Report 0.13.0
+# Daily Cut Report 0.14.0
 
-Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a shareable PNG.
+Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
 ## Features
 
@@ -8,15 +8,15 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Shared historical date navigation with a calendar capped at today.
 - One process-level Health Connect refresh on app foreground, plus a serialized 30-day bootstrap after installation, upgrade, or newly granted optional permissions; rotation does not refresh again.
 - A deficit-focused Health dashboard with optional Health Connect weight import, multiple timestamped daily readings, quick floating manual-weight entry, labeled deficit/weight trend plots, robust 28-day weight-change ranges, and capped walking guidance derived from personal sessions or body weight.
-- Matching floating Scan actions on Today and Foods, with the daily food log shown on Today.
+- A direct floating Scan action on Today; Foods uses its floating Add action for a full-screen product editor.
 - Custom fixed-calorie or dynamic-deficit goals, editable macro targets, one ISO currency, and a daily food budget. Deficit mode requires only the desired deficit and derives its allowance from Health Connect projected burn for the selected date.
 - The idle Foods catalog shows up to five recently used favorites followed by five recently logged products that do not duplicate them; typing in search queries the complete catalog.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
 - A deterministic offline remaining-day planner that ranks up to three strict purchase-unit suggestions. Already-logged fixed items count toward their requirement, and pre-existing target violations produce one baseline-aware balanced recovery option instead of a minimums-at-any-cost fallback.
 - A dedicated searchable Planner settings page controls inclusion, food/drink classification, fixed status, and one-to-six required purchase units per product. Fixed items are exempt from category caps, so two additional non-fixed drink units remain available.
-- Product rows use a compact two-row layout with equal Favorite, Edit, and Add actions. Every add workflow now defaults to one complete purchase unit while keeping quantities editable.
+- Catalog cards use left-side line-art Add/Edit controls, tap-to-cart, and hold-to-edit. Every catalog add defaults to one complete purchase unit while keeping quantities editable.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
-- Bulk Cart mode keeps normal search and barcode scanning available while a floating cart bubble holds an unfinished date-locked order. Its bottom sheet atomically logs several products with one final paid total, so multi-buy and whole-order discounts require no per-item arithmetic.
+- Every Foods addition enters one persistent, date-locked cart. Duplicate products merge, press-and-hold quantity controls accelerate from one to ten purchase units, and checkout atomically logs several products with one final paid total. A one-item checkout remains an ordinary entry.
 - Bulk orders appear as one expandable Today card with aggregate nutrition and checkout cost. Individual rows or the complete order can be deleted and restored transactionally.
 - Stored goal and currency values are sanitized on startup, and zero targets render safely.
 - Serialized, retryable Health Connect nutrition upserts after local food-log add/edit/delete, controlled by a separate optional write permission and surfaced in Settings.
@@ -34,7 +34,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Legacy manual overrides are cleared during initialization and every restore; report values now come from Health Connect and local food logs.
 - Missing burn data is shown as unavailable, never as a calorie surplus.
 - Deleted food entries can be restored from the snackbar Undo action.
-- PNG save through MediaStore on Android 10+, the system document picker on Android 9, and secure cache-backed sharing.
+- Today provides a selected-date Health Connect refresh and a privacy-marked clipboard action that copies versioned, barcode-free daily-report JSON.
 - Browser-based tablet preview with matching manual workflows and versioned localStorage.
 
 ## Offline contract
@@ -130,6 +130,6 @@ Catalog schema 3 uses a stable ID, an optional physical barcode, and optional qu
 - `BarcodeScanner.kt`: lifecycle-safe on-device scanner.
 - `NutritionImagePreprocessor.kt`, `NutritionLabelOcr.kt`, and `NutritionLabelParser.kt`: guided local image preparation, bundled multilingual OCR, deterministic nutrient extraction, and review candidates.
 - `AppBackupManager.kt`: authenticated cross-platform backup format.
-- `ReportImageExporter.kt`: dynamic local PNG rendering and storage.
+- `DailyReportJson.kt`: stable, rounded, barcode-free clipboard report serialization.
 - `NutritionSyncCoordinator.kt`: serialized, versioned Health Connect nutrition synchronization and retries.
 - `OfflineMealPlanner.kt`: bounded deterministic nutrition-and-budget recommendation search.

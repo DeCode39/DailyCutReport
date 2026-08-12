@@ -64,6 +64,10 @@ fun DailyCutApp(
         val externalScannerLaunch = scannerLaunchRequests?.value ?: 0
         LaunchedEffect(externalScannerLaunch) {
             if (externalScannerLaunch > 0 && route != "scanner") {
+                if (route == "product-editor") {
+                    foodsViewModel.cancelDialogs()
+                    navController.popBackStack()
+                }
                 scannerTarget = ScanTarget.STANDALONE
                 foodsViewModel.beginScanner(scannerTarget)
                 navController.navigate("scanner")
@@ -72,18 +76,25 @@ fun DailyCutApp(
         LaunchedEffect(Unit) {
             foodsViewModel.events.collect { event ->
                 when (event) {
-                    is FoodUiEvent.Threshold -> snackbarHostState.showSnackbar(event.text)
+                    is FoodUiEvent.Threshold -> scope.launch { snackbarHostState.showSnackbar(event.text) }
                     is FoodUiEvent.Message -> {
-                        val result = snackbarHostState.showSnackbar(
-                            message = event.text,
-                            actionLabel = event.undo?.let { "Undo" }
-                        )
-                        if (result == SnackbarResult.ActionPerformed) event.undo?.let(foodsViewModel::undo)
+                        scope.launch {
+                            val result = snackbarHostState.showSnackbar(
+                                message = event.text,
+                                actionLabel = event.undo?.let { "Undo" }
+                            )
+                            if (result == SnackbarResult.ActionPerformed) event.undo?.let(foodsViewModel::undo)
+                        }
                     }
-                    FoodUiEvent.ScannerNeedsEditor -> {
+                    FoodUiEvent.OpenProductEditor -> {
                         if (navController.currentDestination?.route == "scanner") navController.popBackStack()
+                        if (navController.currentDestination?.route != "product-editor") navController.navigate("product-editor")
+                    }
+                    FoodUiEvent.CloseProductEditor -> {
+                        if (navController.currentDestination?.route == "product-editor") navController.popBackStack()
                     }
                     FoodUiEvent.ResumeScanner -> {
+                        if (navController.currentDestination?.route == "product-editor") navController.popBackStack()
                         if (navController.currentDestination?.route != "scanner") navController.navigate("scanner")
                     }
                 }
@@ -99,7 +110,7 @@ fun DailyCutApp(
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                if (route != "scanner" && route != "ocr") {
+                if (route != "scanner" && route != "ocr" && route != "product-editor") {
                     NavigationBar {
                         Destination.entries.forEach { destination ->
                             NavigationBarItem(
@@ -142,12 +153,7 @@ fun DailyCutApp(
                 composable(Destination.FOODS.route) {
                     FoodsScreen(
                         selectedDate, dateViewModel, foodsViewModel,
-                        onScan = { target ->
-                            scannerTarget = target
-                            foodsViewModel.beginScanner(target)
-                            navController.navigate("scanner")
-                        },
-                        onOcr = { navController.navigate("ocr") }
+                        onCreateProduct = foodsViewModel::createProduct
                     )
                 }
                 composable(Destination.SETTINGS.route) {
@@ -197,6 +203,7 @@ fun DailyCutApp(
                 }
                 composable("scanner") {
                     BarcodeScannerScreen(
+                        multiAllowed = scannerTarget != ScanTarget.PRODUCT_DRAFT_BARCODE,
                         multiEnabled = scannerSession.multiEnabled,
                         queueCount = scannerSession.items.size,
                         sessionStatus = scannerSession.status,
@@ -207,7 +214,10 @@ fun DailyCutApp(
                             } else foodsViewModel.setMultiScan(enabled)
                         },
                         onFound = { barcode ->
-                            if (scannerSession.multiEnabled) foodsViewModel.handleMultiScanBarcode(barcode)
+                            if (scannerTarget == ScanTarget.PRODUCT_DRAFT_BARCODE) {
+                                navController.popBackStack()
+                                foodsViewModel.applyScannedBarcodeToDraft(barcode)
+                            } else if (scannerSession.multiEnabled) foodsViewModel.handleMultiScanBarcode(barcode)
                             else {
                                 navController.popBackStack()
                                 foodsViewModel.handleBarcode(barcode, scannerTarget)
@@ -230,9 +240,29 @@ fun DailyCutApp(
                         }
                     )
                 }
+                composable("product-editor") {
+                    val foodState by foodsViewModel.uiState.collectAsStateWithLifecycle()
+                    val editor = foodState.workflow as? FoodWorkflowState.EditProduct
+                    if (editor != null) ProductEditorScreen(
+                        draft = editor.draft,
+                        currencyCode = foodState.goals.currencyCode,
+                        onDraftChange = foodsViewModel::updateProductDraft,
+                        onScanBarcode = {
+                            scannerTarget = ScanTarget.PRODUCT_DRAFT_BARCODE
+                            foodsViewModel.beginScanner(scannerTarget)
+                            navController.navigate("scanner")
+                        },
+                        onScanNutrition = { navController.navigate("ocr") },
+                        onDismiss = {
+                            foodsViewModel.cancelDialogs()
+                            navController.popBackStack()
+                        },
+                        onSave = foodsViewModel::saveProduct
+                    )
+                }
             }
-            if (route != "scanner" && route != "ocr") {
-                FoodWorkflowDialogs(foodsViewModel) { navController.navigate("ocr") }
+            if (route != "scanner" && route != "ocr" && route != "product-editor") {
+                FoodWorkflowDialogs(foodsViewModel)
             }
         }
     }

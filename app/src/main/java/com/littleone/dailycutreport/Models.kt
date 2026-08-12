@@ -342,9 +342,8 @@ data class ScannerSessionState(
     val status: String = "Point the camera at a barcode"
 )
 
-enum class FoodMode { NORMAL, BULK }
 enum class ProductSaveTarget { STANDALONE_LOG, BULK_CART, MULTI_SCAN_QUEUE, CATALOG_ONLY }
-enum class ScanTarget { STANDALONE, BULK_CART }
+enum class ScanTarget { STANDALONE, BULK_CART, PRODUCT_DRAFT_BARCODE }
 
 data class PlannerProductSettings(
     val productId: String,
@@ -368,7 +367,7 @@ data class BulkDraft(
     val actualPaidText: String = "",
     val excludeCostFromBudget: Boolean = false
 ) {
-    val isValid: Boolean get() = items.size >= 2 && items.all { it.quantity != null } &&
+    val isValid: Boolean get() = items.isNotEmpty() && items.all { it.quantity != null } &&
         (actualPaidText.isBlank() || runCatching { parseMoneyMicros(actualPaidText) != null }.getOrDefault(false))
 }
 

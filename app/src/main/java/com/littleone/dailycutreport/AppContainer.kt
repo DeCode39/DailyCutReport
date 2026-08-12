@@ -59,7 +59,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
         healthConnect = HealthConnectManager(context),
         legacyImporter = LegacyReportImporter(context, dao),
         catalogImporter = ProductCatalogImporter(context, dao),
-        exporter = ReportImageExporter(context),
         backupManager = EncryptedAppBackupManager(context, dao)
     )
 }

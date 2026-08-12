@@ -121,14 +121,14 @@ class ModelsTest {
         assertEquals(listOf(3L, 7L), allocateBulkPaidTotal(10L, listOf(priced, unpriced)))
     }
 
-    @Test fun bulkDraftRequiresTwoValidItemsAndAcceptsAnExplicitFreeCheckout() {
+    @Test fun cartDraftAcceptsOneValidItemAndAnExplicitFreeCheckout() {
         val date = LocalDate.of(2026, 1, 2)
         val first = BulkDraftItem(ProductEntity(productId = "first", name = "First"),
             QuantityInputState.forProduct(ProductEntity(productId = "first", name = "First"), 1.5))
         val secondProduct = ProductEntity(productId = "second", name = "Second")
         val second = BulkDraftItem(secondProduct, QuantityInputState.forProduct(secondProduct, 2.0))
 
-        assertEquals(false, BulkDraft(date = date, items = listOf(first)).isValid)
+        assertEquals(true, BulkDraft(date = date, items = listOf(first)).isValid)
         assertEquals(true, BulkDraft(date = date, items = listOf(first, second), actualPaidText = "0").isValid)
         assertEquals(false, BulkDraft(date = date, items = listOf(first, second.copy(
             quantityInput = second.quantityInput.copy(servingsText = "0")
