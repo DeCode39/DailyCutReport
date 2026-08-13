@@ -112,7 +112,10 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
 
         val zone = ZoneId.systemDefault()
         val start = date.atStartOfDay(zone).toInstant()
-        val end = date.plusDays(1).atStartOfDay(zone).toInstant()
+        val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant()
+        val now = Instant.now()
+        val isToday = date == now.atZone(zone).toLocalDate()
+        val end = if (isToday && now < dayEnd) now else dayEnd
         val timeRange = TimeRangeFilter.between(start, end)
         val aggregate = hc.aggregate(
             AggregateRequest(
@@ -125,6 +128,14 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                 timeRangeFilter = timeRange
             )
         )
+        val providerFullDayCalories = if (isToday && end < dayEnd) {
+            hc.aggregate(
+                AggregateRequest(
+                    metrics = setOf(TotalCaloriesBurnedRecord.ENERGY_TOTAL),
+                    timeRangeFilter = TimeRangeFilter.between(start, dayEnd)
+                )
+            )[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
+        } else null
 
         val sessions = readAllExerciseSessions(hc, timeRange)
         val nutritionGranted = NUTRITION_PERMISSION in granted
@@ -149,7 +160,9 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
             nutritionProteinG = nutritionRecords.sumOf { it.protein?.inGrams ?: 0.0 },
             nutritionSodiumMg = nutritionRecords.sumOf { it.sodium?.inMilligrams ?: 0.0 },
             nutritionRecords = nutritionRecords.size,
-            healthConnectStatus = nutritionStatus
+            healthConnectStatus = nutritionStatus,
+            providerFullDayCalories = providerFullDayCalories,
+            recordedThroughEpochMs = end.toEpochMilli()
         )
     }
 

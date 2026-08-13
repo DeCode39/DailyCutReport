@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -15,10 +16,12 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.Instant
 
 interface DailyCutRepository {
     suspend fun initialize()
     fun observeReport(date: LocalDate): Flow<DailyReport>
+    fun observeBurnForecast(date: LocalDate): Flow<BurnForecast?> = flowOf(null)
     fun observeFoodLogs(date: LocalDate): Flow<List<FoodLogSnapshot>>
     fun observeProducts(query: String): Flow<List<ProductEntity>>
     fun observeRecentProducts(): Flow<List<ProductEntity>>
@@ -93,6 +96,7 @@ class DefaultDailyCutRepository(
     private val nutritionSync = NutritionSyncCoordinator(dao, healthConnect)
     private val mealPlanner = OfflineMealPlanner()
     private val healthAnalytics = HealthAnalyticsEngine()
+    private val burnForecastEngine = DailyBurnForecastEngine()
     private val historySyncMutex = Mutex()
     private val plannerSettingsMutex = Mutex()
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -127,6 +131,19 @@ class DefaultDailyCutRepository(
             entity.toDomain(totals.toSummary(extras.associate { it.name to NutrientAmount(it.value, it.unit) }))
         }.flowOn(Dispatchers.IO)
     }
+
+    override fun observeBurnForecast(date: LocalDate): Flow<BurnForecast?> = combine(
+        dao.observeMetadata(burnForecastMetadataKey(date)),
+        dao.observeDailyReport(date.toString())
+    ) { encoded, report ->
+        BurnForecastCodec.decode(encoded.orEmpty())?.takeIf { it.date == date }
+            ?: report?.totalCalories?.takeIf { date < LocalDate.now() && it > 0.0 }?.let { burn ->
+                BurnForecast(
+                    date, burn, burn, burn, burn, BurnForecastSource.ACTUAL,
+                    BurnForecastConfidence.HIGH, 0, report.savedAtEpochMs
+                )
+            }
+    }.flowOn(Dispatchers.IO)
 
     override fun observeFoodLogs(date: LocalDate): Flow<List<FoodLogSnapshot>> =
         dao.observeLogsForDate(date.toString())
@@ -174,8 +191,9 @@ class DefaultDailyCutRepository(
             HealthHistoryState(reports, nutrition, weights, walking)
         }
         return combine(
-            history, observeGoals(), dao.observeHealthProfile(), dao.observeMetadata(HEALTH_HISTORY_SYNC_STATUS_KEY)
-        ) { state, goals, profileEntity, historyStatus ->
+            history, observeGoals(), dao.observeHealthProfile(), dao.observeMetadata(HEALTH_HISTORY_SYNC_STATUS_KEY),
+            dao.observeMetadata(burnForecastMetadataKey(date))
+        ) { state, goals, profileEntity, historyStatus, forecastJson ->
             val reportByDate = state.reports.associateBy(DailyReportEntity::date)
             val nutritionByDate = state.nutrition.associateBy(DailyNutritionHistoryRow::date)
             val days = generateSequence(date.minusDays(27)) { current ->
@@ -206,7 +224,8 @@ class DefaultDailyCutRepository(
                 history = days,
                 weights = state.weights.map(WeightEntryEntity::toDomain),
                 walkingSamples = state.walking.map(WalkingSessionSampleEntity::toDomain),
-                historyLastSynced = historyStatus
+                historyLastSynced = historyStatus,
+                burnForecast = BurnForecastCodec.decode(forecastJson.orEmpty())
             )
         }.flowOn(Dispatchers.Default)
     }
@@ -261,10 +280,39 @@ class DefaultDailyCutRepository(
     }
 
     override suspend fun refreshHealth(date: LocalDate): Result<Unit> = runCatching {
-        val summary = healthConnect.readDailySummary(date)
+        val raw = healthConnect.readDailySummary(date)
+        val today = LocalDate.now()
+        val refreshedAt = raw.recordedThroughEpochMs?.let(Instant::ofEpochMilli) ?: Instant.now()
+        val completed = withContext(Dispatchers.IO) {
+            if (date == today) dao.dailyReports(today.minusDays(28).toString(), today.minusDays(1).toString())
+                .map { CompletedBurnDay(LocalDate.parse(it.date), it.totalCalories) }
+            else emptyList()
+        }
+        val forecast = burnForecastEngine.forecast(
+            date = date,
+            today = today,
+            refreshedAt = refreshedAt,
+            zone = ZoneId.systemDefault(),
+            liveBurnCalories = raw.totalCalories,
+            providerFullDayCalories = raw.providerFullDayCalories,
+            completedDays = completed
+        )
+        val forecastStatus = when (forecast.source) {
+            BurnForecastSource.ACTUAL -> "Complete-day Health Connect burn"
+            BurnForecastSource.HISTORICAL_REMAINDER ->
+                "Estimated final burn · ${forecast.confidence.name.lowercase()} confidence · ${forecast.sampleDays} completed days"
+            BurnForecastSource.PROVIDER_FALLBACK -> "Provider full-day estimate · low confidence"
+            BurnForecastSource.UNAVAILABLE -> "Final burn estimate unavailable"
+        }
+        val summary = raw.copy(
+            totalCalories = forecast.estimatedFinalCalories ?: 0.0,
+            healthConnectStatus = "${raw.healthConnectStatus}. $forecastStatus",
+            providerFullDayCalories = null
+        )
         withContext(Dispatchers.IO) {
             val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
             dao.upsertDailyReport(existing.withHealth(summary))
+            dao.upsertMetadata(AppMetadataEntity(burnForecastMetadataKey(date), BurnForecastCodec.encode(forecast)))
         }
         DailyCutWidgetUpdater.updateAll(context)
     }

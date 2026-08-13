@@ -28,6 +28,7 @@ object DailyCutWidgetUpdater {
         val dao = NutritionDatabase.get(context).nutritionDao()
         val today = LocalDate.now().toString()
         val report = dao.dailyReport(today)
+        val forecast = dao.metadata(burnForecastMetadataKey(LocalDate.now()))?.let(BurnForecastCodec::decode)
         val totals = dao.totalsForDate(today)
         val goals = (dao.userGoals() ?: UserGoalsEntity()).toDomain()
         val burn = report?.manualBurnCalories
@@ -52,7 +53,10 @@ object DailyCutWidgetUpdater {
             if (target <= 0.0) 0 else ((value / target) * 100).toInt().coerceIn(0, 100)
         return TodayWidgetState(
             balanceLabel,
-            allowance?.let { "${formatCalories(food)} / ${formatCalories(it)} kcal" } ?: "Intake ${formatCalories(food)} kcal",
+            allowance?.let {
+                "${formatCalories(food)} / ${formatCalories(it)} kcal" +
+                    if (forecast?.isEstimate == true) " · ${forecast.confidence.name.lowercase()}" else ""
+            } ?: "Intake ${formatCalories(food)} kcal",
             allowance?.let { percent(food, it) } ?: 0,
             "${formatDecimal(totals.proteinG)} / ${formatDecimal(goals.proteinG)} g protein",
             percent(totals.proteinG, goals.proteinG),

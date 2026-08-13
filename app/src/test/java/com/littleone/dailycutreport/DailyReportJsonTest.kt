@@ -31,7 +31,7 @@ class DailyReportJsonTest {
 
         val text = DailyReportJson.encode(state)
         val json = JSONObject(text)
-        assertEquals(1, json.getInt("schemaVersion"))
+        assertEquals(2, json.getInt("schemaVersion"))
         assertEquals(98L, json.getJSONObject("nutrition").getLong("caloriesKcal"))
         assertEquals(2302L, json.getJSONObject("energy").getLong("burnMinusIntakeKcal"))
         assertFalse(text.contains("secret-barcode"))

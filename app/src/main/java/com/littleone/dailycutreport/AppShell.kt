@@ -2,6 +2,9 @@ package com.littleone.dailycutreport
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -10,6 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,6 +24,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -29,6 +35,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 private enum class Destination(val route: String, val label: String, val icon: Int) {
     TODAY("today", "Today", R.drawable.ic_today),
@@ -56,11 +63,30 @@ fun DailyCutApp(
         val selectedDate by dateViewModel.selectedDate.collectAsStateWithLifecycle()
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
-        var scannerTarget by remember { mutableStateOf(ScanTarget.STANDALONE) }
-        val scannerSession by foodsViewModel.scannerSession.collectAsStateWithLifecycle()
-        val showMessage: (String) -> Unit = { message ->
-            scope.launch { snackbarHostState.showSnackbar(message) }
+        var snackbarJob by remember { mutableStateOf<Job?>(null) }
+        var scanContext by remember {
+            mutableStateOf(ScanLaunchContext(ScanTarget.BULK_CART, selectedDate))
         }
+        val scannerSession by foodsViewModel.scannerSession.collectAsStateWithLifecycle()
+        val foodState by foodsViewModel.uiState.collectAsStateWithLifecycle()
+        val showSnackbar: (String, FoodUndo?) -> Unit = { message, undo ->
+            snackbarJob?.cancel()
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarJob = scope.launch {
+                var undoAvailable = undo != null
+                val result = snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = undo?.let { "Undo" },
+                    withDismissAction = undo != null,
+                    duration = if (undo == null) SnackbarDuration.Short else SnackbarDuration.Long
+                )
+                if (result == SnackbarResult.ActionPerformed && undoAvailable) {
+                    undoAvailable = false
+                    undo?.let(foodsViewModel::undo)
+                }
+            }
+        }
+        val showMessage: (String) -> Unit = { showSnackbar(it, null) }
         val externalScannerLaunch = scannerLaunchRequests?.value ?: 0
         LaunchedEffect(externalScannerLaunch) {
             if (externalScannerLaunch > 0 && route != "scanner") {
@@ -68,24 +94,16 @@ fun DailyCutApp(
                     foodsViewModel.cancelDialogs()
                     navController.popBackStack()
                 }
-                scannerTarget = ScanTarget.STANDALONE
-                foodsViewModel.beginScanner(scannerTarget)
+                scanContext = ScanLaunchContext(ScanTarget.BULK_CART, java.time.LocalDate.now(), externalLaunch = true)
+                foodsViewModel.beginScanner(scanContext)
                 navController.navigate("scanner")
             }
         }
         LaunchedEffect(Unit) {
             foodsViewModel.events.collect { event ->
                 when (event) {
-                    is FoodUiEvent.Threshold -> scope.launch { snackbarHostState.showSnackbar(event.text) }
-                    is FoodUiEvent.Message -> {
-                        scope.launch {
-                            val result = snackbarHostState.showSnackbar(
-                                message = event.text,
-                                actionLabel = event.undo?.let { "Undo" }
-                            )
-                            if (result == SnackbarResult.ActionPerformed) event.undo?.let(foodsViewModel::undo)
-                        }
-                    }
+                    is FoodUiEvent.Threshold -> showSnackbar(event.text, null)
+                    is FoodUiEvent.Message -> showSnackbar(event.text, event.undo)
                     FoodUiEvent.OpenProductEditor -> {
                         if (navController.currentDestination?.route == "scanner") navController.popBackStack()
                         if (navController.currentDestination?.route != "product-editor") navController.navigate("product-editor")
@@ -131,17 +149,17 @@ fun DailyCutApp(
                 }
             }
         ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding)) {
             NavHost(
                 navController = navController,
-                startDestination = Destination.TODAY.route,
-                modifier = Modifier.padding(padding)
+                startDestination = Destination.TODAY.route
             ) {
                 composable(Destination.TODAY.route) {
                     TodayScreen(
                         selectedDate, dateViewModel, todayViewModel,
                         onScan = {
-                            scannerTarget = ScanTarget.STANDALONE
-                            foodsViewModel.beginScanner(scannerTarget)
+                            scanContext = ScanLaunchContext(ScanTarget.BULK_CART, selectedDate)
+                            foodsViewModel.beginScanner(scanContext)
                             navController.navigate("scanner")
                         },
                         onEditLog = foodsViewModel::edit,
@@ -203,7 +221,7 @@ fun DailyCutApp(
                 }
                 composable("scanner") {
                     BarcodeScannerScreen(
-                        multiAllowed = scannerTarget != ScanTarget.PRODUCT_DRAFT_BARCODE,
+                        multiAllowed = scanContext.target != ScanTarget.PRODUCT_DRAFT_BARCODE,
                         multiEnabled = scannerSession.multiEnabled,
                         queueCount = scannerSession.items.size,
                         sessionStatus = scannerSession.status,
@@ -214,13 +232,13 @@ fun DailyCutApp(
                             } else foodsViewModel.setMultiScan(enabled)
                         },
                         onFound = { barcode ->
-                            if (scannerTarget == ScanTarget.PRODUCT_DRAFT_BARCODE) {
+                            if (scanContext.target == ScanTarget.PRODUCT_DRAFT_BARCODE) {
                                 navController.popBackStack()
                                 foodsViewModel.applyScannedBarcodeToDraft(barcode)
                             } else if (scannerSession.multiEnabled) foodsViewModel.handleMultiScanBarcode(barcode)
                             else {
                                 navController.popBackStack()
-                                foodsViewModel.handleBarcode(barcode, scannerTarget)
+                                foodsViewModel.handleBarcode(barcode, scanContext)
                             }
                         },
                         onDone = {
@@ -248,8 +266,8 @@ fun DailyCutApp(
                         currencyCode = foodState.goals.currencyCode,
                         onDraftChange = foodsViewModel::updateProductDraft,
                         onScanBarcode = {
-                            scannerTarget = ScanTarget.PRODUCT_DRAFT_BARCODE
-                            foodsViewModel.beginScanner(scannerTarget)
+                            scanContext = ScanLaunchContext(ScanTarget.PRODUCT_DRAFT_BARCODE, selectedDate)
+                            foodsViewModel.beginScanner(scanContext)
                             navController.navigate("scanner")
                         },
                         onScanNutrition = { navController.navigate("ocr") },
@@ -258,6 +276,23 @@ fun DailyCutApp(
                             navController.popBackStack()
                         },
                         onSave = foodsViewModel::saveProduct
+                    )
+                }
+            }
+                if (
+                    route != "scanner" && route != "ocr" && route != "product-editor" &&
+                    foodState.bulkDraft.items.isNotEmpty() && !foodState.cartVisible
+                ) {
+                    ExtendedFloatingActionButton(
+                        onClick = foodsViewModel::openCart,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                        text = {
+                            Text(
+                                "Cart ${foodState.bulkDraft.items.size}" +
+                                    (foodState.bulkDraft.date?.let { " · $it" } ?: "")
+                            )
+                        },
+                        icon = { Text("●") }
                     )
                 }
             }

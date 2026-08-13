@@ -15,7 +15,10 @@ data class HealthSummary(
     val nutritionProteinG: Double = 0.0,
     val nutritionSodiumMg: Double = 0.0,
     val nutritionRecords: Int = 0,
-    val healthConnectStatus: String = "Not loaded"
+    val healthConnectStatus: String = "Not loaded",
+    /** Transient values used while refreshing; they are not persisted in daily_reports. */
+    val providerFullDayCalories: Double? = null,
+    val recordedThroughEpochMs: Long? = null
 )
 
 data class NutritionSummary(
@@ -338,12 +341,19 @@ data class MultiScanItem(
 data class ScannerSessionState(
     val multiEnabled: Boolean = false,
     val target: ScanTarget = ScanTarget.STANDALONE,
+    val destinationDate: LocalDate? = null,
     val items: List<MultiScanItem> = emptyList(),
     val status: String = "Point the camera at a barcode"
 )
 
 enum class ProductSaveTarget { STANDALONE_LOG, BULK_CART, MULTI_SCAN_QUEUE, CATALOG_ONLY }
 enum class ScanTarget { STANDALONE, BULK_CART, PRODUCT_DRAFT_BARCODE }
+
+data class ScanLaunchContext(
+    val target: ScanTarget,
+    val destinationDate: LocalDate,
+    val externalLaunch: Boolean = false
+)
 
 data class PlannerProductSettings(
     val productId: String,
@@ -369,6 +379,44 @@ data class BulkDraft(
 ) {
     val isValid: Boolean get() = items.isNotEmpty() && items.all { it.quantity != null } &&
         (actualPaidText.isBlank() || runCatching { parseMoneyMicros(actualPaidText) != null }.getOrDefault(false))
+}
+
+data class PendingCartAddition(
+    val requestedDate: LocalDate,
+    val items: List<BulkDraftItem>
+)
+
+data class CartDateConflict(
+    val existingDate: LocalDate,
+    val requestedDate: LocalDate,
+    val pendingItemCount: Int
+)
+
+enum class CartDateResolution { KEEP_EXISTING, START_REQUESTED }
+
+fun resolveCartAddition(
+    current: BulkDraft,
+    pending: PendingCartAddition,
+    resolution: CartDateResolution
+): BulkDraft {
+    val base = when (resolution) {
+        CartDateResolution.KEEP_EXISTING -> current.copy(date = current.date ?: pending.requestedDate)
+        CartDateResolution.START_REQUESTED -> BulkDraft(date = pending.requestedDate)
+    }
+    var result = base
+    pending.items.forEach { addition ->
+        val existing = result.items.firstOrNull { it.product.productId == addition.product.productId }
+        result = if (existing == null) result.copy(items = result.items + addition)
+        else result.copy(items = result.items.map { item ->
+            if (item.product.productId == addition.product.productId) item.copy(
+                product = addition.product,
+                quantityInput = item.quantityInput.withServings(
+                    (item.quantity ?: 0.0) + (addition.quantity ?: 0.0)
+                )
+            ) else item
+        })
+    }
+    return result
 }
 
 /**

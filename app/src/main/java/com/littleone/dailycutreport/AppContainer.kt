@@ -27,8 +27,9 @@ class DailyCutApplication : Application() {
                         repository.initialize()
                         if (repository.healthConnectAvailable() && repository.healthCorePermissionsGranted()) {
                             repository.ensureHealthBootstrap()
-                            repository.refreshHealth(LocalDate.now())
                             repository.syncHealthHistory(force = false)
+                            // History imports include today; always write the current live forecast last.
+                            repository.refreshHealth(LocalDate.now())
                         }
                         repository.retryPendingNutritionSync()
                     }

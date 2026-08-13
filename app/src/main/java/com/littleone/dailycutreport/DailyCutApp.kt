@@ -196,7 +196,13 @@ internal fun TodayScreen(
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(state.report.verdict.label, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
                     Text(balanceLabel(state.report.energyBalance), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                    MetricRow("Burn", "${formatCalories(state.report.finalBurnCalories)} kcal")
+                    MetricRow(
+                        if (state.burnForecast?.isEstimate == true) "Estimated final burn" else "Burn",
+                        "${formatCalories(state.report.finalBurnCalories)} kcal"
+                    )
+                    state.burnForecast?.takeIf { it.isEstimate }?.liveBurnCalories?.let {
+                        MetricRow("Recorded so far", "${formatCalories(it)} kcal")
+                    }
                     MetricRow("Food", "${formatCalories(state.report.finalFoodCalories)} kcal")
                     MetricRow("Protein", "${formatDecimal(state.report.finalProteinG)} g")
                     MetricRow("Sodium", "${formatDecimal(state.report.finalSodiumMg)} mg")
@@ -206,6 +212,19 @@ internal fun TodayScreen(
                         } else "Health burn data has not been loaded",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    state.burnForecast?.takeIf { it.isEstimate }?.let { forecast ->
+                        Text(
+                            buildString {
+                                append(forecast.confidence.name.lowercase().replaceFirstChar(Char::uppercaseChar))
+                                append(" confidence")
+                                if (forecast.sampleDays > 0) append(" · ${forecast.sampleDays} completed days")
+                                if (forecast.lowerBoundCalories != null && forecast.upperBoundCalories != null) {
+                                    append(" · ${formatCalories(forecast.lowerBoundCalories)}–${formatCalories(forecast.upperBoundCalories)} kcal")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
             }
         }
@@ -217,7 +236,7 @@ internal fun TodayScreen(
                 } else "Nutrition targets",
                 subtitle = if (state.goals.mode == GoalMode.DEFICIT) {
                     state.calorieAllowance?.let { allowance ->
-                        "${state.report.projectedBurnCalories?.roundToInt()} projected burn − " +
+                        "${state.report.projectedBurnCalories?.roundToInt()} estimated final burn − " +
                             "${state.goals.desiredDeficitCalories.roundToInt()} deficit = ${allowance.roundToInt()} kcal allowance"
                     } ?: "Refresh Health Connect to load a projected burn allowance."
                 } else null
@@ -253,7 +272,10 @@ internal fun TodayScreen(
                     MetricRow("Steps", formatInteger(state.report.health.steps))
                     MetricRow("Distance", "${formatDecimal(state.report.health.distanceKm)} km")
                     MetricRow("Active burn", "${formatCalories(state.report.health.activeCalories)} kcal")
-                    MetricRow("Total burn", "${formatCalories(state.report.health.totalCalories)} kcal")
+                    MetricRow(
+                        if (state.burnForecast?.isEstimate == true) "Estimated final burn" else "Total burn",
+                        "${formatCalories(state.report.health.totalCalories)} kcal"
+                    )
                     Text(state.report.health.healthConnectStatus, style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -338,24 +360,9 @@ internal fun FoodsScreen(
     onCreateProduct: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var showCart by remember { mutableStateOf(false) }
 
     Scaffold(floatingActionButton = {
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (state.bulkDraft.items.isNotEmpty()) {
-                ExtendedFloatingActionButton(
-                    onClick = { showCart = true },
-                    icon = { Text("●") },
-                    text = {
-                        Text(
-                            "Cart ${state.bulkDraft.items.size}" +
-                                (bulkEstimateMicros(state.bulkDraft)?.let { " · ${formatMoney(it, state.goals.currencyCode)}" } ?: "")
-                        )
-                    }
-                )
-            }
-            FloatingActionButton(onClick = onCreateProduct) { Text("Add") }
-        }
+        FloatingActionButton(onClick = onCreateProduct) { Text("Add") }
     }) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
@@ -396,17 +403,21 @@ internal fun FoodsScreen(
             item { Spacer(Modifier.height(80.dp)) }
         }
     }
-    if (showCart) {
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun FoodWorkflowDialogs(
+    viewModel: FoodsViewModel
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    if (state.cartVisible) {
         val maximumCartHeight = (LocalConfiguration.current.screenHeightDp * 0.85f).dp
         val cartScrollState = rememberScrollState()
-        ModalBottomSheet(onDismissRequest = { showCart = false }) {
+        ModalBottomSheet(onDismissRequest = viewModel::closeCart) {
             Column(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = maximumCartHeight)
-                    .verticalScroll(cartScrollState)
-                    .imePadding()
-                    .navigationBarsPadding()
+                Modifier.fillMaxWidth().heightIn(max = maximumCartHeight)
+                    .verticalScroll(cartScrollState).imePadding().navigationBarsPadding()
                     .padding(horizontal = 16.dp)
             ) {
                 BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
@@ -414,13 +425,27 @@ internal fun FoodsScreen(
             }
         }
     }
-}
-
-@Composable
-internal fun FoodWorkflowDialogs(
-    viewModel: FoodsViewModel
-) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    state.cartDateConflict?.let { conflict ->
+        AlertDialog(
+            onDismissRequest = { viewModel.resolveCartDateConflict(null) },
+            title = { Text("Cart date conflict") },
+            text = {
+                Text(
+                    "Your cart is for ${conflict.existingDate}. The scanned item${if (conflict.pendingItemCount == 1) "" else "s"} " +
+                        "target ${conflict.requestedDate}. Choose where to add ${if (conflict.pendingItemCount == 1) "it" else "them"}."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.resolveCartDateConflict(true) }) { Text("Start ${conflict.requestedDate}") }
+            },
+            dismissButton = {
+                Column {
+                    TextButton(onClick = { viewModel.resolveCartDateConflict(false) }) { Text("Keep ${conflict.existingDate}") }
+                    TextButton(onClick = { viewModel.resolveCartDateConflict(null) }) { Text("Cancel") }
+                }
+            }
+        )
+    }
     when (val workflow = state.workflow) {
         FoodWorkflowState.Idle -> Unit
         is FoodWorkflowState.ConfirmQuantity -> QuantityDialog(
@@ -1013,7 +1038,20 @@ private fun DeficitSummaryCard(dashboard: HealthDashboard) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            MetricRow("Projected final burn", dashboard.projectedBurnCalories?.let { "${formatCalories(it)} kcal" } ?: "Unavailable")
+            MetricRow("Estimated final burn", dashboard.projectedBurnCalories?.let { "${formatCalories(it)} kcal" } ?: "Unavailable")
+            dashboard.burnForecast?.takeIf { it.isEstimate }?.let { forecast ->
+                forecast.liveBurnCalories?.let { MetricRow("Recorded so far", "${formatCalories(it)} kcal") }
+                if (forecast.lowerBoundCalories != null && forecast.upperBoundCalories != null) {
+                    MetricRow("Estimate range", "${formatCalories(forecast.lowerBoundCalories)}–${formatCalories(forecast.upperBoundCalories)} kcal")
+                }
+                Text(
+                    "${forecast.confidence.name.lowercase().replaceFirstChar(Char::uppercaseChar)} confidence" +
+                        (if (forecast.sampleDays > 0) " · ${forecast.sampleDays} completed days" else " · provider fallback") +
+                        " · refreshed " + Instant.ofEpochMilli(forecast.refreshedAtEpochMs)
+                            .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd MMM, HH:mm")),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             MetricRow("Logged intake", if (dashboard.intakePresent) "${formatCalories(dashboard.intakeCalories)} kcal" else "Unavailable")
             MetricRow("Desired deficit", "${formatCalories(dashboard.desiredDeficitCalories)} kcal")
             MetricRow("Remaining gap", dashboard.remainingDeficitGap?.let { "${formatCalories(it)} kcal" } ?: "Unavailable")
@@ -1692,6 +1730,7 @@ internal fun ProductEditorScreen(
     var quantityModeExpanded by remember { mutableStateOf(false) }
     var jsonInput by remember { mutableStateOf("") }
     var jsonError by remember { mutableStateOf<String?>(null) }
+    var validationError by remember { mutableStateOf<String?>(null) }
     val nutrientInputs = listOf(draft.calories, draft.protein, draft.sodium, draft.carbs, draft.fat, draft.sugar, draft.fiber, draft.saturatedFat)
     val parsedPrice = runCatching { parseMoneyMicros(draft.purchasePrice) }.getOrNull()
     val parsedPurchaseServings = draft.purchaseServings.numberOrNull()?.takeIf { it > 0.0 }
@@ -1746,9 +1785,25 @@ internal fun ProductEditorScreen(
         topBar = {
             TopAppBar(
                 title = { Text(if (product == null) "New product" else "Edit product") },
-                navigationIcon = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+                navigationIcon = {
+                    TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = onDismiss) { Text("Cancel") }
+                },
                 actions = {
-                    TextButton(enabled = valid, onClick = saveDraft) {
+                    TextButton(
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        onClick = {
+                            if (valid) {
+                                validationError = null
+                                saveDraft()
+                            } else validationError = when {
+                                draft.name.isBlank() -> "Enter a product name before saving."
+                                parsedPurchaseServings == null -> "Enter a valid purchase quantity."
+                                draft.quantityMode.measureAvailable && parsedMeasure == null -> "Enter a valid weight or volume basis."
+                                parsedFixedUnits == null -> "Fixed purchase units must be from 1 to 6."
+                                else -> "Correct the highlighted numeric fields before saving."
+                            }
+                        }
+                    ) {
                         Text(if (draft.saveTarget == ProductSaveTarget.CATALOG_ONLY) "Save" else "Save & continue")
                     }
                 }
@@ -1760,6 +1815,9 @@ internal fun ProductEditorScreen(
                     .verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                validationError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 OutlinedTextField(
                     draft.barcode,
                     { onDraftChange(draft.copy(barcode = it)) },

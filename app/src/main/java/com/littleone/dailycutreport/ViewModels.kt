@@ -37,6 +37,7 @@ class ReportDateViewModel : ViewModel() {
 
 data class TodayUiState(
     val report: DailyReport = DailyReport(LocalDate.now()),
+    val burnForecast: BurnForecast? = null,
     val logs: List<FoodLogSnapshot> = emptyList(),
     val goals: UserGoals = UserGoals(),
     val spending: DailySpending = DailySpending(),
@@ -49,6 +50,8 @@ data class TodayUiState(
     val targets: DailyNutritionTargets get() = goals.targetsFor(report.projectedBurnCalories)
     val planningAvailable: Boolean get() = calorieAllowance != null
 }
+
+private data class TodayReportState(val report: DailyReport, val forecast: BurnForecast?)
 
 private data class TodayTransientState(
     val message: String?,
@@ -73,14 +76,19 @@ class TodayViewModel(
     }
 
     val uiState: StateFlow<TodayUiState> = combine(
-        selectedDate.flatMapLatest(repository::observeReport),
+        selectedDate.flatMapLatest { date ->
+            combine(repository.observeReport(date), repository.observeBurnForecast(date)) { report, forecast ->
+                TodayReportState(report, forecast)
+            }
+        },
         selectedDate.flatMapLatest(repository::observeFoodLogs),
         repository.observeGoals(),
         selectedDate.flatMapLatest(repository::observeSpending),
         combine(message, recommendations, planning, refreshing, ::TodayTransientState)
-    ) { report, logs, goals, spending, transient ->
+    ) { reportState, logs, goals, spending, transient ->
         TodayUiState(
-            report = report,
+            report = reportState.report,
+            burnForecast = reportState.forecast,
             logs = logs,
             goals = goals,
             spending = spending,
@@ -221,7 +229,9 @@ data class FoodsUiState(
     val goals: UserGoals = UserGoals(),
     val query: String = "",
     val workflow: FoodWorkflowState = FoodWorkflowState.Idle,
-    val bulkDraft: BulkDraft = BulkDraft()
+    val bulkDraft: BulkDraft = BulkDraft(),
+    val cartVisible: Boolean = false,
+    val cartDateConflict: CartDateConflict? = null
 )
 
 private data class FoodsCatalogState(
@@ -229,16 +239,29 @@ private data class FoodsCatalogState(
     val recent: List<ProductEntity>,
     val favorites: List<ProductEntity>,
     val workflow: FoodWorkflowState,
-    val bulkDraft: BulkDraft
+    val bulkDraft: BulkDraft,
+    val cartVisible: Boolean,
+    val cartDateConflict: CartDateConflict?
+)
+
+private data class FoodsTransientState(
+    val workflow: FoodWorkflowState,
+    val bulkDraft: BulkDraft,
+    val cartVisible: Boolean,
+    val cartDateConflict: CartDateConflict?
 )
 
 class FoodsViewModel(
     private val repository: DailyCutRepository,
-    selectedDate: StateFlow<LocalDate>
+    private val selectedDate: StateFlow<LocalDate>
 ) : ViewModel() {
     private val query = MutableStateFlow("")
     private val workflow = MutableStateFlow<FoodWorkflowState>(FoodWorkflowState.Idle)
     private val bulkDraft = MutableStateFlow(BulkDraft())
+    private val cartVisible = MutableStateFlow(false)
+    private val pendingCartAddition = MutableStateFlow<PendingCartAddition?>(null)
+    private val cartDateConflict = MutableStateFlow<CartDateConflict?>(null)
+    private var editorDestinationDate: LocalDate? = null
     private val _scannerSession = MutableStateFlow(ScannerSessionState())
     val scannerSession: StateFlow<ScannerSessionState> = _scannerSession
     private val _events = MutableSharedFlow<FoodUiEvent>(extraBufferCapacity = 8)
@@ -257,9 +280,14 @@ class FoodsViewModel(
 
     private val catalogState = combine(
         productSearch, repository.observeRecentProducts(), repository.observeFavoriteProducts(),
-        combine(workflow, bulkDraft) { active, draft -> active to draft }
+        combine(workflow, bulkDraft, cartVisible, cartDateConflict) { active, draft, visible, conflict ->
+            FoodsTransientState(active, draft, visible, conflict)
+        }
     ) { products, recent, favorites, transient ->
-        FoodsCatalogState(products, recent, favorites, transient.first, transient.second)
+        FoodsCatalogState(
+            products, recent, favorites, transient.workflow, transient.bulkDraft,
+            transient.cartVisible, transient.cartDateConflict
+        )
     }
     val uiState: StateFlow<FoodsUiState> = combine(
         selectedDate,
@@ -269,7 +297,7 @@ class FoodsViewModel(
     ) { date, logs, catalog, goals ->
         FoodsUiState(
             date, logs, catalog.products, catalog.recent, catalog.favorites, goals, query.value,
-            catalog.workflow, catalog.bulkDraft
+            catalog.workflow, catalog.bulkDraft, catalog.cartVisible, catalog.cartDateConflict
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FoodsUiState())
 
@@ -282,17 +310,19 @@ class FoodsViewModel(
 
     fun setQuery(value: String) { query.value = value }
 
-    fun beginScanner(target: ScanTarget) {
+    fun beginScanner(context: ScanLaunchContext) {
+        val target = context.target
         if (target == ScanTarget.PRODUCT_DRAFT_BARCODE) {
             _scannerSession.value = _scannerSession.value.copy(
                 target = target,
+                destinationDate = context.destinationDate,
                 multiEnabled = false,
                 status = "Scan the product barcode"
             )
         } else if (_scannerSession.value.items.isEmpty()) {
-            _scannerSession.value = ScannerSessionState(target = target)
+            _scannerSession.value = ScannerSessionState(target = target, destinationDate = context.destinationDate)
         } else {
-            _scannerSession.value = _scannerSession.value.copy(target = target)
+            _scannerSession.value = _scannerSession.value.copy(target = target, destinationDate = context.destinationDate)
         }
     }
 
@@ -340,33 +370,19 @@ class FoodsViewModel(
     fun finishMultiScan() {
         val session = _scannerSession.value
         if (session.items.isEmpty()) {
-            _scannerSession.value = ScannerSessionState(target = session.target)
+            _scannerSession.value = ScannerSessionState(target = session.target, destinationDate = session.destinationDate)
             return
         }
         if (session.target == ScanTarget.BULK_CART) {
-            var draft = bulkDraft.value
-            session.items.forEach { scanned ->
-                val existing = draft.items.firstOrNull { it.product.productId == scanned.product.productId }
-                draft = if (existing == null) {
-                    draft.copy(
-                        date = draft.date ?: uiState.value.date,
-                        items = draft.items + BulkDraftItem(scanned.product, scanned.quantityInput)
-                    )
-                } else {
-                    draft.copy(items = draft.items.map {
-                        if (it.product.productId == scanned.product.productId) {
-                            it.copy(quantityInput = it.quantityInput.withServings(
-                                (it.quantity ?: 0.0) + (scanned.quantity ?: 0.0)
-                            ))
-                        } else it
-                    })
-                }
-            }
-            bulkDraft.value = draft
+            enqueueCartItems(
+                session.items.map { BulkDraftItem(it.product, it.quantityInput) },
+                session.destinationDate ?: selectedDate.value,
+                openAfter = true
+            )
         } else {
             workflow.value = FoodWorkflowState.ReviewMultiScan(session.items)
         }
-        _scannerSession.value = ScannerSessionState(target = session.target)
+        _scannerSession.value = ScannerSessionState(target = session.target, destinationDate = session.destinationDate)
     }
 
     fun updateMultiScanQuantity(productId: String, unit: QuantityUnit, value: String) {
@@ -423,19 +439,20 @@ class FoodsViewModel(
         }
     }
 
-    fun handleBarcode(barcode: String, target: ScanTarget = ScanTarget.STANDALONE) {
+    fun handleBarcode(barcode: String, context: ScanLaunchContext) {
         val normalized = barcode.trim()
         if (normalized.isBlank()) return
         viewModelScope.launch {
             val saved = repository.lookupProduct(normalized)
             if (saved == null) {
+                editorDestinationDate = context.destinationDate
                 workflow.value = FoodWorkflowState.EditProduct(ProductEditorDraft.create(
                     normalized, null,
-                    if (target == ScanTarget.BULK_CART) ProductSaveTarget.BULK_CART else ProductSaveTarget.STANDALONE_LOG
+                    if (context.target == ScanTarget.BULK_CART) ProductSaveTarget.BULK_CART else ProductSaveTarget.STANDALONE_LOG
                 ))
                 _events.emit(FoodUiEvent.OpenProductEditor)
-            } else if (target == ScanTarget.BULK_CART) {
-                addProductToCart(saved.product)
+            } else if (context.target == ScanTarget.BULK_CART) {
+                addProductToCart(saved.product, destinationDate = context.destinationDate, openAfter = true)
             } else workflow.value = FoodWorkflowState.ConfirmQuantity(saved)
         }
     }
@@ -447,30 +464,72 @@ class FoodsViewModel(
     }
 
     fun createProduct() {
+        editorDestinationDate = selectedDate.value
         workflow.value = FoodWorkflowState.EditProduct(ProductEditorDraft.create(
             "", null, ProductSaveTarget.BULK_CART
         ))
         viewModelScope.launch { _events.emit(FoodUiEvent.OpenProductEditor) }
     }
 
-    fun addProductToCart(product: ProductEntity, purchaseUnits: Int = 1, notify: Boolean = true) {
+    fun addProductToCart(
+        product: ProductEntity,
+        purchaseUnits: Int = 1,
+        notify: Boolean = false,
+        destinationDate: LocalDate = selectedDate.value,
+        openAfter: Boolean = false
+    ) {
         if (purchaseUnits <= 0) return
-        val current = bulkDraft.value
-        val existing = current.items.firstOrNull { it.product.productId == product.productId }
-        bulkDraft.value = current.copy(
-            date = current.date ?: uiState.value.date,
-            items = if (existing == null) current.items + BulkDraftItem(
-                product,
-                QuantityInputState.forProduct(product, product.purchaseUnitServings * purchaseUnits)
-            ) else current.items.map { item ->
-                if (item.product.productId == product.productId) item.copy(
-                    quantityInput = item.quantityInput.withServings(
-                        (item.quantity ?: 0.0) + product.purchaseUnitServings * purchaseUnits
-                    )
-                ) else item
-            }
+        enqueueCartItems(
+            listOf(BulkDraftItem(product, QuantityInputState.forProduct(product, product.purchaseUnitServings * purchaseUnits))),
+            destinationDate,
+            openAfter
         )
         if (notify) viewModelScope.launch { _events.emit(FoodUiEvent.Message("Added ${product.name} to cart.")) }
+    }
+
+    fun openCart() { if (bulkDraft.value.items.isNotEmpty()) cartVisible.value = true }
+    fun closeCart() { cartVisible.value = false }
+
+    fun resolveCartDateConflict(useRequestedDate: Boolean?) {
+        val pending = pendingCartAddition.value ?: return
+        when (useRequestedDate) {
+            null -> Unit
+            true -> {
+                bulkDraft.value = resolveCartAddition(
+                    bulkDraft.value, pending, CartDateResolution.START_REQUESTED
+                )
+                cartVisible.value = true
+            }
+            false -> {
+                bulkDraft.value = resolveCartAddition(
+                    bulkDraft.value, pending, CartDateResolution.KEEP_EXISTING
+                )
+                cartVisible.value = true
+            }
+        }
+        pendingCartAddition.value = null
+        cartDateConflict.value = null
+    }
+
+    private fun enqueueCartItems(items: List<BulkDraftItem>, requestedDate: LocalDate, openAfter: Boolean = false) {
+        if (items.isEmpty()) return
+        val current = bulkDraft.value
+        if (current.items.isNotEmpty() && current.date != null && current.date != requestedDate) {
+            pendingCartAddition.value = PendingCartAddition(requestedDate, items)
+            cartDateConflict.value = CartDateConflict(current.date, requestedDate, items.size)
+            cartVisible.value = false
+            return
+        }
+        mergeIntoCart(items, requestedDate)
+        if (openAfter) cartVisible.value = true
+    }
+
+    private fun mergeIntoCart(items: List<BulkDraftItem>, date: LocalDate) {
+        bulkDraft.value = resolveCartAddition(
+            bulkDraft.value,
+            PendingCartAddition(date, items),
+            CartDateResolution.KEEP_EXISTING
+        )
     }
 
     fun incrementCartProduct(productId: String, servings: Int = 1) {
@@ -495,6 +554,7 @@ class FoodsViewModel(
         val current = bulkDraft.value
         val remaining = current.items.filterNot { it.product.productId == productId }
         bulkDraft.value = current.copy(items = remaining, date = current.date.takeIf { remaining.isNotEmpty() })
+        if (remaining.isEmpty()) cartVisible.value = false
     }
 
     fun updateBulkQuantity(productId: String, unit: QuantityUnit, value: String) {
@@ -514,7 +574,10 @@ class FoodsViewModel(
     fun updateBulkLabel(value: String) { bulkDraft.value = bulkDraft.value.copy(label = value) }
     fun updateBulkPaid(value: String) { bulkDraft.value = bulkDraft.value.copy(actualPaidText = value) }
     fun updateBulkBudgetExclusion(value: Boolean) { bulkDraft.value = bulkDraft.value.copy(excludeCostFromBudget = value) }
-    fun discardBulkDraft() { bulkDraft.value = BulkDraft() }
+    fun discardBulkDraft() {
+        bulkDraft.value = BulkDraft()
+        cartVisible.value = false
+    }
 
     fun confirmBulkPurchase() {
         val draft = bulkDraft.value
@@ -546,6 +609,7 @@ class FoodsViewModel(
                 .onSuccess { result ->
                     workflow.value = FoodWorkflowState.Idle
                     bulkDraft.value = BulkDraft()
+                    cartVisible.value = false
                     afterFoodChange(result)
                     _events.emit(FoodUiEvent.Message(
                         if (draft.items.size == 1) "Logged ${draft.items.single().product.name}."
@@ -600,7 +664,11 @@ class FoodsViewModel(
                         _events.emit(FoodUiEvent.Message("Saved ${product.name}. Confirm quantity to add it."))
                     }
                     ProductSaveTarget.BULK_CART -> {
-                        addProductToCart(product, notify = false)
+                        addProductToCart(
+                            product, notify = false,
+                            destinationDate = editorDestinationDate ?: selectedDate.value,
+                            openAfter = true
+                        )
                         workflow.value = FoodWorkflowState.Idle
                         _events.emit(FoodUiEvent.CloseProductEditor)
                         _events.emit(FoodUiEvent.Message("Saved ${product.name} and added it to the cart."))
@@ -1085,9 +1153,15 @@ class HealthViewModel(
         if (refreshing.value) return
         viewModelScope.launch {
             refreshing.value = true
-            repository.syncHealthHistory(force = true)
-                .onSuccess { message.value = "30-day Health Connect history refreshed." }
-                .onFailure { message.value = "History refresh failed: ${it.message ?: "unknown error"}" }
+            val result = repository.syncHealthHistory(force = true)
+            if (result.isSuccess) {
+                repository.refreshHealth(LocalDate.now())
+                    .onSuccess { message.value = "30-day Health Connect history refreshed." }
+                    .onFailure { message.value = "Current-day refresh failed: ${it.message ?: "unknown error"}" }
+            } else {
+                val error = result.exceptionOrNull()
+                message.value = "History refresh failed: ${error?.message ?: "unknown error"}"
+            }
             refreshing.value = false
         }
     }

@@ -9,7 +9,7 @@ import kotlin.math.roundToLong
 
 /** A compact, stable and barcode-free representation intended for clipboard export. */
 object DailyReportJson {
-    const val SCHEMA_VERSION = 1
+    const val SCHEMA_VERSION = 2
 
     fun encode(state: TodayUiState): String {
         val report = state.report
@@ -21,6 +21,16 @@ object DailyReportJson {
             .put("goalMode", state.goals.mode.name.lowercase())
             .put("energy", JSONObject()
                 .put("projectedFinalBurnKcal", report.projectedBurnCalories?.let(::calories) ?: JSONObject.NULL)
+                .put("recordedBurnSoFarKcal", state.burnForecast?.liveBurnCalories?.let(::calories) ?: JSONObject.NULL)
+                .put("estimatedRangeKcal", state.burnForecast?.let { forecast ->
+                    if (forecast.lowerBoundCalories == null || forecast.upperBoundCalories == null) JSONObject.NULL
+                    else JSONObject()
+                        .put("lower", calories(forecast.lowerBoundCalories))
+                        .put("upper", calories(forecast.upperBoundCalories))
+                } ?: JSONObject.NULL)
+                .put("forecastSource", state.burnForecast?.source?.name?.lowercase() ?: JSONObject.NULL)
+                .put("forecastConfidence", state.burnForecast?.confidence?.name?.lowercase() ?: JSONObject.NULL)
+                .put("forecastSampleDays", state.burnForecast?.sampleDays ?: 0)
                 .put("loggedIntakeKcal", calories(report.finalFoodCalories))
                 .put("burnMinusIntakeKcal", report.energyBalance.signedCaloriesOrNull()?.let(::calories) ?: JSONObject.NULL)
                 .put("verdict", report.verdict.name.lowercase())

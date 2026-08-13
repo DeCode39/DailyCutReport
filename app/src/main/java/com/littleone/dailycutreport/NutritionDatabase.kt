@@ -353,6 +353,8 @@ interface NutritionDao {
     @Query("SELECT * FROM daily_extra_nutrient_logs ORDER BY id") suspend fun allDailyExtras(): List<DailyExtraNutrientLogEntity>
     @Query("SELECT * FROM daily_reports WHERE date BETWEEN :startDate AND :endDate ORDER BY date")
     fun observeDailyReports(startDate: String, endDate: String): Flow<List<DailyReportEntity>>
+    @Query("SELECT * FROM daily_reports WHERE date BETWEEN :startDate AND :endDate ORDER BY date")
+    suspend fun dailyReports(startDate: String, endDate: String): List<DailyReportEntity>
     @Query("""
         SELECT date, COALESCE(SUM(caloriesPerServing * quantity), 0.0) AS calories, COUNT(*) AS entries
         FROM daily_food_logs WHERE date BETWEEN :startDate AND :endDate GROUP BY date ORDER BY date

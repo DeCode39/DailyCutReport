@@ -103,7 +103,8 @@ data class HealthDashboard(
     val walkingEstimate: WalkingEstimate?,
     val trends: List<HealthTrendPoint>,
     val selectedDateWeights: List<WeightEntry> = emptyList(),
-    val historyLastSynced: String? = null
+    val historyLastSynced: String? = null,
+    val burnForecast: BurnForecast? = null
 ) {
     val latestWeight: WeightEntry? get() = selectedDateWeights.maxByOrNull(WeightEntry::recordedAtEpochMs)
     val selectedDateMedianKg: Double? get() = selectedDateWeights
@@ -121,7 +122,8 @@ class HealthAnalyticsEngine {
         history: List<DeficitHistoryDay>,
         weights: List<WeightEntry>,
         walkingSamples: List<WalkingSessionSample>,
-        historyLastSynced: String?
+        historyLastSynced: String?,
+        burnForecast: BurnForecast? = null
     ): HealthDashboard {
         val burn = report?.totalCalories?.takeIf { it.isFinite() && it > 0.0 }
         val localNutritionPresent = nutrition.entries > 0
@@ -131,7 +133,8 @@ class HealthAnalyticsEngine {
         val projectedDeficit = if (burn != null && intakePresent) burn - intake else null
         val gap = projectedDeficit?.let { (goals.desiredDeficitCalories - it).coerceAtLeast(0.0) }
         val dailyWeights = representativeWeights(weights)
-        val projection = projectWeight(selectedDate, goals.desiredDeficitCalories, history, dailyWeights, profile.targetWeightKg)
+        val completedHistory = if (selectedDate == today) history.filterNot { it.date == today } else history
+        val projection = projectWeight(selectedDate, goals.desiredDeficitCalories, completedHistory, dailyWeights, profile.targetWeightKg)
         val walking = if (selectedDate == today && gap != null && gap > 0.0) {
             walkingEstimate(gap, projection.currentWeightKg, walkingSamples)
         } else null
@@ -153,7 +156,8 @@ class HealthAnalyticsEngine {
             selectedDate, burn, intake, intakePresent, goals.desiredDeficitCalories,
             projectedDeficit, gap, profile, projection, walking, trends,
             weights.filter { it.date == selectedDate }.sortedByDescending(WeightEntry::recordedAtEpochMs),
-            historyLastSynced
+            historyLastSynced,
+            burnForecast
         )
     }
 
