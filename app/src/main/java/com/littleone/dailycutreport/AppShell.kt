@@ -115,6 +115,10 @@ fun DailyCutApp(
                         if (navController.currentDestination?.route == "product-editor") navController.popBackStack()
                         if (navController.currentDestination?.route != "scanner") navController.navigate("scanner")
                     }
+                    FoodUiEvent.ShowDraftReplacement -> {
+                        if (navController.currentDestination?.route == "scanner") navController.popBackStack()
+                        if (navController.currentDestination?.route == "product-editor") navController.popBackStack()
+                    }
                 }
             }
         }
@@ -272,7 +276,7 @@ fun DailyCutApp(
                         },
                         onScanNutrition = { navController.navigate("ocr") },
                         onDismiss = {
-                            foodsViewModel.cancelDialogs()
+                            foodsViewModel.cancelProductEditor()
                             navController.popBackStack()
                         },
                         onSave = foodsViewModel::saveProduct

@@ -28,15 +28,18 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -79,11 +82,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -373,6 +379,24 @@ internal fun FoodsScreen(
                 Text("Adding to ${selectedDate.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}", style = MaterialTheme.typography.bodySmall)
                 DateHeader(selectedDate, dateViewModel)
             }
+            state.recoverableDraft?.let { pending ->
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Unfinished product", fontWeight = FontWeight.Bold)
+                            Text(
+                                pending.draft.name.ifBlank { pending.draft.barcode.ifBlank { "New product" } } +
+                                    " · ${pending.destinationDate}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = viewModel::resumePendingProductDraft) { Text("Resume") }
+                                TextButton(onClick = viewModel::discardPendingProductDraft) { Text("Discard") }
+                            }
+                        }
+                    }
+                }
+            }
             item {
                 ProductSearchField(state.query, viewModel::setQuery)
                 Text("Tap a product to add one purchase unit. Hold to edit.", style = MaterialTheme.typography.bodySmall)
@@ -411,19 +435,71 @@ internal fun FoodWorkflowDialogs(
     viewModel: FoodsViewModel
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    var confirmDiscardCart by remember { mutableStateOf(false) }
     if (state.cartVisible) {
         val maximumCartHeight = (LocalConfiguration.current.screenHeightDp * 0.85f).dp
         val cartScrollState = rememberScrollState()
         ModalBottomSheet(onDismissRequest = viewModel::closeCart) {
             Column(
-                Modifier.fillMaxWidth().heightIn(max = maximumCartHeight)
-                    .verticalScroll(cartScrollState).imePadding().navigationBarsPadding()
-                    .padding(horizontal = 16.dp)
+                Modifier.fillMaxWidth().height(maximumCartHeight).imePadding().navigationBarsPadding()
             ) {
-                BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel)
-                Spacer(Modifier.height(24.dp))
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = viewModel::closeCart, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
+                        Text("Close")
+                    }
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("${state.bulkDraft.items.size} item${if (state.bulkDraft.items.size == 1) "" else "s"}", fontWeight = FontWeight.Bold)
+                        Text(state.bulkDraft.date?.toString().orEmpty(), style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(
+                        onClick = {
+                            focusManager.clearFocus(force = true)
+                            keyboard?.hide()
+                            viewModel.confirmBulkPurchase()
+                        },
+                        enabled = state.bulkDraft.isValid && !state.cartSubmitting,
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    ) { Text(if (state.cartSubmitting) "Saving…" else "Done") }
+                }
+                Column(
+                    Modifier.weight(1f).verticalScroll(cartScrollState)
+                        .padding(horizontal = 16.dp)
+                ) {
+                    BulkDraftCard(state.bulkDraft, state.goals.currencyCode, viewModel) { confirmDiscardCart = true }
+                    Spacer(Modifier.height(24.dp))
+                }
             }
         }
+    }
+    if (confirmDiscardCart) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscardCart = false },
+            title = { Text("Discard cart?") },
+            text = { Text("All ${state.bulkDraft.items.size} pending item(s) and checkout details will be removed.") },
+            confirmButton = {
+                Button(onClick = { confirmDiscardCart = false; viewModel.discardBulkDraft() }) { Text("Discard") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDiscardCart = false }) { Text("Keep cart") } }
+        )
+    }
+    if (state.draftReplacementPending) {
+        AlertDialog(
+            onDismissRequest = { viewModel.resolveDraftReplacement(null) },
+            title = { Text("Unfinished product") },
+            text = { Text("Resume the saved product draft, or discard it before starting this product.") },
+            confirmButton = { Button(onClick = { viewModel.resolveDraftReplacement(false) }) { Text("Resume") } },
+            dismissButton = {
+                Column {
+                    TextButton(onClick = { viewModel.resolveDraftReplacement(true) }) { Text("Discard & continue") }
+                    TextButton(onClick = { viewModel.resolveDraftReplacement(null) }) { Text("Cancel") }
+                }
+            }
+        )
     }
     state.cartDateConflict?.let { conflict ->
         AlertDialog(
@@ -483,6 +559,14 @@ private fun MultiScanReviewDialog(
     onBudgetExclusion: (String, Boolean) -> Unit,
     onConfirm: () -> Unit
 ) {
+    val formSpecs = buildList {
+        items.forEach { item ->
+            add(FormImeSpec("multi-${item.product.productId}-servings", item.quantityInput.spec.servingAvailable))
+            add(FormImeSpec("multi-${item.product.productId}-measure", item.quantityInput.spec.measureAvailable))
+            add(FormImeSpec("multi-${item.product.productId}-paid"))
+        }
+    }
+    val formFocus = rememberFormFocusCoordinator(*formSpecs.toTypedArray())
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Review scanned items") },
@@ -498,7 +582,9 @@ private fun MultiScanReviewDialog(
                         onChange = { unit, value -> onQuantity(item.product.productId, unit, value) },
                         onPurchaseUnit = {
                             onQuantity(item.product.productId, QuantityUnit.SERVINGS, item.product.purchaseUnitServings.toDisplay())
-                        }
+                        },
+                        coordinator = formFocus,
+                        fieldKeyPrefix = "multi-${item.product.productId}"
                     )
                     item.quantity?.let { servings ->
                         Text(
@@ -506,7 +592,10 @@ private fun MultiScanReviewDialog(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
-                    DecimalField("Actual paid total ($currencyCode, optional)", item.actualPaidText) {
+                    DecimalField(
+                        "Actual paid total ($currencyCode, optional)", item.actualPaidText,
+                        formFocus, "multi-${item.product.productId}-paid"
+                    ) {
                         onActualPaid(item.product.productId, it)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1447,6 +1536,8 @@ internal fun PlannerSettingsScreen(
     onMessage: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { viewModel.events.collect(onMessage) }
     LazyColumn(
         Modifier.fillMaxSize().padding(16.dp),
@@ -1458,6 +1549,9 @@ internal fun PlannerSettingsScreen(
                 value = state.query,
                 onValueChange = viewModel::setQuery,
                 label = { Text("Search planner products") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus(); keyboard?.hide() }),
                 modifier = Modifier.fillMaxWidth()
             )
             Text(
@@ -1537,6 +1631,14 @@ private fun GoalsSettingsCard(
     var targetWeight by remember(profile) {
         mutableStateOf(profile.targetWeightKg?.let(profile.weightUnit::fromKg)?.let(::formatDecimal).orEmpty())
     }
+    val formFocus = rememberFormFocusCoordinator(
+        FormImeSpec("calories", mode == GoalMode.CALORIE),
+        FormImeSpec("deficit", mode == GoalMode.DEFICIT),
+        FormImeSpec("protein"), FormImeSpec("sodium"), FormImeSpec("carbs"),
+        FormImeSpec("fat"), FormImeSpec("sugar"), FormImeSpec("fiber"),
+        FormImeSpec("saturated"), FormImeSpec("target-weight"),
+        FormImeSpec("currency"), FormImeSpec("budget")
+    )
     val numbers = listOf(calories, deficit, protein, sodium, carbs, fat, sugar, fiber, saturated)
     val budgetMicros = runCatching { parseMoneyMicros(budget) }.getOrNull()
     val candidate = runCatching {
@@ -1570,21 +1672,21 @@ private fun GoalsSettingsCard(
                 RadioButton(selected = mode == GoalMode.DEFICIT, onClick = { mode = GoalMode.DEFICIT })
                 Text("Deficit goal")
             }
-            if (mode == GoalMode.CALORIE) DecimalField("Calories kcal", calories) { calories = it }
+            if (mode == GoalMode.CALORIE) DecimalField("Calories kcal", calories, formFocus, "calories") { calories = it }
             else {
-                DecimalField("Desired deficit kcal", deficit) { deficit = it }
+                DecimalField("Desired deficit kcal", deficit, formFocus, "deficit") { deficit = it }
                 Text(
                     "Daily allowance is calculated automatically from Health Connect projected burn minus this deficit.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            DecimalField("Protein minimum g", protein) { protein = it }
-            DecimalField("Sodium maximum mg", sodium) { sodium = it }
-            DecimalField("Carbs maximum g", carbs) { carbs = it }
-            DecimalField("Fat maximum g", fat) { fat = it }
-            DecimalField("Sugar maximum g", sugar) { sugar = it }
-            DecimalField("Fiber minimum g", fiber) { fiber = it }
-            DecimalField("Saturated fat maximum g", saturated) { saturated = it }
+            DecimalField("Protein minimum g", protein, formFocus, "protein") { protein = it }
+            DecimalField("Sodium maximum mg", sodium, formFocus, "sodium") { sodium = it }
+            DecimalField("Carbs maximum g", carbs, formFocus, "carbs") { carbs = it }
+            DecimalField("Fat maximum g", fat, formFocus, "fat") { fat = it }
+            DecimalField("Sugar maximum g", sugar, formFocus, "sugar") { sugar = it }
+            DecimalField("Fiber minimum g", fiber, formFocus, "fiber") { fiber = it }
+            DecimalField("Saturated fat maximum g", saturated, formFocus, "saturated") { saturated = it }
             Text("Weight goal", style = MaterialTheme.typography.titleMedium)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 WeightUnit.entries.forEach { unit ->
@@ -1602,14 +1704,17 @@ private fun GoalsSettingsCard(
                     Text(unit.label, Modifier.padding(end = 12.dp))
                 }
             }
-            DecimalField("Target weight (${weightUnit.label}, optional)", targetWeight) { targetWeight = it }
+            DecimalField("Target weight (${weightUnit.label}, optional)", targetWeight, formFocus, "target-weight") { targetWeight = it }
             OutlinedTextField(
                 value = currency,
                 onValueChange = { currency = it.take(3).uppercase() },
                 label = { Text("Currency code") },
-                modifier = Modifier.fillMaxWidth()
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = formFocus.action("currency")),
+                keyboardActions = formFocus.actions("currency"),
+                modifier = Modifier.fillMaxWidth().formImeField("currency", formFocus)
             )
-            DecimalField("Daily budget", budget) { budget = it }
+            DecimalField("Daily budget", budget, formFocus, "budget") { budget = it }
             Text("Targets allow 10% planning tolerance; plans up to 10% over budget rank lower.", style = MaterialTheme.typography.bodySmall)
             Button(
                 enabled = candidate != null && profileCandidate != null && numbers.all { it.isNotBlank() },
@@ -1627,6 +1732,9 @@ private fun BackupPasswordDialog(exporting: Boolean, onDismiss: () -> Unit, onCo
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     val valid = password.length >= 8 && (!exporting || password == confirmation)
+    val formFocus = rememberFormFocusCoordinator(
+        FormImeSpec("password"), FormImeSpec("confirmation", exporting)
+    )
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (exporting) "Protect backup" else "Restore backup") },
@@ -1638,14 +1746,20 @@ private fun BackupPasswordDialog(exporting: Boolean, onDismiss: () -> Unit, onCo
                     onValueChange = { password = it },
                     label = { Text("Password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = formFocus.action("password")),
+                    keyboardActions = formFocus.actions("password"),
+                    modifier = Modifier.fillMaxWidth().formImeField("password", formFocus)
                 )
                 if (exporting) OutlinedTextField(
                     value = confirmation,
                     onValueChange = { confirmation = it },
                     label = { Text("Confirm password") },
                     visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = formFocus.action("confirmation")),
+                    keyboardActions = formFocus.actions("confirmation"),
+                    modifier = Modifier.fillMaxWidth().formImeField("confirmation", formFocus)
                 )
                 Text(if (exporting) "Use at least 8 characters. The password cannot be recovered." else "Enter the password used when this backup was created.")
             }
@@ -1680,6 +1794,11 @@ private fun QuantityDialog(
     val estimated = product.product.purchasePriceMicros?.let { price ->
         parsedQuantity?.let { (price / product.product.purchaseUnitServings * it).toLong() }
     }
+    val formFocus = rememberFormFocusCoordinator(
+        FormImeSpec("add-servings", quantity.spec.servingAvailable),
+        FormImeSpec("add-measure", quantity.spec.measureAvailable),
+        FormImeSpec("add-paid")
+    )
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(product.product.name) },
@@ -1689,7 +1808,9 @@ private fun QuantityDialog(
                 QuantityInputFields(
                     state = quantity,
                     onChange = { unit, value -> quantity = quantity.edit(unit, value) },
-                    onPurchaseUnit = { quantity = quantity.withServings(product.product.purchaseUnitServings) }
+                    onPurchaseUnit = { quantity = quantity.withServings(product.product.purchaseUnitServings) },
+                    coordinator = formFocus,
+                    fieldKeyPrefix = "add"
                 )
                 parsedQuantity?.let { servings ->
                     Text(
@@ -1698,7 +1819,7 @@ private fun QuantityDialog(
                     )
                 }
                 estimated?.let { Text("Catalog estimate: ${formatMoney(it, currencyCode)}", style = MaterialTheme.typography.bodySmall) }
-                DecimalField("Actual paid total (optional)", actualPaid) { actualPaid = it }
+                DecimalField("Actual paid total (optional)", actualPaid, formFocus, "add-paid") { actualPaid = it }
                 Text("Leave blank for the catalog estimate. Enter 0 for a free item.", style = MaterialTheme.typography.bodySmall)
                 ToggleRow("Ignore this price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
             }
@@ -1742,6 +1863,17 @@ internal fun ProductEditorScreen(
         measureText = draft.purchaseMeasure,
         activeUnit = quantitySpec.preferredOrFallback(draft.preferredLogUnit),
         spec = quantitySpec
+    )
+    val formFocus = rememberFormFocusCoordinator(
+        FormImeSpec("barcode"), FormImeSpec("name"), FormImeSpec("brand"),
+        FormImeSpec("serving-label", draft.quantityMode.servingAvailable),
+        FormImeSpec("measure", draft.quantityMode.measureAvailable),
+        FormImeSpec("calories"), FormImeSpec("protein"), FormImeSpec("sodium"),
+        FormImeSpec("carbs"), FormImeSpec("fat"), FormImeSpec("sugar"),
+        FormImeSpec("fiber"), FormImeSpec("saturated-fat"), FormImeSpec("purchase-price"),
+        FormImeSpec("purchase-servings", quantitySpec.servingAvailable),
+        FormImeSpec("purchase-measure", quantitySpec.measureAvailable),
+        FormImeSpec("fixed-units", draft.alwaysIncludeInPlanner)
     )
     val valid = draft.name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
         (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null &&
@@ -1795,12 +1927,30 @@ internal fun ProductEditorScreen(
                             if (valid) {
                                 validationError = null
                                 saveDraft()
-                            } else validationError = when {
-                                draft.name.isBlank() -> "Enter a product name before saving."
-                                parsedPurchaseServings == null -> "Enter a valid purchase quantity."
-                                draft.quantityMode.measureAvailable && parsedMeasure == null -> "Enter a valid weight or volume basis."
-                                parsedFixedUnits == null -> "Fixed purchase units must be from 1 to 6."
-                                else -> "Correct the highlighted numeric fields before saving."
+                            } else {
+                                val invalidNutrient = listOf(
+                                    "calories" to draft.calories, "protein" to draft.protein,
+                                    "sodium" to draft.sodium, "carbs" to draft.carbs,
+                                    "fat" to draft.fat, "sugar" to draft.sugar,
+                                    "fiber" to draft.fiber, "saturated-fat" to draft.saturatedFat
+                                ).firstOrNull { (_, text) -> text.isNotBlank() && text.numberOrNull() == null }?.first
+                                val invalidKey = when {
+                                    draft.name.isBlank() -> "name"
+                                    draft.quantityMode.measureAvailable && parsedMeasure == null -> "measure"
+                                    invalidNutrient != null -> invalidNutrient
+                                    draft.purchasePrice.isNotBlank() && parsedPrice == null -> "purchase-price"
+                                    parsedPurchaseServings == null -> "purchase-servings"
+                                    parsedFixedUnits == null -> "fixed-units"
+                                    else -> "name"
+                                }
+                                validationError = when (invalidKey) {
+                                    "name" -> "Enter a product name before saving."
+                                    "purchase-servings" -> "Enter a valid purchase quantity."
+                                    "measure" -> "Enter a valid weight or volume basis."
+                                    "fixed-units" -> "Fixed purchase units must be from 1 to 6."
+                                    else -> "Correct the highlighted numeric field before saving."
+                                }
+                                formFocus.request(invalidKey)
                             }
                         }
                     ) {
@@ -1822,15 +1972,28 @@ internal fun ProductEditorScreen(
                     draft.barcode,
                     { onDraftChange(draft.copy(barcode = it)) },
                     label = { Text("Barcode (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = formFocus.action("barcode")),
+                    keyboardActions = formFocus.actions("barcode"),
+                    modifier = Modifier.fillMaxWidth().formImeField("barcode", formFocus),
                     trailingIcon = {
                         IconButton(onClick = onScanBarcode) {
                             Icon(painterResource(R.drawable.ic_barcode_scan), contentDescription = "Scan product barcode")
                         }
                     }
                 )
-                OutlinedTextField(draft.name, { onDraftChange(draft.copy(name = it)) }, label = { Text("Product name") })
-                OutlinedTextField(draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") })
+                OutlinedTextField(
+                    draft.name, { onDraftChange(draft.copy(name = it)) }, label = { Text("Product name") },
+                    singleLine = true, keyboardOptions = KeyboardOptions(imeAction = formFocus.action("name")),
+                    keyboardActions = formFocus.actions("name"),
+                    modifier = Modifier.fillMaxWidth().formImeField("name", formFocus)
+                )
+                OutlinedTextField(
+                    draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") },
+                    singleLine = true, keyboardOptions = KeyboardOptions(imeAction = formFocus.action("brand")),
+                    keyboardActions = formFocus.actions("brand"),
+                    modifier = Modifier.fillMaxWidth().formImeField("brand", formFocus)
+                )
                 Box(Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = { quantityModeExpanded = true }, modifier = Modifier.fillMaxWidth()) {
                         Text("Quantity basis · ${draft.quantityMode.editorLabel}")
@@ -1868,28 +2031,34 @@ internal fun ProductEditorScreen(
                     { onDraftChange(draft.copy(servingLabel = it)) },
                     enabled = draft.quantityMode.servingAvailable,
                     label = { Text("Serving label") },
-                    modifier = Modifier.fillMaxWidth()
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = formFocus.action("serving-label")),
+                    keyboardActions = formFocus.actions("serving-label"),
+                    modifier = Modifier.fillMaxWidth().formImeField("serving-label", formFocus)
                 )
                 if (draft.quantityMode.measureAvailable) {
                     DecimalField(
                         if (draft.quantityMode.servingAvailable) "${draft.quantityMode.measureUnit?.shortLabel} per serving"
                         else "Nutrition basis amount (${draft.quantityMode.measureUnit?.shortLabel})",
-                        draft.measurePerServing
-                    ) { value ->
-                        val measure = value.numberOrNull()?.takeIf { it > 0.0 }
-                        val servingLabel = when (draft.quantityMode) {
-                            QuantityMode.WEIGHT_ONLY -> value.numberOrNull()?.takeIf { it > 0.0 }?.let { "${it.toDisplay()} g" } ?: draft.servingLabel
-                            QuantityMode.VOLUME_ONLY -> value.numberOrNull()?.takeIf { it > 0.0 }?.let { "${it.toDisplay()} ml" } ?: draft.servingLabel
-                            else -> draft.servingLabel
-                        }
-                        onDraftChange(draft.copy(
-                            measurePerServing = value,
-                            servingLabel = servingLabel,
-                            purchaseMeasure = measure?.let { amount ->
-                                draft.purchaseServings.numberOrNull()?.let { servings -> (amount * servings).toDisplay() }
-                            } ?: draft.purchaseMeasure
-                        ))
-                    }
+                        draft.measurePerServing,
+                        onValueChange = { value ->
+                            val measure = value.numberOrNull()?.takeIf { it > 0.0 }
+                            val servingLabel = when (draft.quantityMode) {
+                                QuantityMode.WEIGHT_ONLY -> value.numberOrNull()?.takeIf { it > 0.0 }?.let { "${it.toDisplay()} g" } ?: draft.servingLabel
+                                QuantityMode.VOLUME_ONLY -> value.numberOrNull()?.takeIf { it > 0.0 }?.let { "${it.toDisplay()} ml" } ?: draft.servingLabel
+                                else -> draft.servingLabel
+                            }
+                            onDraftChange(draft.copy(
+                                measurePerServing = value,
+                                servingLabel = servingLabel,
+                                purchaseMeasure = measure?.let { amount ->
+                                    draft.purchaseServings.numberOrNull()?.let { servings -> (amount * servings).toDisplay() }
+                                } ?: draft.purchaseMeasure
+                            ))
+                        },
+                        coordinator = formFocus,
+                        fieldKey = "measure"
+                    )
                 }
                 if (product == null) {
                     OutlinedButton(onClick = { showJsonImport = true }, modifier = Modifier.fillMaxWidth()) {
@@ -1898,15 +2067,15 @@ internal fun ProductEditorScreen(
                 }
                 OutlinedButton(onClick = onScanNutrition, modifier = Modifier.fillMaxWidth()) { Text("Scan nutrition label") }
                 draft.ocrDraft?.let { Text("OCR values: ${it.basis.label}. Review before saving.", style = MaterialTheme.typography.bodySmall) }
-                DecimalField("Calories", draft.calories) { onDraftChange(draft.copy(calories = it)) }
-                DecimalField("Protein g", draft.protein) { onDraftChange(draft.copy(protein = it)) }
-                DecimalField("Sodium mg", draft.sodium) { onDraftChange(draft.copy(sodium = it)) }
-                DecimalField("Carbs g", draft.carbs) { onDraftChange(draft.copy(carbs = it)) }
-                DecimalField("Fat g", draft.fat) { onDraftChange(draft.copy(fat = it)) }
-                DecimalField("Sugar g", draft.sugar) { onDraftChange(draft.copy(sugar = it)) }
-                DecimalField("Fiber g", draft.fiber) { onDraftChange(draft.copy(fiber = it)) }
-                DecimalField("Saturated fat g", draft.saturatedFat) { onDraftChange(draft.copy(saturatedFat = it)) }
-                DecimalField("Purchase price ($currencyCode, optional)", draft.purchasePrice) { onDraftChange(draft.copy(purchasePrice = it)) }
+                DecimalField("Calories", draft.calories, formFocus, "calories") { onDraftChange(draft.copy(calories = it)) }
+                DecimalField("Protein g", draft.protein, formFocus, "protein") { onDraftChange(draft.copy(protein = it)) }
+                DecimalField("Sodium mg", draft.sodium, formFocus, "sodium") { onDraftChange(draft.copy(sodium = it)) }
+                DecimalField("Carbs g", draft.carbs, formFocus, "carbs") { onDraftChange(draft.copy(carbs = it)) }
+                DecimalField("Fat g", draft.fat, formFocus, "fat") { onDraftChange(draft.copy(fat = it)) }
+                DecimalField("Sugar g", draft.sugar, formFocus, "sugar") { onDraftChange(draft.copy(sugar = it)) }
+                DecimalField("Fiber g", draft.fiber, formFocus, "fiber") { onDraftChange(draft.copy(fiber = it)) }
+                DecimalField("Saturated fat g", draft.saturatedFat, formFocus, "saturated-fat") { onDraftChange(draft.copy(saturatedFat = it)) }
+                DecimalField("Purchase price ($currencyCode, optional)", draft.purchasePrice, formFocus, "purchase-price") { onDraftChange(draft.copy(purchasePrice = it)) }
                 Text("One purchase unit", style = MaterialTheme.typography.labelLarge)
                 QuantityInputFields(
                     state = purchaseInput,
@@ -1917,7 +2086,9 @@ internal fun ProductEditorScreen(
                             purchaseMeasure = updated.measureText
                         ))
                     },
-                    onPurchaseUnit = null
+                    onPurchaseUnit = null,
+                    coordinator = formFocus,
+                    fieldKeyPrefix = "purchase"
                 )
                 ToggleRow("Favorite", draft.favorite) { onDraftChange(draft.copy(favorite = it)) }
                 ToggleRow("Include in daily planning", draft.includeInPlanner) {
@@ -1934,11 +2105,17 @@ internal fun ProductEditorScreen(
                     onDraftChange(draft.copy(alwaysIncludeInPlanner = it))
                 }
                 if (draft.alwaysIncludeInPlanner) {
-                    DecimalField("Fixed purchase units (1–6)", draft.fixedPurchaseUnits) {
+                    DecimalField("Fixed purchase units (1–6)", draft.fixedPurchaseUnits, formFocus, "fixed-units") {
                         onDraftChange(draft.copy(fixedPurchaseUnits = it))
                     }
                 }
-                OutlinedTextField(draft.extras, { onDraftChange(draft.copy(extras = it)) }, label = { Text("Extra nutrients: Name=12 unit") })
+                OutlinedTextField(
+                    draft.extras,
+                    { onDraftChange(draft.copy(extras = it)) },
+                    label = { Text("Extra nutrients: Name=12 unit") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3
+                )
                 Spacer(Modifier.height(32.dp))
             }
     }
@@ -1988,6 +2165,11 @@ private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDism
     val parsedPaid = runCatching { parseMoneyMicros(actualPaid) }.getOrNull()
     val priceValid = actualPaid.isBlank() || parsedPaid != null
     val estimate = log.catalogCostPerServingMicros?.let { cost -> parsedQuantity?.let { (cost * it).toLong() } }
+    val formFocus = rememberFormFocusCoordinator(
+        FormImeSpec("edit-servings", quantity.spec.servingAvailable),
+        FormImeSpec("edit-measure", quantity.spec.measureAvailable),
+        FormImeSpec("edit-paid")
+    )
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit amount") },
@@ -1998,7 +2180,9 @@ private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDism
                 QuantityInputFields(
                     state = quantity,
                     onChange = { unit, value -> quantity = quantity.edit(unit, value) },
-                    onPurchaseUnit = null
+                    onPurchaseUnit = null,
+                    coordinator = formFocus,
+                    fieldKeyPrefix = "edit"
                 )
                 parsedQuantity?.let { servings ->
                     Text(
@@ -2007,7 +2191,7 @@ private fun FoodLogEditDialog(log: FoodLogSnapshot, currencyCode: String, onDism
                     )
                 }
                 estimate?.let { Text("Catalog estimate: ${formatMoney(it, currencyCode)}", style = MaterialTheme.typography.bodySmall) }
-                DecimalField("Actual paid total (optional)", actualPaid) { actualPaid = it }
+                DecimalField("Actual paid total (optional)", actualPaid, formFocus, "edit-paid") { actualPaid = it }
                 Text("Blank uses the catalog estimate; 0 records a free item.", style = MaterialTheme.typography.bodySmall)
                 ToggleRow("Ignore this price in budget calculations", excludeCostFromBudget) { excludeCostFromBudget = it }
             }
@@ -2038,13 +2222,25 @@ internal fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true,
 }
 
 @Composable
-internal fun DecimalField(label: String, value: String, onValueChange: (String) -> Unit) {
+internal fun DecimalField(
+    label: String,
+    value: String,
+    coordinator: FormFocusCoordinator? = null,
+    fieldKey: String = label,
+    onValueChange: (String) -> Unit
+) {
+    val localCoordinator = coordinator ?: rememberFormFocusCoordinator(FormImeSpec(fieldKey))
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = Modifier.fillMaxWidth()
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Decimal,
+            imeAction = localCoordinator.action(fieldKey)
+        ),
+        keyboardActions = localCoordinator.actions(fieldKey),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().formImeField(fieldKey, localCoordinator)
     )
 }
 
@@ -2052,18 +2248,27 @@ internal fun DecimalField(label: String, value: String, onValueChange: (String) 
 internal fun QuantityInputFields(
     state: QuantityInputState,
     onChange: (QuantityUnit, String) -> Unit,
-    onPurchaseUnit: (() -> Unit)?
+    onPurchaseUnit: (() -> Unit)?,
+    coordinator: FormFocusCoordinator? = null,
+    fieldKeyPrefix: String = "quantity"
 ) {
     val measureUnit = state.spec.measureUnit
+    val servingKey = "$fieldKeyPrefix-servings"
+    val measureKey = "$fieldKeyPrefix-measure"
+    val localCoordinator = coordinator ?: rememberFormFocusCoordinator(
+        FormImeSpec(servingKey, state.spec.servingAvailable),
+        FormImeSpec(measureKey, state.spec.measureAvailable)
+    )
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = state.servingsText,
             onValueChange = { onChange(QuantityUnit.SERVINGS, it) },
             enabled = state.spec.servingAvailable,
             label = { Text("Servings") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = localCoordinator.action(servingKey)),
+            keyboardActions = localCoordinator.actions(servingKey),
             singleLine = true,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).formImeField(servingKey, localCoordinator),
             supportingText = if (!state.spec.servingAvailable) ({ Text("Unavailable") }) else null
         )
         OutlinedTextField(
@@ -2071,9 +2276,10 @@ internal fun QuantityInputFields(
             onValueChange = { value -> measureUnit?.let { onChange(it, value) } },
             enabled = state.spec.measureAvailable,
             label = { Text(measureUnit?.shortLabel ?: "g/ml") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = localCoordinator.action(measureKey)),
+            keyboardActions = localCoordinator.actions(measureKey),
             singleLine = true,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).formImeField(measureKey, localCoordinator),
             supportingText = if (!state.spec.measureAvailable) ({ Text("Not configured") }) else null
         )
     }

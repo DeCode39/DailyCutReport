@@ -1,4 +1,4 @@
-# Daily Cut Report 0.14.1
+# Daily Cut Report 0.14.2
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
@@ -35,6 +35,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Missing burn data is shown as unavailable, never as a calorie surplus.
 - Deleted food entries can be restored from one-shot, finite-duration snackbar Undo actions; newer messages replace stale ones instead of queueing.
 - Today provides a selected-date Health Connect refresh and a privacy-marked clipboard action that copies versioned, barcode-free daily-report JSON.
+- Forms use keyboard Next/Done/Search actions with focus-aware scrolling. Unfinished product drafts can be resumed after process death, and the shared cart keeps its checkout action pinned above the scrollable contents.
 - Browser-based tablet preview with matching manual workflows and versioned localStorage.
 
 ## Offline contract

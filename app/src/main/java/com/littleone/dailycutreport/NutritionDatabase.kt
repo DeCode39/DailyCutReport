@@ -697,6 +697,7 @@ interface NutritionDao {
     @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1") suspend fun metadata(key: String): String?
     @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1") fun observeMetadata(key: String): Flow<String?>
     @Upsert suspend fun upsertMetadata(metadata: AppMetadataEntity)
+    @Query("DELETE FROM app_metadata WHERE `key` = :key") suspend fun deleteMetadata(key: String)
     @Query("""
         UPDATE daily_reports
         SET manualFoodCalories = NULL,

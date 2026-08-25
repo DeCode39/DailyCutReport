@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -34,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -41,6 +45,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
@@ -53,22 +58,21 @@ import kotlin.math.roundToLong
 internal fun BulkDraftCard(
     draft: BulkDraft,
     currencyCode: String,
-    viewModel: FoodsViewModel
+    viewModel: FoodsViewModel,
+    onDiscard: () -> Unit
 ) {
     val estimate = bulkEstimateMicros(draft)
+    val formSpecs = buildList {
+        draft.items.forEach { item ->
+            add(FormImeSpec("cart-${item.product.productId}-servings", item.quantityInput.spec.servingAvailable))
+            add(FormImeSpec("cart-${item.product.productId}-measure", item.quantityInput.spec.measureAvailable))
+        }
+        add(FormImeSpec("cart-label"))
+        add(FormImeSpec("cart-paid"))
+    }
+    val formFocus = rememberFormFocusCoordinator(*formSpecs.toTypedArray())
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column {
-                    Text("Cart · ${draft.items.size} item${if (draft.items.size == 1) "" else "s"}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        draft.date?.let { "Locked to ${it.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}" }
-                            ?: "Add the first item to lock the destination date",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                if (draft.items.isNotEmpty()) TextButton(onClick = viewModel::discardBulkDraft) { Text("Discard") }
-            }
             draft.items.forEach { item ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -91,7 +95,9 @@ internal fun BulkDraftCard(
                         QuantityInputFields(
                             state = item.quantityInput,
                             onChange = { unit, value -> viewModel.updateBulkQuantity(item.product.productId, unit, value) },
-                            onPurchaseUnit = { viewModel.resetBulkQuantity(item.product.productId) }
+                            onPurchaseUnit = { viewModel.resetBulkQuantity(item.product.productId) },
+                            coordinator = formFocus,
+                            fieldKeyPrefix = "cart-${item.product.productId}"
                         )
                         item.quantity?.let { servings ->
                             Text(
@@ -110,9 +116,15 @@ internal fun BulkDraftCard(
                 viewModel::updateBulkLabel,
                 label = { Text("Store or group label (optional)") },
                 placeholder = { Text("e.g. 7-Eleven") },
-                modifier = Modifier.fillMaxWidth()
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = formFocus.action("cart-label")),
+                keyboardActions = formFocus.actions("cart-label"),
+                modifier = Modifier.fillMaxWidth().formImeField("cart-label", formFocus)
             )
-            DecimalField("Final checkout total ($currencyCode, optional)", draft.actualPaidText, viewModel::updateBulkPaid)
+            DecimalField(
+                "Final checkout total ($currencyCode, optional)", draft.actualPaidText,
+                formFocus, "cart-paid", viewModel::updateBulkPaid
+            )
             Text(
                 estimate?.let { "Catalog estimate: ${formatMoney(it, currencyCode)}" }
                     ?: "Catalog estimate unavailable until every selected item has a price and valid quantity.",
@@ -123,11 +135,9 @@ internal fun BulkDraftCard(
                 draft.excludeCostFromBudget,
                 onCheckedChange = viewModel::updateBulkBudgetExclusion
             )
-            Button(
-                onClick = viewModel::confirmBulkPurchase,
-                enabled = draft.isValid,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(if (draft.items.size == 1) "Log item" else "Log ${draft.items.size} items") }
+            if (draft.items.isNotEmpty()) {
+                TextButton(onClick = onDiscard, modifier = Modifier.fillMaxWidth()) { Text("Discard cart") }
+            }
         }
     }
 }
@@ -343,6 +353,8 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
 @Composable
 internal fun ProductSearchField(initialQuery: String, onQueryChange: (String) -> Unit) {
     var field by remember { mutableStateOf(TextFieldValue(initialQuery)) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     OutlinedTextField(
         value = field,
         onValueChange = {
@@ -350,6 +362,9 @@ internal fun ProductSearchField(initialQuery: String, onQueryChange: (String) ->
             onQueryChange(it.text)
         },
         label = { Text("Search saved products") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus(); keyboard?.hide() }),
         modifier = Modifier.fillMaxWidth().testTag("product_search")
     )
 }

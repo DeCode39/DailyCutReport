@@ -113,5 +113,14 @@ $('exportBackup').onclick=async()=>{const password=prompt('Backup password (at l
 $('importBackup').onclick=()=>{if(confirm('Restoring replaces all current preview data after validation. Continue?'))$('backupFile').click();};
 $('backupFile').onchange=async event=>{const file=event.target.files[0];event.target.value='';if(!file)return;const password=prompt('Backup password');if(!password)return;try{const payload=await DailyCutBackup.decrypt(new Uint8Array(await file.arrayBuffer()),password),next=restorePayload(payload);state=next;editingProductId=null;loadReportForm();persist();alert('Backup restored.');}catch(error){alert(`Restore failed: ${error.message}`);}};
 loadReportForm();loadGoals();loadHealthForm();render();
+document.addEventListener('keydown',event=>{
+  if(event.key!=='Enter'||event.isComposing||event.target.tagName==='TEXTAREA')return;
+  const field=event.target;if(!field.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),select'))return;
+  if(field.id==='productSearch'||field.id==='plannerSearch'){event.preventDefault();field.blur();return;}
+  const scope=field.closest('form,dialog,.settings-page,.card')||document;
+  const fields=[...scope.querySelectorAll('input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),select')]
+    .filter(candidate=>!candidate.disabled&&!candidate.hidden&&candidate.offsetParent!==null);
+  const next=fields[fields.indexOf(field)+1];event.preventDefault();if(next)next.focus();else field.blur();
+});
 if(initialRoute==='foods/editor')$('newProduct').click();
 if(initialRoute==='foods/cart'&&!Object.keys(bulkDraft.items).length)Object.values(state.products).slice(0,3).forEach(addToBulk);

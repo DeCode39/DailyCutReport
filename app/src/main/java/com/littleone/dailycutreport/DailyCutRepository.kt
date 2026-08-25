@@ -52,6 +52,8 @@ interface DailyCutRepository {
     suspend fun setPreferredLogUnit(productId: String, unit: QuantityUnit)
     suspend fun loadCartDraft(): BulkDraft
     suspend fun saveCartDraft(draft: BulkDraft)
+    suspend fun loadPendingProductDraft(): PendingProductDraft? = null
+    suspend fun savePendingProductDraft(draft: PendingProductDraft?) = Unit
     suspend fun addBulkPurchase(
         date: LocalDate,
         label: String,
@@ -431,6 +433,26 @@ class DefaultDailyCutRepository(
         dao.upsertMetadata(AppMetadataEntity(CART_DRAFT_KEY, CartDraftCodec.encode(draft)))
     }
 
+    override suspend fun loadPendingProductDraft(): PendingProductDraft? = withContext(Dispatchers.IO) {
+        val encoded = dao.metadata(PRODUCT_DRAFT_KEY) ?: return@withContext null
+        val decoded = ProductDraftCodec.decode(encoded) { productId ->
+            dao.productById(productId)?.let { ProductWithExtras(it, dao.extrasForProduct(productId)) }
+        }
+        if (decoded == null) {
+            dao.deleteMetadata(PRODUCT_DRAFT_KEY)
+            error("The unfinished product draft was invalid or its product no longer exists, so it was discarded.")
+        }
+        decoded
+    }
+
+    override suspend fun savePendingProductDraft(draft: PendingProductDraft?) = withContext(Dispatchers.IO) {
+        if (draft == null || !ProductDraftCodec.isMeaningful(draft.draft)) {
+            dao.deleteMetadata(PRODUCT_DRAFT_KEY)
+        } else {
+            dao.upsertMetadata(AppMetadataEntity(PRODUCT_DRAFT_KEY, ProductDraftCodec.encode(draft)))
+        }
+    }
+
     override suspend fun updateFoodLog(edit: FoodQuantityEdit): FoodMutationResult = withContext(Dispatchers.IO) {
         require(edit.quantity > 0.0) { "Quantity must be greater than zero" }
         require(edit.enteredAmount.isFinite() && edit.enteredAmount > 0.0) { "Entered amount must be greater than zero." }
@@ -652,6 +674,7 @@ class DefaultDailyCutRepository(
 
     private companion object {
         const val CART_DRAFT_KEY = "pending_cart_v1"
+        const val PRODUCT_DRAFT_KEY = "pending_product_draft_v1"
         const val CLEAR_OVERRIDES_KEY = "manual_overrides_cleared_0_8_5"
         const val HEALTH_HISTORY_SYNC_DAY_KEY = "health_history_sync_day_v1"
         const val HEALTH_HISTORY_SYNC_STATUS_KEY = "health_history_sync_status_v1"
