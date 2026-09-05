@@ -1,8 +1,8 @@
-# Daily Cut Report 0.14.2
+# Daily Cut Report 0.15.0
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
-## Unreleased development changes
+## New in 0.15.0
 
 - Food cards have an eye action: hold for a temporary nutrition preview, or tap to keep it open. Preview amounts use one purchase unit with g/ml conversions; Favorite is inside the preview. Tap-to-cart and hold-to-edit remain unchanged.
 - Separate optional Health Connect **weight write** permission exports manual readings, with stable client IDs, increasing versions, serialized retries, and deletion reconciliation. Imported readings are not exported, and app-owned exports are excluded from import to prevent double counting.
@@ -12,7 +12,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 
 The assistant is an optional adult wellness estimate, not a clinical diet. Its defaults use [Mifflin–St Jeor](https://pubmed.ncbi.nlm.nih.gov/2305711/) for fallback energy, [the 2015 protein/weight-management review](https://pubmed.ncbi.nlm.nih.gov/25926512/) for the 1.6 g/kg protein starting point, and [WHO healthy-diet guidance](https://www.who.int/news-room/fact-sheets/detail/healthy-diet) for fiber/fat context. WHO free-sugar guidance is not applied to total-sugar labels. The eligibility checks and allocation choices are conservative app heuristics, not guarantees of safety or muscle retention. No source is fetched by the app: all calculations and Health Connect operations are local.
 
-This development commit does not publish a new APK release. The website continues to identify the latest published version.
+The signed arm64 and universal APKs are distributed through GitHub prereleases. Back up before upgrading; schema-7 backups require 0.15.0 or newer.
 
 ## Features
 
@@ -101,7 +101,7 @@ Public 0.8.5 APKs used the old debug certificate, so Android cannot install a pr
 
 Database version 9 adds flexible serving, gram, and milliliter quantity metadata while preserving how historical entries were logged. Version 8 added configurable fixed purchase-unit amounts and defaults existing fixed products to one unit. Version 7 added product favorites. Version 6 added the health profile, manual/imported weight entries, and privacy-limited walking-session summaries; multiple readings per day use the existing timestamped entries. Version 5 added optional one-time bulk-log grouping fields. Existing products, reports, extras, and food logs survive; old logs intentionally retain unknown cost. Legacy `daily_reports` SharedPreferences remain as rollback data.
 
-The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Products may be logged by servings, grams, or milliliters when their measurement basis is configured; historical logs retain the unit actually entered. Backup schema 6 includes quantity metadata, fixed purchase-unit amounts, favorites, and every health entry while accepting schemas 1–5. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered. The browser preview stores equivalent state in `dcr_v8`.
+The bundled catalog is imported transactionally and additively. A product with the same stable ID is never overwritten. Products may be logged by servings, grams, or milliliters when their measurement basis is configured; historical logs retain the unit actually entered. Backup schema 7 includes goal-assistant configuration and target history alongside quantity metadata, fixed purchase-unit amounts, favorites, and every health entry, while accepting schemas 1–6. Full `.dcrbackup` files use PBKDF2-HMAC-SHA256 and AES-256-GCM; passwords are never stored and cannot be recovered. The browser preview stores equivalent state in `dcr_v8`.
 
 Catalog schema 3 uses a stable ID, an optional physical barcode, and optional quantity-basis fields:
 

@@ -14,6 +14,7 @@ env:
 
 jobs:
   release:
+    needs: instrumentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +87,7 @@ jobs:
           test "$(stat -c%s "$arm64")" -le $((35 * 1024 * 1024))
           unzip -Z1 "$arm64" | grep '^lib/arm64-v8a/' >/dev/null
           ! unzip -Z1 "$arm64" | grep -E '^lib/(armeabi-v7a|x86|x86_64)/'
-          sha256sum "$arm64" "$universal" > release-assets/SHA256SUMS.txt
+          (cd release-assets && sha256sum *.apk > SHA256SUMS.txt)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -100,6 +101,7 @@ jobs:
         with:
           prerelease: true
           generate_release_notes: true
+          body_path: docs/release-media/v${{ env.DCR_VERSION }}/release-notes.md
           files: release-assets/*
 
   instrumentation:
@@ -130,4 +132,11 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 2048 -cores 2
-          script: gradle --no-daemon connectedDebugAndroidTest
+          script: |
+            gradle --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.captureReleaseMedia=true
+            adb pull /sdcard/Android/data/com.littleone.dailycutreport.debug/files/release-media release-media
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-tab-screenshots
+          path: release-media/*.png
+          if-no-files-found: error
