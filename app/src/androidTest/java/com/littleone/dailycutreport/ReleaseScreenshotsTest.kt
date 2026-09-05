@@ -1,6 +1,8 @@
 package com.littleone.dailycutreport
 
 import android.graphics.Bitmap
+import android.content.ContentValues
+import android.provider.MediaStore
 import android.os.SystemClock
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -14,7 +16,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
-import java.io.File
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -22,6 +23,8 @@ import java.time.LocalTime
 class ReleaseScreenshotsTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
+    @android.annotation.TargetApi(29)
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 29)
     @Test fun captureReleaseTabs() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("captureReleaseMedia") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -46,8 +49,17 @@ class ReleaseScreenshotsTest {
             compose.waitForIdle()
             SystemClock.sleep(700)
             val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
-            val directory = File(context.getExternalFilesDir(null), "release-media").apply { mkdirs() }
-            File(directory, "${tab.lowercase()}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            // UTP can uninstall the test app before the host pulls artifacts. MediaStore output
+            // survives that cleanup; app-private external files do not.
+            val uri = requireNotNull(context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "${tab.lowercase()}.png")
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DailyCutReleaseMedia")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }))
+            requireNotNull(context.contentResolver.openOutputStream(uri)).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            context.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
             bitmap.recycle()
         }
     }
