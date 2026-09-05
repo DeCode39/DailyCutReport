@@ -189,7 +189,8 @@ fun DailyCutApp(
                         onGrantCorePermissions = { healthPermissionLauncher.launch(HealthConnectManager.CORE_PERMISSIONS) },
                         onGrantNutritionPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_PERMISSION)) },
                         onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) },
-                        onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) }
+                        onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) },
+                        onGrantWeightWritePermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_WRITE_PERMISSION)) }
                     )
                 }
                 SettingsPage.entries.filterNot { it == SettingsPage.PLANNER }.forEach { page ->
@@ -204,7 +205,8 @@ fun DailyCutApp(
                             onGrantCorePermissions = { healthPermissionLauncher.launch(HealthConnectManager.CORE_PERMISSIONS) },
                             onGrantNutritionPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_PERMISSION)) },
                             onGrantNutritionWritePermission = { nutritionWritePermissionLauncher.launch(setOf(HealthConnectManager.NUTRITION_WRITE_PERMISSION)) },
-                            onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) }
+                            onGrantWeightPermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_PERMISSION)) },
+                            onGrantWeightWritePermission = { healthPermissionLauncher.launch(setOf(HealthConnectManager.WEIGHT_WRITE_PERMISSION)) }
                         )
                     }
                 }

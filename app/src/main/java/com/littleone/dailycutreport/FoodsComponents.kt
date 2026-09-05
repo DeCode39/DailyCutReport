@@ -303,6 +303,8 @@ private fun constraintTarget(impact: ConstraintImpact, currencyCode: String): St
 @Composable
 internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel) {
     val haptics = LocalHapticFeedback.current
+    var previewPinned by remember(product.productId) { mutableStateOf(false) }
+    var previewHeld by remember(product.productId) { mutableStateOf(false) }
     Card(
         Modifier
             .fillMaxWidth()
@@ -324,28 +326,61 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
                 }
             }
             Column(Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
                 Text(product.name, fontWeight = FontWeight.Bold)
-                Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.barcode).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                    }
-                    IconButton(onClick = { viewModel.toggleFavorite(product) }) {
-                        Text(if (product.favorite) "★" else "☆", color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+                if (product.brand.isNotBlank()) Text(product.brand, style = MaterialTheme.typography.bodySmall)
                 product.purchasePriceMicros?.let {
                     Text("${formatMoney(it, currencyCode)} / ${product.purchaseUnitServings.toDisplay()} serving(s)", style = MaterialTheme.typography.bodySmall)
                 }
-                Text(
-                    when {
-                        !product.includeInPlanner -> "Not used in planning"
-                        product.alwaysIncludeInPlanner ->
-                            "${product.plannerItemType.lowercase()} · fixed ${product.fixedPurchaseUnits} unit(s)"
-                        else -> product.plannerItemType.lowercase().replaceFirstChar(Char::uppercase)
-                    },
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
+            Box(Modifier.size(48.dp).semantics {
+                contentDescription = "Preview nutrition for ${product.name}"
+                onClick { previewPinned = !previewPinned; true }
+            }.pointerInput(product.productId) {
+                detectTapGestures(
+                    onTap = { previewPinned = !previewPinned },
+                    onLongPress = { },
+                    onPress = {
+                        previewHeld = true
+                        try { tryAwaitRelease() } finally { previewHeld = false }
+                    }
+                )
+            }, contentAlignment = Alignment.Center) {
+                Icon(painterResource(R.drawable.ic_preview), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+        if (previewPinned || previewHeld) {
+            ProductNutritionPreview(product, currencyCode, viewModel)
+        }
+    }
+}
+
+@Composable
+private fun ProductNutritionPreview(product: ProductEntity, currencyCode: String, viewModel: FoodsViewModel) {
+    var details by remember(product.productId) { mutableStateOf<ProductWithExtras?>(null) }
+    var extrasError by remember(product.productId) { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(product.productId, product.updatedAt) {
+        try {
+            details = viewModel.productPreview(product.productId)
+            extrasError = false
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { extrasError = true }
+    }
+    val amount = product.purchaseUnitServings
+    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        val spec = product.quantitySpec()
+        val unit = product.preferredQuantityUnit()
+        val quantity = LoggedQuantity(amount, unit, spec.amountFor(amount, unit) ?: amount, spec)
+        Text("One purchase unit · ${quantity.displayParts().joinToString(" · ")}", fontWeight = FontWeight.Bold)
+        Text("Nutrition basis: ${product.servingLabel}", style = MaterialTheme.typography.bodySmall)
+        Text("${formatCalories(product.calories * amount)} kcal · Protein ${(product.proteinG * amount).toDisplay()} g")
+        Text("Carbs ${(product.carbsG * amount).toDisplay()} g · Fat ${(product.fatG * amount).toDisplay()} g")
+        Text("Sugar ${(product.sugarG * amount).toDisplay()} g · Fiber ${(product.fiberG * amount).toDisplay()} g")
+        Text("Saturated fat ${(product.saturatedFatG * amount).toDisplay()} g · Sodium ${(product.sodiumMg * amount).toDisplay()} mg")
+        product.purchasePriceMicros?.let { Text("Catalog price ${formatMoney(it, currencyCode)}") }
+        details?.extras?.forEach { Text("${it.name}: ${(it.value * amount).toDisplay()} ${it.unit}") }
+        if (extrasError) Text("Extra nutrients could not be loaded.", color = MaterialTheme.colorScheme.error)
+        TextButton(onClick = { viewModel.toggleFavorite(product) }) {
+            Text(if (product.favorite) "★ Remove favorite" else "☆ Favorite")
         }
     }
 }

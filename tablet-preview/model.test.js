@@ -1,6 +1,15 @@
 const test=require('node:test');const assert=require('node:assert/strict');const M=require('./model.js');
 const Backup=require('./backup.js');
 const fs=require('node:fs'),path=require('node:path');
+test('historical targets restored from Android stay fixed while budget stays current',()=>{
+  const state=M.empty('2026-09-05');
+  const g={mode:'CALORIE',calories:1800,expectedBurnCalories:2300,desiredDeficitCalories:500,
+    proteinG:100,sodiumMg:2000,carbsG:170,fatG:60,sugarG:50,fiberG:25,saturatedFatG:15};
+  state.goalAssistant={version:1,baseline:g,history:{'2026-09-04':{...g,proteinG:128}}};
+  assert.equal(M.goalsForDate(state,'2026-09-03','2026-09-05').protein,100);
+  assert.equal(M.goalsForDate(state,'2026-09-04','2026-09-05').protein,128);
+  assert.equal(M.goalsForDate(state,'2026-09-05','2026-09-05'),state.settings);
+});
 function storage(initial={}){const data={...initial};return{getItem:k=>Object.hasOwn(data,k)?data[k]:null,setItem:(k,v)=>data[k]=String(v),removeItem:k=>delete data[k],data};}
 test('migrates legacy values once',()=>{const s=storage({dcr_date:'2026-01-02',dcr_steps:'1234',dcr_burn:'2100',dcr_food:'1800'});const state=M.migrate(s,new Date('2026-01-03T12:00:00'));assert.equal(state.version,8);assert.equal(state.reports['2026-01-02'].steps,1234);assert.equal(M.migrate(s).reports['2026-01-02'].burn,2100);});
 test('migrates dcr_v4 health defaults and formats noisy decimals',()=>{const old=M.empty('2026-01-03');old.version=4;delete old.healthProfile;delete old.weights;const s=storage({dcr_v4:JSON.stringify(old)}),state=M.migrate(s,new Date('2026-01-03T12:00:00'));assert.equal(state.version,8);assert.equal(state.healthProfile.weightUnit,'KG');assert.equal(M.format(97.999999999996),'98');assert.equal(M.format(-0.0001),'0');assert.equal(M.formatCalories(97.6),'98');});

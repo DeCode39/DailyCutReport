@@ -28,6 +28,12 @@ interface DailyCutRepository {
     fun observeFavoriteProducts(): Flow<List<ProductEntity>>
     fun observePlannerProducts(): Flow<List<ProductEntity>>
     fun observeGoals(): Flow<UserGoals>
+    fun observeGoals(date: LocalDate): Flow<UserGoals> = observeGoals()
+    fun observeGoalAssistant(): Flow<GoalAssistantState?> = flowOf(null)
+    suspend fun previewGoalSuggestion(profile: GoalAssistantProfile): GoalSuggestion = error("Goal assistant unavailable")
+    suspend fun applyGoalSuggestion(profile: GoalAssistantProfile) {}
+    suspend fun adaptGoals() {}
+    suspend fun stopGoalAdaptation(restorePrevious: Boolean) {}
     fun observeHealthProfile(): Flow<HealthProfile>
     fun observeSpending(date: LocalDate): Flow<DailySpending>
     fun observeHealthDashboard(date: LocalDate): Flow<HealthDashboard>
@@ -77,6 +83,9 @@ interface DailyCutRepository {
     suspend fun retryPendingNutritionSync()
     suspend fun nutritionSyncStatus(): String?
     suspend fun healthWeightPermissionGranted(): Boolean
+    suspend fun healthWeightWritePermissionGranted(): Boolean = false
+    suspend fun syncWeights() {}
+    suspend fun weightSyncStatus(): String? = null
     suspend fun updateHealthProfile(profile: HealthProfile)
     suspend fun addManualWeight(date: LocalDate, time: LocalTime, weightKg: Double)
     suspend fun deleteManualWeight(entryId: String)
@@ -96,6 +105,8 @@ class DefaultDailyCutRepository(
     private val initializationMutex = Mutex()
     private var initialized = false
     private val nutritionSync = NutritionSyncCoordinator(dao, healthConnect)
+    private val weightSync = WeightSyncCoordinator(dao, healthConnect)
+    private val goalAssistant = GoalAssistantStore(dao)
     private val mealPlanner = OfflineMealPlanner()
     private val healthAnalytics = HealthAnalyticsEngine()
     private val burnForecastEngine = DailyBurnForecastEngine()
@@ -168,6 +179,26 @@ class DefaultDailyCutRepository(
         .map { (it ?: UserGoalsEntity()).toDomain().sanitized() }
         .flowOn(Dispatchers.IO)
 
+    override fun observeGoalAssistant(): Flow<GoalAssistantState?> = dao.observeMetadata(GoalAssistantState.KEY)
+        .map { raw -> raw?.let { runCatching { GoalAssistantCodec.decode(it) }.getOrNull() } }.flowOn(Dispatchers.IO)
+
+    override fun observeGoals(date: LocalDate): Flow<UserGoals> = combine(observeGoals(), observeGoalAssistant()) { goals, state ->
+        if (date < LocalDate.now() && state != null) state.goalsFor(date, goals) else goals
+    }
+    override suspend fun previewGoalSuggestion(profile: GoalAssistantProfile) = withContext(Dispatchers.IO) { goalAssistant.preview(profile) }
+    override suspend fun applyGoalSuggestion(profile: GoalAssistantProfile) = withContext(Dispatchers.IO) {
+        goalAssistant.apply(profile)
+        DailyCutWidgetUpdater.updateAll(context)
+    }
+    override suspend fun adaptGoals() = withContext(Dispatchers.IO) {
+        goalAssistant.adapt()
+        DailyCutWidgetUpdater.updateAll(context)
+    }
+    override suspend fun stopGoalAdaptation(restorePrevious: Boolean) = withContext(Dispatchers.IO) {
+        goalAssistant.stop(restorePrevious)
+        DailyCutWidgetUpdater.updateAll(context)
+    }
+
     override fun observeHealthProfile(): Flow<HealthProfile> = dao.observeHealthProfile()
         .map { (it ?: HealthProfileEntity()).toDomain() }
         .flowOn(Dispatchers.IO)
@@ -193,7 +224,7 @@ class DefaultDailyCutRepository(
             HealthHistoryState(reports, nutrition, weights, walking)
         }
         return combine(
-            history, observeGoals(), dao.observeHealthProfile(), dao.observeMetadata(HEALTH_HISTORY_SYNC_STATUS_KEY),
+            history, observeGoals(date), dao.observeHealthProfile(), dao.observeMetadata(HEALTH_HISTORY_SYNC_STATUS_KEY),
             dao.observeMetadata(burnForecastMetadataKey(date))
         ) { state, goals, profileEntity, historyStatus, forecastJson ->
             val reportByDate = state.reports.associateBy(DailyReportEntity::date)
@@ -234,14 +265,15 @@ class DefaultDailyCutRepository(
 
     override suspend fun updateGoals(goals: UserGoals) = withContext(Dispatchers.IO) {
         goals.requireValid()
-        dao.upsertUserGoals(goals.toEntity())
+        goalAssistant.manual(goals)
         DailyCutWidgetUpdater.updateAll(context)
     }
 
     override suspend fun recommendations(date: LocalDate): RecommendationResult = withContext(Dispatchers.Default) {
         val dateKey = date.toString()
         val input = withContext(Dispatchers.IO) {
-            val goals = (dao.userGoals() ?: UserGoalsEntity()).toDomain()
+            val current = (dao.userGoals() ?: UserGoalsEntity()).toDomain()
+            val goals = if (date < LocalDate.now()) goalAssistant.state().goalsFor(date, current) else current
             val nutrition = dao.totalsForDate(dateKey).toSummary(emptyMap())
             val rawSpending = dao.spendingForDate(dateKey)
             val projectedBurn = dao.dailyReport(dateKey)?.totalCalories?.takeIf { it.isFinite() && it > 0.0 }
@@ -568,8 +600,13 @@ class DefaultDailyCutRepository(
 
     override suspend fun retryPendingNutritionSync() {
         nutritionSync.retryPending()
+        syncWeights()
         DailyCutWidgetUpdater.updateAll(context)
     }
+
+    override suspend fun healthWeightWritePermissionGranted() = healthConnect.hasWeightWritePermission()
+    override suspend fun syncWeights() = withContext(Dispatchers.IO) { weightSync.sync() }
+    override suspend fun weightSyncStatus() = withContext(Dispatchers.IO) { dao.metadata(WeightSyncCoordinator.STATUS) }
 
     override suspend fun nutritionSyncStatus(): String? = nutritionSync.status()
 
@@ -582,17 +619,19 @@ class DefaultDailyCutRepository(
         dao.upsertHealthProfile(profile.toEntity())
     }
 
-    override suspend fun addManualWeight(date: LocalDate, time: LocalTime, weightKg: Double) = withContext(Dispatchers.IO) {
+    override suspend fun addManualWeight(date: LocalDate, time: LocalTime, weightKg: Double): Unit = withContext(Dispatchers.IO) {
         require(weightKg.isFinite() && weightKg in 10.0..1_000.0) { "Enter a valid body weight." }
         val instant = date.atTime(time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         dao.upsertWeightEntry(
             WeightEntry("manual-${java.util.UUID.randomUUID()}", date, instant, weightKg, WeightSource.MANUAL).toEntity()
         )
+        syncScope.launch { syncWeights() }
     }
 
-    override suspend fun deleteManualWeight(entryId: String) = withContext(Dispatchers.IO) {
+    override suspend fun deleteManualWeight(entryId: String): Unit = withContext(Dispatchers.IO) {
         require(entryId.startsWith("manual-")) { "Only manual weight entries can be deleted." }
         dao.deleteWeightEntry(entryId)
+        syncScope.launch { syncWeights() }
     }
 
     override suspend fun syncHealthHistory(force: Boolean): Result<Unit> = runCatching {

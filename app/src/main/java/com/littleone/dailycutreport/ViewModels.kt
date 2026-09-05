@@ -82,7 +82,7 @@ class TodayViewModel(
             }
         },
         selectedDate.flatMapLatest(repository::observeFoodLogs),
-        repository.observeGoals(),
+        selectedDate.flatMapLatest { repository.observeGoals(it) },
         selectedDate.flatMapLatest(repository::observeSpending),
         combine(message, recommendations, planning, refreshing, ::TodayTransientState)
     ) { reportState, logs, goals, spending, transient ->
@@ -282,7 +282,7 @@ class FoodsViewModel(
     private val _events = MutableSharedFlow<FoodUiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<FoodUiEvent> = _events.asSharedFlow()
     private val thresholdNotifier = MacroThresholdNotifier()
-    private val latestGoals = repository.observeGoals()
+    private val latestGoals = selectedDate.flatMapLatest { repository.observeGoals(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals())
     private val latestTargets = combine(
         latestGoals,
@@ -519,6 +519,8 @@ class FoodsViewModel(
             }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not log scanned products.")) }
         }
     }
+
+    suspend fun productPreview(productId: String): ProductWithExtras? = repository.getProduct(productId)
 
     fun toggleFavorite(product: ProductEntity) {
         viewModelScope.launch {
@@ -1007,6 +1009,8 @@ data class SettingsUiState(
     val nutritionPermissionGranted: Boolean = false,
     val nutritionWritePermissionGranted: Boolean = false,
     val weightPermissionGranted: Boolean = false,
+    val weightWritePermissionGranted: Boolean = false,
+    val weightSyncStatus: String? = null,
     val nutritionSyncStatus: String? = null,
     val healthHistoryStatus: String? = null,
     val goals: UserGoals = UserGoals(),
@@ -1016,6 +1020,41 @@ data class SettingsUiState(
 )
 
 class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel() {
+    val goalAssistant = repository.observeGoalAssistant().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    private val _goalSuggestion = MutableStateFlow<GoalSuggestion?>(null)
+    val goalSuggestion: StateFlow<GoalSuggestion?> = _goalSuggestion
+    private val _goalApplying = MutableStateFlow(false)
+    val goalApplying: StateFlow<Boolean> = _goalApplying
+    private var suggestionJob: Job? = null
+    fun clearGoalSuggestion() { suggestionJob?.cancel(); _goalSuggestion.value = null }
+    fun previewGoals(profile: GoalAssistantProfile) {
+        clearGoalSuggestion()
+        suggestionJob = viewModelScope.launch {
+            runCatching { repository.previewGoalSuggestion(profile) }
+                .onSuccess { _goalSuggestion.value = it }
+                .onFailure { _uiState.value = _uiState.value.copy(message = it.message ?: "Could not suggest goals.") }
+        }
+    }
+    fun applyGoals(profile: GoalAssistantProfile, onSuccess: () -> Unit = {}) {
+        if (_goalApplying.value) return
+        _goalApplying.value = true
+        viewModelScope.launch {
+            try {
+                repository.applyGoalSuggestion(profile)
+                clearGoalSuggestion()
+                _uiState.value = _uiState.value.copy(message = "Goal suggestions applied.")
+                onSuccess()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { _uiState.value = _uiState.value.copy(message = error.message ?: "Could not apply goals.") }
+            finally { _goalApplying.value = false }
+        }
+    }
+    fun stopGoalAssistant(restorePrevious: Boolean) {
+        viewModelScope.launch {
+            runCatching { repository.stopGoalAdaptation(restorePrevious) }
+                .onFailure { _uiState.value = _uiState.value.copy(message = it.message ?: "Could not update goals.") }
+        }
+    }
     private val _uiState = MutableStateFlow(SettingsUiState(
         healthAvailable = repository.healthConnectAvailable()
     ))
@@ -1040,6 +1079,8 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
                 nutritionPermissionGranted = repository.healthNutritionPermissionGranted(),
                 nutritionWritePermissionGranted = repository.healthNutritionWritePermissionGranted(),
                 weightPermissionGranted = repository.healthWeightPermissionGranted(),
+                weightWritePermissionGranted = repository.healthWeightWritePermissionGranted(),
+                weightSyncStatus = repository.weightSyncStatus(),
                 nutritionSyncStatus = repository.nutritionSyncStatus(),
                 healthHistoryStatus = repository.healthHistoryStatus(),
                 goals = _uiState.value.goals,
@@ -1052,6 +1093,7 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
 
     fun permissionsChanged() {
         viewModelScope.launch {
+            repository.syncWeights()
             repository.ensureHealthBootstrap()
             refresh()
         }

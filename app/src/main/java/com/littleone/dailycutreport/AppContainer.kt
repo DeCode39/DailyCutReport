@@ -31,6 +31,7 @@ class DailyCutApplication : Application() {
                             // History imports include today; always write the current live forecast last.
                             repository.refreshHealth(LocalDate.now())
                         }
+                        repository.adaptGoals()
                         repository.retryPendingNutritionSync()
                     }
                 }

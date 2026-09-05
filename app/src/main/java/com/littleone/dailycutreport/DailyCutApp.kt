@@ -1365,6 +1365,7 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
 
 internal enum class SettingsPage(val route: String, val title: String, val summary: String) {
     GOALS("settings/goals", "Goals & budget", "Calories, deficit, macros, currency, and weight target"),
+    GOAL_ASSISTANT("settings/goal-assistant", "Goal assistant", "Reviewed suggestions for weight loss with muscle retention"),
     PLANNER("settings/planner", "Planner", "Choose included, fixed, food, and drink products"),
     HEALTH_CONNECT("settings/health-connect", "Health Connect", "Permissions, refresh, bootstrap, and nutrition sync"),
     PRODUCT_JSON("settings/product-json", "Product JSON", "Copy the schema for fast AI-assisted product entry"),
@@ -1384,7 +1385,8 @@ internal fun SettingsScreen(
     onGrantCorePermissions: () -> Unit,
     onGrantNutritionPermission: () -> Unit,
     onGrantNutritionWritePermission: () -> Unit,
-    onGrantWeightPermission: () -> Unit
+    onGrantWeightPermission: () -> Unit,
+    onGrantWeightWritePermission: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -1418,6 +1420,7 @@ internal fun SettingsScreen(
             SettingsPage.GOALS -> item {
                 GoalsSettingsCard(state.goals, state.healthProfile, viewModel::saveGoalsAndProfile)
             }
+            SettingsPage.GOAL_ASSISTANT -> item { GoalAssistantScreen(viewModel) }
             SettingsPage.PLANNER -> Unit
             SettingsPage.HEALTH_CONNECT -> item {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1452,6 +1455,13 @@ internal fun SettingsScreen(
                         enabled = state.healthAvailable && !state.weightPermissionGranted,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (state.weightPermissionGranted) "Weight import enabled" else "Enable weight import") }
+                    OutlinedButton(
+                        onClick = onGrantWeightWritePermission,
+                        enabled = state.healthAvailable && !state.weightWritePermissionGranted,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.weightWritePermissionGranted) "Manual weight export enabled" else "Enable manual weight export") }
+                    Text("Exports all manual recordings and their deletions. Imported weights stay read-only.", style = MaterialTheme.typography.bodySmall)
+                    state.weightSyncStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     state.healthHistoryStatus?.let { Text("28-day history: $it", style = MaterialTheme.typography.bodySmall) }
                 }
             }

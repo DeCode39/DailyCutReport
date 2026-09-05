@@ -40,7 +40,8 @@ class EncryptedAppBackupManager(
                 goals = dao.userGoals() ?: UserGoalsEntity(),
                 healthProfile = dao.healthProfile() ?: HealthProfileEntity(),
                 weights = dao.allWeightEntries(),
-                walkingSessions = dao.allWalkingSamples()
+                walkingSessions = dao.allWalkingSamples(),
+                goalAssistant = dao.metadata(GoalAssistantState.KEY)?.let(GoalAssistantCodec::decode)
             )
         ).toByteArray(Charsets.UTF_8)
         val encrypted = BackupCrypto.encrypt(payload, password)
@@ -81,7 +82,7 @@ class EncryptedAppBackupManager(
         dao.replaceUserData(
             payload.products, payload.productExtras, payload.reports, payload.foodLogs,
             payload.dailyExtras, payload.goals, payload.healthProfile, payload.weights,
-            payload.walkingSessions
+            payload.walkingSessions, payload.goalAssistant?.let(GoalAssistantCodec::encode)
         )
     }
 
@@ -100,7 +101,8 @@ data class BackupPayload(
     val goals: UserGoalsEntity = UserGoalsEntity(),
     val healthProfile: HealthProfileEntity = HealthProfileEntity(),
     val weights: List<WeightEntryEntity> = emptyList(),
-    val walkingSessions: List<WalkingSessionSampleEntity> = emptyList()
+    val walkingSessions: List<WalkingSessionSampleEntity> = emptyList(),
+    val goalAssistant: GoalAssistantState? = null
 )
 
 object BackupCrypto {
@@ -170,7 +172,9 @@ object BackupCrypto {
 }
 
 object BackupJson {
-    private const val SCHEMA_VERSION = 6
+    internal fun encodeGoals(goals: UserGoals): JSONObject = goals.toEntity().toJson()
+    internal fun decodeGoals(json: JSONObject): UserGoals = goalsFromJson(json).toDomain()
+    private const val SCHEMA_VERSION = 7
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
@@ -184,6 +188,7 @@ object BackupJson {
         put("healthProfile", payload.healthProfile.toJson())
         put("weightEntries", JSONArray().apply { payload.weights.forEach { put(it.toJson()) } })
         put("walkingSessions", JSONArray().apply { payload.walkingSessions.forEach { put(it.toJson()) } })
+        payload.goalAssistant?.let { put("goalAssistant", JSONObject(GoalAssistantCodec.encode(it))) }
     }.toString()
 
     fun decode(json: String): BackupPayload {
@@ -201,7 +206,8 @@ object BackupJson {
         val weights = if (schema >= 3) root.getJSONArray("weightEntries").objects(::weightFromJson) else emptyList()
         val walking = if (schema >= 3) root.getJSONArray("walkingSessions").objects(::walkingFromJson) else emptyList()
         validateHealth(weights, walking)
-        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals, healthProfile, weights, walking)
+        val assistant = if (schema >= 7) root.optJSONObject("goalAssistant")?.let { GoalAssistantCodec.decode(it.toString()) } else null
+        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals, healthProfile, weights, walking, assistant)
     }
 
     private fun validate(

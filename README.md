@@ -2,6 +2,18 @@
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
+## Unreleased development changes
+
+- Food cards have an eye action: hold for a temporary nutrition preview, or tap to keep it open. Preview amounts use one purchase unit with g/ml conversions; Favorite is inside the preview. Tap-to-cart and hold-to-edit remain unchanged.
+- Separate optional Health Connect **weight write** permission exports manual readings, with stable client IDs, increasing versions, serialized retries, and deletion reconciliation. Imported readings are not exported, and app-owned exports are excluded from import to prevent double counting.
+- Settings → Goal assistant provides reviewed **weight loss with muscle retention** estimates. Apply once or opt into daily adaptation from recent daily-median weight and completed-day burn. Individual targets can be locked; manual target edits lock those fields. Sodium and total-sugar limits stay user-controlled. Deficit mode still uses the live forecast for its calorie allowance.
+- An effective-date target ledger preserves historical targets after changes. Dates preceding this feature use the goals that were configured when the ledger began; older per-date settings cannot be reconstructed. Stop adaptation or restore the previous targets in the assistant.
+- Room remains schema 9. Backup schema 7 additionally preserves assistant configuration and the target ledger, while accepting schemas 1–6. Internal Health Connect sync markers remain excluded. The tablet preview preserves this configuration during backup round trips and uses historical targets; assistant configuration and Health Connect permissions are Android-only in this pass.
+
+The assistant is an optional adult wellness estimate, not a clinical diet. Its defaults use [Mifflin–St Jeor](https://pubmed.ncbi.nlm.nih.gov/2305711/) for fallback energy, [the 2015 protein/weight-management review](https://pubmed.ncbi.nlm.nih.gov/25926512/) for the 1.6 g/kg protein starting point, and [WHO healthy-diet guidance](https://www.who.int/news-room/fact-sheets/detail/healthy-diet) for fiber/fat context. WHO free-sugar guidance is not applied to total-sugar labels. The eligibility checks and allocation choices are conservative app heuristics, not guarantees of safety or muscle retention. No source is fetched by the app: all calculations and Health Connect operations are local.
+
+This development commit does not publish a new APK release. The website continues to identify the latest published version.
+
 ## Features
 
 - Material 3 Jetpack Compose UI with Today, Foods, Health, and Settings destinations.

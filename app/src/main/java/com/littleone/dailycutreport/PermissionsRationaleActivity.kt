@@ -29,7 +29,12 @@ class PermissionsRationaleActivity : ComponentActivity() {
             setTextColor(Color.rgb(247, 241, 208))
             setPadding(0, dp(16), 0, dp(16))
         })
-        setContentView(root)
+        root.addView(TextView(this).apply {
+            text = "Optional weight write access exports all manual weight recordings and keeps later additions, corrections, and deletions in sync. Imported readings are never written back. Weight read and write permissions are separate and can be revoked independently."
+            textSize = 16f
+            setTextColor(Color.rgb(247, 241, 208))
+        })
+        setContentView(android.widget.ScrollView(this).apply { setBackgroundColor(Color.BLACK); addView(root) })
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()

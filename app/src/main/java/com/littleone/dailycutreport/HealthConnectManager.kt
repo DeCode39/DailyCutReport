@@ -44,6 +44,8 @@ interface HealthDataSource {
     suspend fun hasNutritionPermission(): Boolean
     suspend fun hasNutritionWritePermission(): Boolean
     suspend fun hasWeightPermission(): Boolean = false
+    suspend fun hasWeightWritePermission(): Boolean = false
+    suspend fun writeWeights(entries: List<WeightEntry>, staleIds: Set<String>, version: Long) { error("Weight export unavailable") }
     suspend fun readDailySummary(date: LocalDate): HealthSummary
     suspend fun readHealthHistory(startDate: LocalDate, endDate: LocalDate): HealthHistoryImport =
         HealthHistoryImport(emptyMap(), emptyList(), emptyList())
@@ -73,6 +75,7 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
         val NUTRITION_PERMISSION: String = HealthPermission.getReadPermission(NutritionRecord::class)
         val NUTRITION_WRITE_PERMISSION: String = HealthPermission.getWritePermission(NutritionRecord::class)
         val WEIGHT_PERMISSION: String = HealthPermission.getReadPermission(WeightRecord::class)
+        val WEIGHT_WRITE_PERMISSION: String = HealthPermission.getWritePermission(WeightRecord::class)
         val PERMISSIONS: Set<String> = CORE_PERMISSIONS + NUTRITION_PERMISSION
     }
 
@@ -102,6 +105,27 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
 
     override suspend fun hasWeightPermission(): Boolean = client?.permissionController
         ?.getGrantedPermissions()?.contains(WEIGHT_PERMISSION) == true
+
+    override suspend fun hasWeightWritePermission(): Boolean = client?.permissionController
+        ?.getGrantedPermissions()?.contains(WEIGHT_WRITE_PERMISSION) == true
+
+    override suspend fun writeWeights(entries: List<WeightEntry>, staleIds: Set<String>, version: Long) {
+        val hc = requireNotNull(client)
+        check(hasWeightWritePermission()) { "Weight export permission required" }
+        entries.chunked(200).forEach { batch ->
+            hc.insertRecords(batch.map { entry ->
+                val instant = Instant.ofEpochMilli(entry.recordedAtEpochMs)
+                WeightRecord(
+                    time = instant, zoneOffset = ZoneId.systemDefault().rules.getOffset(instant),
+                    weight = Mass.kilograms(entry.weightKg),
+                    metadata = Metadata.manualEntry(clientRecordId = entry.weightClientId, clientRecordVersion = version)
+                )
+            })
+        }
+        staleIds.toList().chunked(200).forEach {
+            hc.deleteRecords(WeightRecord::class, recordIdsList = emptyList(), clientRecordIdsList = it)
+        }
+    }
 
     override suspend fun readDailySummary(date: LocalDate): HealthSummary {
         val hc = client ?: return HealthSummary(healthConnectStatus = availabilityMessage())
@@ -220,7 +244,10 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
             )
         }
         val weights = if (WEIGHT_PERMISSION in granted) {
-            readAllWeights(hc, range).map { record ->
+            readAllWeights(hc, range).filterNot { record ->
+                record.metadata.dataOrigin.packageName == context.packageName &&
+                    record.metadata.clientRecordId?.startsWith("dailycut-weight-") == true
+            }.map { record ->
                 val offset = record.zoneOffset ?: zone.rules.getOffset(record.time)
                 WeightEntry(
                     entryId = "health-connect-${record.metadata.id}",

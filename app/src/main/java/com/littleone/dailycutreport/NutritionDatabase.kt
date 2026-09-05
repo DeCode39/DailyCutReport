@@ -276,6 +276,12 @@ interface NutritionDao {
     @Query("SELECT * FROM user_goals WHERE id = 1") fun observeUserGoals(): Flow<UserGoalsEntity?>
     @Query("SELECT * FROM user_goals WHERE id = 1") suspend fun userGoals(): UserGoalsEntity?
     @Upsert suspend fun upsertUserGoals(goals: UserGoalsEntity)
+
+    @Transaction
+    suspend fun saveGoalAssistant(goals: UserGoalsEntity, state: String) {
+        upsertUserGoals(goals)
+        upsertMetadata(AppMetadataEntity(GoalAssistantState.KEY, state))
+    }
     @Query("SELECT * FROM health_profile WHERE id = 1") fun observeHealthProfile(): Flow<HealthProfileEntity?>
     @Query("SELECT * FROM health_profile WHERE id = 1") suspend fun healthProfile(): HealthProfileEntity?
     @Upsert suspend fun upsertHealthProfile(profile: HealthProfileEntity)
@@ -739,7 +745,8 @@ interface NutritionDao {
         goals: UserGoalsEntity,
         healthProfile: HealthProfileEntity = HealthProfileEntity(),
         weights: List<WeightEntryEntity> = emptyList(),
-        walking: List<WalkingSessionSampleEntity> = emptyList()
+        walking: List<WalkingSessionSampleEntity> = emptyList(),
+        goalAssistant: String? = null
     ) {
         clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts(); clearUserGoals()
         clearWeightEntries(); clearWalkingSamples(); clearHealthProfile()
@@ -752,6 +759,8 @@ interface NutritionDao {
         upsertHealthProfile(healthProfile)
         if (weights.isNotEmpty()) upsertWeightEntries(weights)
         if (walking.isNotEmpty()) upsertWalkingSamples(walking)
+        deleteMetadata(GoalAssistantState.KEY)
+        if (goalAssistant != null) upsertMetadata(AppMetadataEntity(GoalAssistantState.KEY, goalAssistant))
     }
 }
 

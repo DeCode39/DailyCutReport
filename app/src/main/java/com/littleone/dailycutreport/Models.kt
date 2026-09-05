@@ -87,6 +87,9 @@ data class UserGoals(
     }
 
     fun requireValid(): UserGoals = apply {
+        require(listOf(calories, expectedBurnCalories, desiredDeficitCalories, proteinG, sodiumMg, carbsG, fatG, sugarG, fiberG, saturatedFatG).all { it.isFinite() }) {
+            "Goals must be finite numbers."
+        }
         require(calories > 0.0) { "Calorie target must be greater than zero." }
         require(expectedBurnCalories > 0.0) { "Expected burn must be greater than zero." }
         require(desiredDeficitCalories >= 0.0) { "Desired deficit cannot be negative." }
