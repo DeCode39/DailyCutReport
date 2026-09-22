@@ -174,7 +174,7 @@ object BackupCrypto {
 object BackupJson {
     internal fun encodeGoals(goals: UserGoals): JSONObject = goals.toEntity().toJson()
     internal fun decodeGoals(json: JSONObject): UserGoals = goalsFromJson(json).toDomain()
-    private const val SCHEMA_VERSION = 7
+    private const val SCHEMA_VERSION = 8
 
     fun encode(payload: BackupPayload): String = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
@@ -248,6 +248,7 @@ object BackupJson {
         put("plannerItemType", plannerItemType); put("alwaysIncludeInPlanner", alwaysIncludeInPlanner)
         put("fixedPurchaseUnits", fixedPurchaseUnits)
         put("favorite", favorite)
+        putNullable("expiresAtEpochMs", expiresAtEpochMs)
         put("notes", notes); put("createdAt", createdAt); put("updatedAt", updatedAt)
     }
 
@@ -328,6 +329,7 @@ object BackupJson {
         alwaysIncludeInPlanner = o.optBoolean("alwaysIncludeInPlanner", false),
         fixedPurchaseUnits = o.optInt("fixedPurchaseUnits", 1).also { require(it in 1..6) },
         favorite = o.optBoolean("favorite", false),
+        expiresAtEpochMs = if (schema >= 8) o.optionalLong("expiresAtEpochMs")?.also { require(it > 0) } else null,
         notes = o.getString("notes"), createdAt = o.getLong("createdAt"), updatedAt = o.getLong("updatedAt")
         ).also {
             require(!it.alwaysIncludeInPlanner || it.includeInPlanner)

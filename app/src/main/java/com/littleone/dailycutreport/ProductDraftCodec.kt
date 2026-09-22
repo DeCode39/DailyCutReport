@@ -46,6 +46,7 @@ internal object ProductDraftCodec {
         put("alwaysIncludeInPlanner", value.draft.alwaysIncludeInPlanner)
         put("fixedPurchaseUnits", value.draft.fixedPurchaseUnits)
         put("favorite", value.draft.favorite)
+        put("oneTimeMeal", value.draft.oneTimeMeal)
         put("extras", value.draft.extras)
     }.toString()
 
@@ -86,6 +87,7 @@ internal object ProductDraftCodec {
             alwaysIncludeInPlanner = root.optBoolean("alwaysIncludeInPlanner"),
             fixedPurchaseUnits = root.optString("fixedPurchaseUnits", "1"),
             favorite = root.optBoolean("favorite"),
+            oneTimeMeal = root.optBoolean("oneTimeMeal"),
             extras = root.optString("extras"),
             ocrDraft = null
         )

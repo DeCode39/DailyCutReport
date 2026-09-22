@@ -9,11 +9,14 @@ import kotlin.math.roundToLong
 
 /** A compact, stable and barcode-free representation intended for clipboard export. */
 object DailyReportJson {
-    const val SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 3
 
     fun encode(state: TodayUiState): String {
         val report = state.report
         val root = JSONObject()
+            .put("internalBurnComparison", state.internalBurn?.toJson()?.apply {
+                keys().asSequence().filter { it.endsWith("Kcal") }.toList().forEach { key -> put(key, calories(getDouble(key))) }
+            } ?: JSONObject.NULL)
             .put("schemaVersion", SCHEMA_VERSION)
             .put("app", "DailyCutReport")
             .put("date", report.date.toString())

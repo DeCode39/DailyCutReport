@@ -18,7 +18,8 @@ data class HealthSummary(
     val healthConnectStatus: String = "Not loaded",
     /** Transient values used while refreshing; they are not persisted in daily_reports. */
     val providerFullDayCalories: Double? = null,
-    val recordedThroughEpochMs: Long? = null
+    val recordedThroughEpochMs: Long? = null,
+    val internalActivity: InternalActivity? = null
 )
 
 data class NutritionSummary(

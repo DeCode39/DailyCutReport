@@ -44,14 +44,15 @@ data class TodayUiState(
     val recommendations: RecommendationResult? = null,
     val planning: Boolean = false,
     val refreshing: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    val internalBurn: InternalBurnEstimate? = null
 ) {
     val calorieAllowance: Double? get() = goals.calorieAllowance(report.projectedBurnCalories)
     val targets: DailyNutritionTargets get() = goals.targetsFor(report.projectedBurnCalories)
     val planningAvailable: Boolean get() = calorieAllowance != null
 }
 
-private data class TodayReportState(val report: DailyReport, val forecast: BurnForecast?)
+private data class TodayReportState(val report: DailyReport, val forecast: BurnForecast?, val internal: InternalBurnEstimate?)
 
 private data class TodayTransientState(
     val message: String?,
@@ -77,8 +78,8 @@ class TodayViewModel(
 
     val uiState: StateFlow<TodayUiState> = combine(
         selectedDate.flatMapLatest { date ->
-            combine(repository.observeReport(date), repository.observeBurnForecast(date)) { report, forecast ->
-                TodayReportState(report, forecast)
+            combine(repository.observeReport(date), repository.observeBurnForecast(date), repository.observeInternalBurn(date)) { report, forecast, internal ->
+                TodayReportState(report, forecast, internal)
             }
         },
         selectedDate.flatMapLatest(repository::observeFoodLogs),
@@ -89,6 +90,7 @@ class TodayViewModel(
         TodayUiState(
             report = reportState.report,
             burnForecast = reportState.forecast,
+            internalBurn = reportState.internal,
             logs = logs,
             goals = goals,
             spending = spending,
@@ -162,6 +164,7 @@ data class ProductEditorDraft(
     val alwaysIncludeInPlanner: Boolean = false,
     val fixedPurchaseUnits: String = "1",
     val favorite: Boolean = false,
+    val oneTimeMeal: Boolean = false,
     val extras: String = "",
     val ocrDraft: OcrNutritionDraft? = null
 ) {
@@ -198,6 +201,7 @@ data class ProductEditorDraft(
                 alwaysIncludeInPlanner = product?.alwaysIncludeInPlanner ?: false,
                 fixedPurchaseUnits = (product?.fixedPurchaseUnits ?: 1).toString(),
                 favorite = product?.favorite ?: false,
+                oneTimeMeal = product?.expiresAtEpochMs != null,
                 extras = existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()
             )
         }
@@ -265,6 +269,18 @@ class FoodsViewModel(
     private val repository: DailyCutRepository,
     private val selectedDate: StateFlow<LocalDate>
 ) : ViewModel() {
+    val temporaryMeals = repository.observeTemporaryMeals()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun duplicateOneTime(product: ProductEntity) = viewModelScope.launch {
+        runCatching {
+            val source = repository.getProduct(product.productId) ?: error("Product unavailable")
+            val draft = ProductEditorDraft.create("", source, ProductSaveTarget.BULK_CART)
+                .copy(existing = null, barcode = "", oneTimeMeal = true, includeInPlanner = false,
+                    alwaysIncludeInPlanner = false, favorite = false)
+            requestProductEditor(draft, selectedDate.value)
+        }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not duplicate meal")) }
+    }
     private val query = MutableStateFlow("")
     private val workflow = MutableStateFlow<FoodWorkflowState>(FoodWorkflowState.Idle)
     private val bulkDraft = MutableStateFlow(BulkDraft())
@@ -1020,6 +1036,10 @@ data class SettingsUiState(
 )
 
 class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel() {
+    fun saveBodyProfile(profile: GoalAssistantProfile, onSuccess: () -> Unit) = viewModelScope.launch {
+        runCatching { repository.saveBodyProfile(profile) }.onSuccess { onSuccess() }
+            .onFailure { _uiState.value = _uiState.value.copy(message = it.message) }
+    }
     val goalAssistant = repository.observeGoalAssistant().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     private val _goalSuggestion = MutableStateFlow<GoalSuggestion?>(null)
     val goalSuggestion: StateFlow<GoalSuggestion?> = _goalSuggestion
@@ -1258,6 +1278,8 @@ class HealthViewModel(
     private val repository: DailyCutRepository,
     selectedDate: StateFlow<LocalDate>
 ) : ViewModel() {
+    val internalBurn = selectedDate.flatMapLatest(repository::observeInternalBurn)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     private val refreshing = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
     val uiState: StateFlow<HealthUiState> = combine(

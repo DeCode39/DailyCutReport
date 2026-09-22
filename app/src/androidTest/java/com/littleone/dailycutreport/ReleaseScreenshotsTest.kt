@@ -42,6 +42,19 @@ class ReleaseScreenshotsTest {
             repository.saveProduct(food, emptyList())
             repository.addProduct(today, ProductWithExtras(food), 1.0)
             repository.addManualWeight(today, LocalTime.of(8, 0), 75.0)
+            val temporary = food.copy(productId = "release-demo-temporary", name = "One-time cafe lunch",
+                expiresAtEpochMs = System.currentTimeMillis() + TEMPORARY_MEAL_LIFETIME_MS,
+                includeInPlanner = false)
+            repository.saveProduct(temporary, emptyList())
+            val profile = GoalAssistantProfile(30, 175.0, 75.0, GoalEquationSex.MALE, GoalActivity.LIGHT)
+            repository.saveBodyProfile(profile)
+            val now = java.time.Instant.now()
+            val forecast = BurnForecast(today, 1200.0, 2350.0, 2200.0, 2500.0,
+                BurnForecastSource.HISTORICAL_REMAINDER, BurnForecastConfidence.MEDIUM, 10, now.toEpochMilli())
+            dao.upsertMetadata(AppMetadataEntity(burnForecastMetadataKey(today), BurnForecastCodec.encode(forecast)))
+            val internal = InternalBurnEngine.estimate(today, now, java.time.ZoneId.systemDefault(), profile, 75.0,
+                InternalActivity(outsideDistanceKm = 4.8), listOf(10.0, 12.0, 11.0), "synthetic release demo weight")
+            dao.upsertMetadata(AppMetadataEntity(internalBurnKey(today), internal.toJson().toString()))
         }
         for (tab in listOf("Today", "Foods", "Health", "Settings")) {
             compose.onNode(hasText(tab) and hasClickAction() and

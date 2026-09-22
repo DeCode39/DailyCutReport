@@ -1,8 +1,17 @@
-# Daily Cut Report 0.15.0
+# Daily Cut Report 0.16.0
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
-## New in 0.15.0
+## New in 0.16.0
+
+- Add → **One-time meal** saves a temporary catalog entry for seven elapsed days. Expiry hides availability, never deletes products, carts, or historical logs. Turn the toggle off to keep permanently; the nutrition preview also offers **Duplicate as one-time meal** without changing the source's linked logs.
+- Foods has a collapsible recent one-time-meals section. Temporary entries are excluded from favorites/recent permanent foods and planning.
+- Health compares the existing Health Connect–based forecast with an independent local resting/activity model. **Planning still uses the existing forecast.** Body profile & goals stores one shared profile; saving the profile alone does not apply nutrition targets.
+- Resting expenditure uses Mifflin–St Jeor. The internal engine uses local time-bounded steps/distance and six general-effort exercise types, not provider calorie totals. Overlapping sessions are partitioned and exercise intervals excluded from ordinary walking. Unsupported sessions remain explicitly omitted.
+- Model assumptions: outside-session distance is walking (0.5 kcal/kg/km); steps fall back to 1,300/km; net exercise uses standard MET expenditure minus resting MET; background expenditure is an explicit 10% resting allowance. Remaining movement uses the median hourly rate from up to 28 completed internal estimates, or none without history. All comparisons are low-confidence estimates; ±25% is a sensitivity band, not a clinical confidence interval. See [model notes](docs/internal-burn-model.md).
+- Room **10** adds nullable product expiry. Backup **8** preserves expiry and imports schemas 1–7. Internal calculation caches remain excluded and are cleared on restore. Report JSON **3** includes both sources with integer calorie presentation. Browser storage **dcr_v9** migrates older data and preserves the body profile.
+
+## Previous: 0.15.0
 
 - Food cards have an eye action: hold for a temporary nutrition preview, or tap to keep it open. Preview amounts use one purchase unit with g/ml conversions; Favorite is inside the preview. Tap-to-cart and hold-to-edit remain unchanged.
 - Separate optional Health Connect **weight write** permission exports manual readings, with stable client IDs, increasing versions, serialized retries, and deletion reconciliation. Imported readings are not exported, and app-owned exports are excluded from import to prevent double counting.
@@ -12,7 +21,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 
 The assistant is an optional adult wellness estimate, not a clinical diet. Its defaults use [Mifflin–St Jeor](https://pubmed.ncbi.nlm.nih.gov/2305711/) for fallback energy, [the 2015 protein/weight-management review](https://pubmed.ncbi.nlm.nih.gov/25926512/) for the 1.6 g/kg protein starting point, and [WHO healthy-diet guidance](https://www.who.int/news-room/fact-sheets/detail/healthy-diet) for fiber/fat context. WHO free-sugar guidance is not applied to total-sugar labels. The eligibility checks and allocation choices are conservative app heuristics, not guarantees of safety or muscle retention. No source is fetched by the app: all calculations and Health Connect operations are local.
 
-The signed arm64 and universal APKs are distributed through GitHub prereleases. Back up before upgrading; schema-7 backups require 0.15.0 or newer.
+The signed arm64 and universal APKs are distributed through GitHub prereleases. Back up before upgrading; schema-8 backups require 0.16.0 or newer. Existing backup schemas 1–7 remain importable.
 
 ## Features
 

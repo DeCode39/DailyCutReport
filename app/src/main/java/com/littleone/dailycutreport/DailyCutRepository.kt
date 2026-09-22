@@ -22,8 +22,11 @@ interface DailyCutRepository {
     suspend fun initialize()
     fun observeReport(date: LocalDate): Flow<DailyReport>
     fun observeBurnForecast(date: LocalDate): Flow<BurnForecast?> = flowOf(null)
+    fun observeInternalBurn(date: LocalDate): Flow<InternalBurnEstimate?> = flowOf(null)
+    suspend fun saveBodyProfile(profile: GoalAssistantProfile) {}
     fun observeFoodLogs(date: LocalDate): Flow<List<FoodLogSnapshot>>
     fun observeProducts(query: String): Flow<List<ProductEntity>>
+    fun observeTemporaryMeals(): Flow<List<ProductEntity>> = flowOf(emptyList())
     fun observeRecentProducts(): Flow<List<ProductEntity>>
     fun observeFavoriteProducts(): Flow<List<ProductEntity>>
     fun observePlannerProducts(): Flow<List<ProductEntity>>
@@ -114,6 +117,39 @@ class DefaultDailyCutRepository(
     private val plannerSettingsMutex = Mutex()
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    override fun observeInternalBurn(date: LocalDate): Flow<InternalBurnEstimate?> =
+        dao.observeMetadata(internalBurnKey(date)).map(InternalBurnEstimate::decode)
+
+    override suspend fun saveBodyProfile(profile: GoalAssistantProfile) = withContext(Dispatchers.IO) {
+        goalAssistant.saveBody(profile)
+    }
+
+    private suspend fun saveInternalBurn(date: LocalDate, raw: HealthSummary) {
+        val profile = goalAssistant.state().profile ?: return
+        val activity = raw.internalActivity ?: run { dao.deleteMetadata(internalBurnKey(date)); return }
+        val through = raw.recordedThroughEpochMs?.let(Instant::ofEpochMilli) ?: Instant.now()
+        val weights = dao.allWeightEntries().filter {
+            it.date <= date.toString() && it.date >= date.minusDays(27).toString() &&
+                it.recordedAtEpochMs <= through.toEpochMilli() && it.weightKg.isFinite() && it.weightKg in 35.0..250.0
+        }
+        val latestDate = weights.maxOfOrNull { it.date }
+        val latestWeights = weights.filter { it.date == latestDate }.map { it.weightKg }.sorted()
+        val weight = if (latestWeights.isEmpty()) profile.weightKg else
+            (latestWeights[(latestWeights.size - 1) / 2] + latestWeights[latestWeights.size / 2]) / 2
+        val zone = ZoneId.systemDefault()
+        val history = (1L..28L).mapNotNull { offset ->
+            val day = date.minusDays(offset)
+            InternalBurnEstimate.decode(dao.metadata(internalBurnKey(day)))?.takeIf {
+                it.refreshedAtEpochMs >= day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() &&
+                    !it.explanation.contains("Movement data missing")
+            }?.let { (it.movementKcal + it.exerciseKcal) /
+                (java.time.Duration.between(day.atStartOfDay(zone), day.plusDays(1).atStartOfDay(zone)).seconds / 3600.0) }
+        }
+        val estimate = InternalBurnEngine.estimate(date, through, zone, profile, weight, activity, history,
+            if (latestDate == null) "body-profile weight (${profile.reviewedOn})" else "daily median weight ($latestDate)")
+        dao.upsertMetadata(AppMetadataEntity(internalBurnKey(date), estimate.toJson().toString()))
+    }
+
     override suspend fun initialize() = initializationMutex.withLock {
         if (initialized) return@withLock
         withContext(Dispatchers.IO) {
@@ -163,17 +199,33 @@ class DefaultDailyCutRepository(
             .map { logs -> logs.map(DailyFoodLogEntity::toDomainSnapshot) }
             .flowOn(Dispatchers.IO)
 
+    private val catalogClock = kotlinx.coroutines.flow.flow {
+        while (true) { emit(System.currentTimeMillis()); kotlinx.coroutines.delay(60_000) }
+    }
+
     override fun observeProducts(query: String): Flow<List<ProductEntity>> =
-        dao.observeProducts(query.trim().escapeLikePattern()).flowOn(Dispatchers.IO)
+        combine(dao.observePlannerProducts(), catalogClock) { products, now ->
+            val text = query.trim()
+            products.filter { it.isAvailableAt(now) && listOf(it.name, it.brand, it.barcode.orEmpty())
+                .any { value -> value.contains(text, ignoreCase = true) } }.take(100)
+        }.flowOn(Dispatchers.IO)
+
+    override fun observeTemporaryMeals(): Flow<List<ProductEntity>> =
+        combine(dao.observePlannerProducts(), catalogClock) { products, now ->
+            products.filter { it.expiresAtEpochMs != null && it.isAvailableAt(now) }
+                .sortedWith(compareByDescending<ProductEntity> { it.createdAt }.thenBy { it.productId })
+        }.flowOn(Dispatchers.IO)
 
     override fun observeRecentProducts(): Flow<List<ProductEntity>> =
-        dao.observeRecentProducts().flowOn(Dispatchers.IO)
+        combine(dao.observeRecentProducts(), catalogClock) { products, _ ->
+            products.filter { it.expiresAtEpochMs == null }
+        }.flowOn(Dispatchers.IO)
 
     override fun observePlannerProducts(): Flow<List<ProductEntity>> =
-        dao.observePlannerProducts().flowOn(Dispatchers.IO)
+        dao.observePlannerProducts().map { products -> products.filter { it.expiresAtEpochMs == null } }.flowOn(Dispatchers.IO)
 
     override fun observeFavoriteProducts(): Flow<List<ProductEntity>> =
-        dao.observeFavoriteProducts().flowOn(Dispatchers.IO)
+        dao.observeFavoriteProducts().map { products -> products.filter { it.expiresAtEpochMs == null } }.flowOn(Dispatchers.IO)
 
     override fun observeGoals(): Flow<UserGoals> = dao.observeUserGoals()
         .map { (it ?: UserGoalsEntity()).toDomain().sanitized() }
@@ -293,7 +345,7 @@ class DefaultDailyCutRepository(
                 "Projected burn must exceed the desired deficit before calories can be planned."
             }
         )
-        val products = withContext(Dispatchers.IO) { dao.allProducts() }
+        val products = withContext(Dispatchers.IO) { dao.allProducts().filter { it.expiresAtEpochMs == null } }
         mealPlanner.generate(
             products,
             PlannerDayContext(
@@ -347,6 +399,7 @@ class DefaultDailyCutRepository(
             val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
             dao.upsertDailyReport(existing.withHealth(summary))
             dao.upsertMetadata(AppMetadataEntity(burnForecastMetadataKey(date), BurnForecastCodec.encode(forecast)))
+            saveInternalBurn(date, raw)
         }
         DailyCutWidgetUpdater.updateAll(context)
     }
@@ -654,6 +707,7 @@ class DefaultDailyCutRepository(
                     imported.weights.map(WeightEntry::toEntity),
                     imported.walkingSessions.map(WalkingSessionSample::toEntity)
                 )
+                imported.dailySummaries.toSortedMap().forEach { (date, summary) -> saveInternalBurn(date, summary) }
                 dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_DAY_KEY, today.toString()))
                 dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_STATUS_KEY, java.time.Instant.now().toString()))
             }
@@ -662,7 +716,7 @@ class DefaultDailyCutRepository(
 
     override suspend fun ensureHealthBootstrap(): Result<Unit> = runCatching {
         if (!healthConnect.isAvailable() || !healthConnect.hasCorePermissions()) return@runCatching
-        val permissionFingerprint = "29:w${healthConnect.hasWeightPermission()}:n${healthConnect.hasNutritionPermission()}"
+        val permissionFingerprint = "37:w${healthConnect.hasWeightPermission()}:n${healthConnect.hasNutritionPermission()}"
         val complete = withContext(Dispatchers.IO) { dao.metadata(HEALTH_BOOTSTRAP_KEY) }
         if (complete == permissionFingerprint) return@runCatching
         syncHealthHistory(force = true).getOrThrow()

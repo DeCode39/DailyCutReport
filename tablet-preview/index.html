@@ -38,7 +38,7 @@
         <h2 id="productFormTitle">Product editor</h2>
         <div class="grid">
           <label>Barcode (optional)<span class="inline"><input id="productBarcode"><button id="previewBarcodeScan" type="button">Scan</button></span></label>
-          <label>Name<input id="productName"></label>
+          <label>Name<input id="productName"></label><label><input id="productOneTime" type="checkbox"> One-time meal · available for seven days, history retained</label>
           <label>Brand<input id="productBrand"></label>
           <label>Serving label<input id="productServing" value="1 serving"></label>
           <label>Quantity basis<select id="productQuantityMode"><option value="SERVING_ONLY">Servings only</option><option value="WEIGHT_ONLY">Weight only</option><option value="VOLUME_ONLY">Volume only</option><option value="SERVING_AND_WEIGHT">Servings + weight</option><option value="SERVING_AND_VOLUME">Servings + volume</option></select></label>
@@ -109,6 +109,13 @@
       </div>
 
       <div id="settings-goals" class="settings-page hidden">
+        <article class="card"><h2>Body profile · internal burn</h2>
+          <div class="grid"><label>Age<input id="bodyAge" type="number" min="18" max="100"></label>
+          <label>Height (cm)<input id="bodyHeight" type="number" min="120" max="230"></label>
+          <label>Fallback weight (kg)<input id="bodyWeight" type="number" min="35" max="250" step="any"></label>
+          <label>Equation parameter<select id="bodySex"><option value="FEMALE">Female</option><option value="MALE">Male</option></select></label></div>
+          <button id="saveBodyProfile">Save body profile only</button><p class="muted">Does not change goals. Estimates are not medical measurements. Android supports time-bounded Health Connect activity.</p>
+        </article>
         <button class="settings-back" data-settings-back>← Settings</button>
         <article class="card"><h2>Goals and daily budget</h2><div class="grid">
           <label>Goal mode<select id="goalMode"><option value="CALORIE">Calorie</option><option value="DEFICIT">Deficit</option></select></label>
@@ -156,7 +163,7 @@
 
       <div id="settings-about" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
-        <article class="card"><h2>About</h2><p>DailyCutReport 0.15.0 · database schema 9 · backup schema 7.</p><p>Health Connect, goal-assistant configuration, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
+        <article class="card"><h2>About</h2><p>DailyCutReport 0.16.0 · database schema 10 · backup schema 8.</p><p>Health Connect, goal-assistant configuration, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
       </div>
     </section>
   </main>

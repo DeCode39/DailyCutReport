@@ -12,6 +12,18 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NutritionMigrationTest {
+    @Test fun migrationNineToTenKeepsPermanentProductsAndLogData() {
+        helper.createDatabase("migration-9-10", 9).apply {
+            execSQL("INSERT INTO app_metadata (`key`,value) VALUES ('test-preserved','yes')")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("migration-9-10", 10, true, NutritionDatabase.MIGRATION_9_10)
+        db.query("SELECT value FROM app_metadata WHERE `key`='test-preserved'").use {
+            it.moveToFirst(); assertEquals("yes", it.getString(0))
+        }
+        db.query("SELECT expiresAtEpochMs FROM products").close()
+        db.close()
+    }
     @get:Rule
     val helper = MigrationTestHelper(
         InstrumentationRegistry.getInstrumentation(),

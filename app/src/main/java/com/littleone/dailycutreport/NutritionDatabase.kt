@@ -44,6 +44,7 @@ data class ProductEntity(
     val alwaysIncludeInPlanner: Boolean = false,
     val fixedPurchaseUnits: Int = 1,
     val favorite: Boolean = false,
+    val expiresAtEpochMs: Long? = null,
     val notes: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -318,6 +319,7 @@ interface NutritionDao {
     @Query("""
         SELECT p.* FROM products p
         JOIN daily_food_logs f ON f.productId = p.productId
+        WHERE p.expiresAtEpochMs IS NULL
         GROUP BY p.productId
         ORDER BY MAX(f.loggedAt) DESC
         LIMIT 10
@@ -326,7 +328,7 @@ interface NutritionDao {
     @Query("""
         SELECT p.* FROM products p
         LEFT JOIN daily_food_logs f ON f.productId = p.productId
-        WHERE p.favorite = 1
+        WHERE p.favorite = 1 AND p.expiresAtEpochMs IS NULL
         GROUP BY p.productId
         ORDER BY MAX(f.loggedAt) IS NULL, MAX(f.loggedAt) DESC, p.updatedAt DESC, p.productId
         LIMIT 5
@@ -704,6 +706,8 @@ interface NutritionDao {
     @Query("SELECT value FROM app_metadata WHERE `key` = :key LIMIT 1") fun observeMetadata(key: String): Flow<String?>
     @Upsert suspend fun upsertMetadata(metadata: AppMetadataEntity)
     @Query("DELETE FROM app_metadata WHERE `key` = :key") suspend fun deleteMetadata(key: String)
+    @Query("DELETE FROM app_metadata WHERE `key` GLOB 'internal_burn_v1_*' OR `key` GLOB 'burn_forecast_v1:*'")
+    suspend fun clearBurnComparisonCaches()
     @Query("""
         UPDATE daily_reports
         SET manualFoodCalories = NULL,
@@ -750,6 +754,7 @@ interface NutritionDao {
     ) {
         clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts(); clearUserGoals()
         clearWeightEntries(); clearWalkingSamples(); clearHealthProfile()
+        clearBurnComparisonCaches()
         products.forEach { upsertProduct(it) }
         if (productExtras.isNotEmpty()) upsertExtraNutrients(productExtras)
         if (reports.isNotEmpty()) insertDailyReports(reports)
@@ -769,7 +774,7 @@ interface NutritionDao {
         DailyFoodLogEntity::class, DailyExtraNutrientLogEntity::class, AppMetadataEntity::class,
         UserGoalsEntity::class, HealthProfileEntity::class, WeightEntryEntity::class,
         WalkingSessionSampleEntity::class],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class NutritionDatabase : RoomDatabase() {
@@ -914,11 +919,17 @@ abstract class NutritionDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE products ADD COLUMN expiresAtEpochMs INTEGER DEFAULT NULL")
+            }
+        }
+
         fun get(context: Context): NutritionDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(context.applicationContext, NutritionDatabase::class.java, "dailycut_nutrition.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
                 ).build().also { INSTANCE = it }
         }
     }

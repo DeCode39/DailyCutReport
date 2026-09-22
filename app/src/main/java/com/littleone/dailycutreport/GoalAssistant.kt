@@ -17,10 +17,12 @@ data class GoalAssistantProfile(
     val locks: Set<SuggestedTarget> = emptySet(),
     val reviewedOn: LocalDate = LocalDate.now()
 ) {
-    fun validate() = apply {
+    fun validateBody() = apply {
         require(age in 18..100) { "Goal suggestions are for adults aged 18–100." }
         require(heightCm.isFinite() && heightCm in 120.0..230.0) { "Enter height between 120 and 230 cm." }
         require(weightKg.isFinite() && weightKg in 35.0..250.0) { "Enter weight between 35 and 250 kg." }
+    }
+    fun validate() = validateBody().apply {
         require(weightKg / (heightCm * heightCm / 10000) >= 18.5) { "Weight-loss suggestions are unavailable below BMI 18.5." }
     }
 }
@@ -35,8 +37,7 @@ object NutritionGoalEngine {
         current.requireValid()
         val weight = recentWeightKg?.takeIf { it.isFinite() && it in 35.0..250.0 } ?: profile.weightKg
         profile.copy(weightKg = weight).validate()
-        val resting = 10 * weight + 6.25 * profile.heightCm - 5 * profile.age +
-            if (profile.equationSex == GoalEquationSex.MALE) 5 else -161
+        val resting = RestingEnergyEngine.calculate(profile, weight)
         val burn = historicalBurn?.takeIf { it.isFinite() && it > 0 } ?: resting * profile.activity.multiplier
         val allowance = if (SuggestedTarget.CALORIES in profile.locks) current.calories else burn - current.desiredDeficitCalories
         require(allowance >= 1200 && current.desiredDeficitCalories <= burn * 0.3) {
@@ -97,7 +98,7 @@ object GoalAssistantCodec {
             profile = p?.let { GoalAssistantProfile(it.getInt("age"), it.getDouble("heightCm"), it.getDouble("weightKg"),
                 GoalEquationSex.valueOf(it.getString("sex")), GoalActivity.valueOf(it.getString("activity")), it.getBoolean("adaptive"),
                 it.getJSONArray("locks").let { a -> (0 until a.length()).map { n -> SuggestedTarget.valueOf(a.getString(n)) }.toSet() },
-                LocalDate.parse(it.getString("reviewedOn"))).validate() },
+                LocalDate.parse(it.getString("reviewedOn"))).validateBody() },
             baseline = BackupJson.decodeGoals(o.getJSONObject("baseline")),
             history = h.keys().asSequence().associate { LocalDate.parse(it) to BackupJson.decodeGoals(h.getJSONObject(it)) },
             previous = o.optJSONObject("previous")?.let(BackupJson::decodeGoals),

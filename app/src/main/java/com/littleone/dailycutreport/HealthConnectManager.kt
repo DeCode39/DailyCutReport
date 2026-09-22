@@ -186,8 +186,62 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
             nutritionRecords = nutritionRecords.size,
             healthConnectStatus = nutritionStatus,
             providerFullDayCalories = providerFullDayCalories,
-            recordedThroughEpochMs = end.toEpochMilli()
+            recordedThroughEpochMs = end.toEpochMilli(),
+            internalActivity = readInternalActivity(hc, start, end, sessions)
         )
+    }
+
+    private suspend fun readInternalActivity(
+        hc: HealthConnectClient, start: Instant, end: Instant, sessions: List<ExerciseSessionRecord>
+    ): InternalActivity? = try {
+        calculateInternalActivity(hc, start, end, sessions)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (_: Exception) {
+        // The experimental comparison must not block the authoritative Health Connect refresh.
+        android.util.Log.w("InternalBurn", "Activity comparison unavailable during refresh")
+        null
+    }
+
+    private suspend fun calculateInternalActivity(
+        hc: HealthConnectClient, start: Instant, end: Instant, sessions: List<ExerciseSessionRecord>
+    ): InternalActivity {
+        if (end <= start) return InternalActivity()
+        val intervals = sessions.mapNotNull { session ->
+            val a = maxOf(start, session.startTime)
+            val b = minOf(end, session.endTime)
+            if (b <= a) null else Triple(a, b, exerciseMet(session.exerciseType))
+        }
+        val slices = activitySlices(start, end, intervals.map { ExerciseInterval(it.first, it.second, it.third) })
+        var steps: Long? = null
+        var distance: Double? = null
+        var netHours = 0.0
+        var overlap = false
+        for (slice in slices) {
+            val a = slice.start; val b = slice.end
+            if (slice.sessions > 0) {
+                overlap = overlap || slice.sessions > 1
+                val met = slice.met
+                if (met != null) netHours += (met - 1.0).coerceAtLeast(0.0) * Duration.between(a, b).seconds / 3600.0
+            } else {
+                val aggregate = hc.aggregate(AggregateRequest(
+                    metrics = setOf(StepsRecord.COUNT_TOTAL, DistanceRecord.DISTANCE_TOTAL),
+                    timeRangeFilter = TimeRangeFilter.between(a, b)))
+                aggregate[StepsRecord.COUNT_TOTAL]?.let { steps = (steps ?: 0L) + it }
+                aggregate[DistanceRecord.DISTANCE_TOTAL]?.inKilometers?.let { distance = (distance ?: 0.0) + it }
+            }
+        }
+        return InternalActivity(distance, steps, netHours, intervals.count { it.third == null }, overlap)
+    }
+
+    /** Conservative general-effort entries; unknown session types remain explicitly unsupported. */
+    private fun exerciseMet(type: Int): Double? = when (type) {
+        ExerciseSessionRecord.EXERCISE_TYPE_WALKING -> 3.8
+        ExerciseSessionRecord.EXERCISE_TYPE_RUNNING -> 7.5
+        ExerciseSessionRecord.EXERCISE_TYPE_BIKING -> 6.8
+        ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_POOL -> 5.8
+        ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING -> 3.5
+        ExerciseSessionRecord.EXERCISE_TYPE_YOGA -> 2.3
+        else -> null
     }
 
     override suspend fun readHealthHistory(startDate: LocalDate, endDate: LocalDate): HealthHistoryImport {
@@ -240,7 +294,10 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                 nutritionRecords = dayNutrition.size,
                 healthConnectStatus = if (NUTRITION_PERMISSION in granted) {
                     "Activity and nutrition history loaded from Health Connect"
-                } else "Activity history loaded from Health Connect"
+                } else "Activity history loaded from Health Connect",
+                recordedThroughEpochMs = minOf(dayEnd, Instant.now()).toEpochMilli(),
+                internalActivity = readInternalActivity(hc, dayStart, minOf(dayEnd, Instant.now()),
+                    sessions.filter { it.startTime < dayEnd && it.endTime > dayStart })
             )
         }
         val weights = if (WEIGHT_PERMISSION in granted) {

@@ -35,6 +35,15 @@ internal class GoalAssistantStore(private val dao: NutritionDao) {
 
     suspend fun preview(profile: GoalAssistantProfile): GoalSuggestion = suggestion(profile, current(), LocalDate.now())
 
+    suspend fun saveBody(profile: GoalAssistantProfile) = mutex.withLock {
+        profile.validateBody()
+        val old = state()
+        dao.upsertMetadata(AppMetadataEntity(GoalAssistantState.KEY, GoalAssistantCodec.encode(old.copy(
+            profile = profile.copy(adaptive = old.profile?.adaptive ?: false, locks = old.profile?.locks ?: emptySet()),
+            status = "Body profile saved; nutrition targets unchanged. Refresh Health to compare burn estimates."
+        ))))
+    }
+
     private suspend fun suggestion(profile: GoalAssistantProfile, current: UserGoals, today: LocalDate): GoalSuggestion {
         fun median(values: List<Double>): Double? = values.sorted().takeIf { it.isNotEmpty() }?.let {
             (it[(it.size - 1) / 2] + it[it.size / 2]) / 2

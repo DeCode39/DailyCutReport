@@ -1,4 +1,6 @@
 package com.littleone.dailycutreport
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.testTag
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
@@ -209,6 +211,7 @@ internal fun TodayScreen(
                     state.burnForecast?.takeIf { it.isEstimate }?.liveBurnCalories?.let {
                         MetricRow("Recorded so far", "${formatCalories(it)} kcal")
                     }
+                    Text("Internal comparison: ${state.internalBurn?.finalKcal?.let(::formatCalories) ?: "Unavailable"} kcal · details in Health", style = MaterialTheme.typography.bodySmall)
                     MetricRow("Food", "${formatCalories(state.report.finalFoodCalories)} kcal")
                     MetricRow("Protein", "${formatDecimal(state.report.finalProteinG)} g")
                     MetricRow("Sodium", "${formatDecimal(state.report.finalSodiumMg)} mg")
@@ -366,6 +369,8 @@ internal fun FoodsScreen(
     onCreateProduct: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val temporaryMeals by viewModel.temporaryMeals.collectAsStateWithLifecycle()
+    var showTemporaryMeals by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(floatingActionButton = {
         FloatingActionButton(onClick = onCreateProduct) { Text("Add") }
@@ -402,6 +407,16 @@ internal fun FoodsScreen(
                 Text("Tap a product to add one purchase unit. Hold to edit.", style = MaterialTheme.typography.bodySmall)
             }
             if (state.query.isBlank()) {
+                if (temporaryMeals.isNotEmpty()) {
+                    item {
+                        TextButton(onClick = { showTemporaryMeals = !showTemporaryMeals }) {
+                            Text("Recent one-time meals (${temporaryMeals.size}) · ${if (showTemporaryMeals) "Hide" else "Show"}")
+                        }
+                    }
+                    if (showTemporaryMeals) items(temporaryMeals, key = { "temporary-${it.productId}" }) {
+                        ProductCatalogRow(it, state.goals.currencyCode, viewModel)
+                    }
+                }
                 val favoriteIds = state.favoriteProducts.map(ProductEntity::productId).toSet()
                 if (state.favoriteProducts.isNotEmpty()) {
                     item { Text("Favorites", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
@@ -998,6 +1013,7 @@ internal fun HealthScreen(
     onMessage: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val internalBurn by viewModel.internalBurn.collectAsStateWithLifecycle()
     val dashboard = state.dashboard
     var showWeightEntry by remember { mutableStateOf(false) }
     var showWeightManager by remember { mutableStateOf(false) }
@@ -1022,6 +1038,7 @@ internal fun HealthScreen(
             item { Text("Loading local health history…") }
         } else {
             item { DeficitSummaryCard(dashboard) }
+            item { BurnComparisonCard(internalBurn, dashboard.burnForecast, dashboard.intakeCalories) }
             item { WeightAndProjectionCard(dashboard, onManage = { showWeightManager = true }) }
             item { WalkingGuidanceCard(dashboard) }
             item {
@@ -1365,7 +1382,7 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
 
 internal enum class SettingsPage(val route: String, val title: String, val summary: String) {
     GOALS("settings/goals", "Goals & budget", "Calories, deficit, macros, currency, and weight target"),
-    GOAL_ASSISTANT("settings/goal-assistant", "Goal assistant", "Reviewed suggestions for weight loss with muscle retention"),
+    GOAL_ASSISTANT("settings/goal-assistant", "Body profile & goals", "Internal burn comparison and optional nutrition suggestions"),
     PLANNER("settings/planner", "Planner", "Choose included, fixed, food, and drink products"),
     HEALTH_CONNECT("settings/health-connect", "Health Connect", "Permissions, refresh, bootstrap, and nutrition sync"),
     PRODUCT_JSON("settings/product-json", "Product JSON", "Copy the schema for fast AI-assisted product entry"),
@@ -1503,7 +1520,7 @@ internal fun SettingsScreen(
             SettingsPage.ABOUT -> item {
                 Column(Modifier.padding(18.dp)) {
                     Text("DailyCutReport ${packageInfo.versionName}", fontWeight = FontWeight.Bold)
-                    Text("Database schema 9 · Build ${packageInfo.longVersionCode}")
+                    Text("Database schema 10 · Backup schema 8 · Build ${packageInfo.longVersionCode}")
                 }
             }
         }
@@ -1911,11 +1928,13 @@ internal fun ProductEditorScreen(
             saturatedFatG = draft.saturatedFat.number(),
             purchasePriceMicros = parsedPrice,
             purchaseUnitServings = parsedPurchaseServings ?: 1.0,
-            includeInPlanner = draft.includeInPlanner,
+            includeInPlanner = draft.includeInPlanner && !draft.oneTimeMeal,
             plannerItemType = draft.plannerItemType.name,
-            alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner,
+            alwaysIncludeInPlanner = draft.alwaysIncludeInPlanner && !draft.oneTimeMeal,
             fixedPurchaseUnits = parsedFixedUnits ?: 1,
-            favorite = draft.favorite,
+            favorite = draft.favorite && !draft.oneTimeMeal,
+            expiresAtEpochMs = if (draft.oneTimeMeal) product?.expiresAtEpochMs
+                ?: (System.currentTimeMillis() + TEMPORARY_MEAL_LIFETIME_MS) else null,
             notes = product?.notes.orEmpty(),
             createdAt = product?.createdAt ?: System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
@@ -1998,6 +2017,12 @@ internal fun ProductEditorScreen(
                     keyboardActions = formFocus.actions("name"),
                     modifier = Modifier.fillMaxWidth().formImeField("name", formFocus)
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(draft.oneTimeMeal, { onDraftChange(draft.copy(oneTimeMeal = it)) }, modifier = Modifier.testTag("one-time-meal"))
+                    Text("One-time meal · available for 7 days", Modifier.padding(start = 8.dp))
+                }
+                Text(if (draft.oneTimeMeal) "Hidden after seven days; logged history and cart items stay safe. Not used in planning. Turn off to keep permanently."
+                    else "Saved permanently in your catalog.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     draft.brand, { onDraftChange(draft.copy(brand = it)) }, label = { Text("Brand") },
                     singleLine = true, keyboardOptions = KeyboardOptions(imeAction = formFocus.action("brand")),

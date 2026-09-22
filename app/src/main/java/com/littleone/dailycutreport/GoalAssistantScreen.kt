@@ -19,7 +19,8 @@ internal fun GoalAssistantScreen(viewModel: SettingsViewModel) {
     var editing by rememberSaveable { mutableStateOf(false) }
     val saved = state?.profile
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Weight loss · muscle retention", style = MaterialTheme.typography.titleLarge)
+        Text("Body profile & goal assistant", style = MaterialTheme.typography.titleLarge)
+        Text("One shared profile for internal burn and optional weight-loss targets. Saving the profile alone never applies suggested goals.")
         Text(state?.status ?: "Choose a profile, review the estimates, then apply once or adapt daily.")
         Text("Estimates for generally healthy adults, not medical prescriptions. Not for pregnancy, breastfeeding, eating disorders, or conditions requiring a clinical diet. Strength training also matters for muscle retention.", style = MaterialTheme.typography.bodySmall)
         if (saved != null && !editing) {
@@ -53,6 +54,11 @@ internal fun GoalAssistantScreen(viewModel: SettingsViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GoalEquationSex.entries.forEach { option -> FilterChip(sex == option, { sex = option; invalidate() }, label = { Text(option.name.lowercase()) }) }
             }
+            OutlinedButton(onClick = {
+                runCatching { GoalAssistantProfile(age.toIntOrNull() ?: 0, height.toDoubleOrNull() ?: 0.0,
+                    weight.toDoubleOrNull() ?: 0.0, sex, activity, locks = locks).validateBody() }
+                    .onSuccess { viewModel.saveBodyProfile(it) { editing = false } }.onFailure { error = it.message }
+            }) { Text("Save body profile only") }
             Text("Usual activity · used until seven completed burn days are available")
             GoalActivity.entries.forEach { option ->
                 FilterChip(activity == option, { activity = option; invalidate() }, label = { Text("${option.name.lowercase()} · ×${option.multiplier}") })

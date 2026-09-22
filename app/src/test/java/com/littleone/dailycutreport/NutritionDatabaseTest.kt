@@ -29,6 +29,19 @@ class NutritionDatabaseTest {
 
     @After fun tearDown() = database.close()
 
+    @Test fun expiredProductsRemainAvailableToCartAndHistoryButNotRecentCatalog() = runBlocking {
+        val dao = database.nutritionDao()
+        val product = ProductEntity("temporary", name = "One-time", calories = 100.0, expiresAtEpochMs = 1)
+        dao.saveProductWithExtras(product, emptyList())
+        assertNotNull(dao.productById(product.productId))
+        assertEquals(emptyList<ProductEntity>(), dao.observeRecentProducts().first())
+        val backup = BackupPayload(listOf(product), emptyList(), emptyList(), emptyList(), emptyList())
+        dao.upsertMetadata(AppMetadataEntity(internalBurnKey(java.time.LocalDate.now()), "stale"))
+        dao.replaceUserData(backup.products, backup.productExtras, backup.reports, backup.foodLogs, backup.dailyExtras, backup.goals)
+        assertEquals(null, dao.metadata(internalBurnKey(java.time.LocalDate.now())))
+        assertEquals(1L, dao.productById(product.productId)?.expiresAtEpochMs)
+    }
+
     @Test fun editingProductDoesNotDeleteHistoricalFoodLogs() = runBlocking {
         val dao = database.nutritionDao()
         val original = ProductEntity(productId = "123", barcode = "123", name = "Original", calories = 100.0)
@@ -250,7 +263,8 @@ class NutritionDatabaseTest {
                 NutritionDatabase.MIGRATION_5_6,
                 NutritionDatabase.MIGRATION_6_7,
                 NutritionDatabase.MIGRATION_7_8,
-                NutritionDatabase.MIGRATION_8_9
+                NutritionDatabase.MIGRATION_8_9,
+                NutritionDatabase.MIGRATION_9_10
             )
             .allowMainThreadQueries().build()
         migrated.openHelper.writableDatabase

@@ -379,7 +379,12 @@ private fun ProductNutritionPreview(product: ProductEntity, currencyCode: String
         product.purchasePriceMicros?.let { Text("Catalog price ${formatMoney(it, currencyCode)}") }
         details?.extras?.forEach { Text("${it.name}: ${(it.value * amount).toDisplay()} ${it.unit}") }
         if (extrasError) Text("Extra nutrients could not be loaded.", color = MaterialTheme.colorScheme.error)
-        TextButton(onClick = { viewModel.toggleFavorite(product) }) {
+        product.expiresAtEpochMs?.let { expiry ->
+            Text("Available until ${java.time.Instant.ofEpochMilli(expiry).atZone(java.time.ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd MMM HH:mm"))}")
+            TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit / keep permanently") }
+        }
+        TextButton(onClick = { viewModel.duplicateOneTime(product) }) { Text("Duplicate as one-time meal") }
+        if (product.expiresAtEpochMs == null) TextButton(onClick = { viewModel.toggleFavorite(product) }) {
             Text(if (product.favorite) "★ Remove favorite" else "☆ Favorite")
         }
     }
