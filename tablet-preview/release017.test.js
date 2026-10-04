@@ -20,3 +20,7 @@ test('nutrition verification separates warnings from hard errors and never mutat
   assert.throws(()=>M.upsertProduct(M.empty('2026-10-04'),{name:'Food',calories:NaN}));
   assert.ok(M.nutritionReview({name:'Food',quantityMode:'WEIGHT_ONLY'}).errors.length);
 });
+test('legacy decimal-comma serving labels remain conservative conversion metadata',()=>{
+  const state=M.empty('2026-10-04');state.products.food={productId:'food',name:'Food',servingLabel:'1 serving (40,5 g)'};
+  M.seed(state);assert.equal(state.products.food.measurePerServing,40.5);
+});
