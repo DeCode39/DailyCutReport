@@ -28,8 +28,13 @@ class TemporaryMealUiTest {
         compose.onNodeWithText("Save & continue").assertIsDisplayed().performClick()
         // AlertDialog uses a separate Android window. Its layout can become visible after
         // the Compose click finishes, even when the composition itself is already idle.
-        compose.waitUntil(timeoutMillis = 5_000) {
-            runCatching { compose.onNodeWithText("Save anyway").assertIsDisplayed(); true }.getOrDefault(false)
+        try {
+            compose.waitUntil(timeoutMillis = 5_000) {
+                runCatching { compose.onNodeWithText("Save anyway").assertIsDisplayed(); true }.getOrDefault(false)
+            }
+        } catch (failure: Throwable) {
+            throw AssertionError("Save review did not open; draft=$draft; saved=$saved\n" +
+                compose.onRoot(useUnmergedTree = true).printToString(), failure)
         }
         compose.onNodeWithText("Review nutrition").assertIsDisplayed()
         compose.onNodeWithText("Save anyway").performClick()
