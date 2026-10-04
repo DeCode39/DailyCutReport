@@ -26,4 +26,11 @@ class NumericEntryTest {
             assertEquals("0", (-0.0).toEntryText(locale))
         }
     }
+    @Test fun extrasDoNotSplitSpaceGroupingIntoAnIncorrectUnit() {
+        assertEquals(1140.0, parseProductExtras("food", "Potassium=1,140 mg", Locale.TAIWAN).single().value, 0.0)
+        val french = parseProductExtras("food", "Potassium=1\u202f140,25 mg", Locale.FRANCE).single()
+        assertEquals(1140.25, french.value, 0.0)
+        assertEquals("mg", french.unit)
+        assertThrows(IllegalArgumentException::class.java) { parseProductExtras("food", "=10 mg", Locale.US) }
+    }
 }

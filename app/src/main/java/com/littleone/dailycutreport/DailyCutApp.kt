@@ -2435,15 +2435,4 @@ private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
         else -> "0 kcal"
     }
 }
-private fun parseExtras(productId: String, value: String): List<ProductExtraNutrientEntity> = value.lineSequence().mapNotNull { line ->
-    if (line.isBlank()) return@mapNotNull null
-    val parts = line.split('=', limit = 2)
-    require(parts.size == 2) { "Extra nutrients must use Name=value unit, one per line." }
-    val amount = parts[1].trim().split(Regex("\\s+"), limit = 2)
-    val number = amount.firstOrNull()?.let(::parseEntryNumber)
-        ?: error("Enter a valid number for ${parts[0].trim()}.")
-    require(number >= 0) { "Extra nutrients cannot be negative." }
-    val name = parts[0].trim()
-    require(name.isNotBlank()) { "Extra nutrient names cannot be blank." }
-    ProductExtraNutrientEntity(productId, name, number, amount.getOrNull(1).orEmpty())
-}.toList()
+private fun parseExtras(productId: String, value: String): List<ProductExtraNutrientEntity> = parseProductExtras(productId, value)
