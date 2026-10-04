@@ -81,6 +81,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -1591,6 +1594,8 @@ internal fun PlannerSettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var reviewOnly by remember { mutableStateOf(false) }
+    var search by remember { mutableStateOf(TextFieldValue(state.query)) }
+    val searchFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { viewModel.events.collect(onMessage) }
@@ -1602,16 +1607,18 @@ internal fun PlannerSettingsScreen(
         item {
             ToggleRow("Review possible nutrition issues", reviewOnly) { reviewOnly = it }
             OutlinedTextField(
-                value = state.query,
-                onValueChange = viewModel::setQuery,
+                value = search,
+                onValueChange = { search = it; viewModel.setQuery(it.text) },
                 label = { Text("Search food database") },
-                trailingIcon = if (state.query.isNotEmpty()) ({ IconButton(onClick = { viewModel.setQuery("") }) {
+                trailingIcon = if (search.text.isNotEmpty()) ({ IconButton(onClick = {
+                    search = TextFieldValue(""); viewModel.setQuery(""); searchFocus.requestFocus(); keyboard?.show()
+                }) {
                     Icon(painterResource(R.drawable.ic_clear), contentDescription = "Clear database search")
                 } }) else null,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus(); keyboard?.hide() }),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().focusRequester(searchFocus)
             )
             Text(
                 "${state.visibleProducts.size} product${if (state.visibleProducts.size == 1) "" else "s"}",

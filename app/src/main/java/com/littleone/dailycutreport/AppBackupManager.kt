@@ -210,6 +210,7 @@ object BackupJson {
         val walking = if (schema >= 3) root.getJSONArray("walkingSessions").objects(::walkingFromJson) else emptyList()
         validateHealth(weights, walking)
         val assistant = if (schema >= 7) root.optJSONObject("goalAssistant")?.let { GoalAssistantCodec.decode(it.toString()) } else null
+        require(!root.has("deletedProductIds") || root.get("deletedProductIds") is JSONArray) { "Invalid deleted food IDs." }
         val deleted = root.optJSONArray("deletedProductIds")?.let { ids ->
             (0 until ids.length()).map { ids.getString(it).also { id -> require(id.isNotBlank() && id.length <= 256) } }
         }.orEmpty()

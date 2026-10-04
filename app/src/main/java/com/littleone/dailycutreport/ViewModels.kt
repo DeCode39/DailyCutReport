@@ -203,7 +203,7 @@ data class ProductEditorDraft(
                 fixedPurchaseUnits = (product?.fixedPurchaseUnits ?: 1).toString(),
                 favorite = product?.favorite ?: false,
                 oneTimeMeal = product?.expiresAtEpochMs != null,
-                extras = existing?.extras?.joinToString("\n") { "${it.name}=${it.value} ${it.unit}" }.orEmpty()
+                extras = existing?.extras?.joinToString("\n") { "${it.name}=${it.value.toEntryText()} ${it.unit}" }.orEmpty()
             )
         }
     }
