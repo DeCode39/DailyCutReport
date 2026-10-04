@@ -6,11 +6,13 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.After
 import java.lang.reflect.Proxy
 import java.time.LocalDate
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FoodsWorkflowTest {
+    @After fun restoreMainDispatcherAfterRunTestFinishes() { Dispatchers.resetMain() }
     private val date = LocalDate.of(2026, 10, 4)
     private val product = ProductEntity("food", name = "Food", quantityMode = QuantityMode.SERVING_AND_WEIGHT.name,
         measurePerServing = 40.0, purchaseUnitServings = 2.0, purchasePriceMicros = 10_000_000L)
@@ -52,7 +54,7 @@ class FoodsWorkflowTest {
             assertTrue(fake.writes.isEmpty())
             assertEquals(pending, vm.uiState.value.recoverableDraft)
             assertEquals(FoodWorkflowState.Idle, vm.uiState.value.workflow)
-        } finally { store.clear(); Dispatchers.resetMain() }
+        } finally { store.clear(); runCurrent() }
     }
 
     @Test fun copyUsesPhysicalAmountAndNeverCopiesCheckoutPayment() = runTest {
@@ -70,7 +72,7 @@ class FoodsWorkflowTest {
             assertEquals(QuantityUnit.GRAMS, cart.items.single().quantityInput.activeUnit)
             assertEquals(80.0, cart.items.single().quantityInput.enteredAmount!!, 0.0)
             assertTrue(vm.uiState.value.cartVisible)
-        } finally { store.clear(); Dispatchers.resetMain() }
+        } finally { store.clear(); runCurrent() }
     }
 
     @Test fun lastAmountAndCartUndoKeepPurchaseDefaultsAndAreOneShot() = runTest {
@@ -91,6 +93,6 @@ class FoodsWorkflowTest {
             val action = requireNotNull(undo)
             vm.undo(action); vm.undo(action); runCurrent()
             assertEquals(1.5, vm.uiState.value.bulkDraft.items.single().quantity!!, 0.0)
-        } finally { store.clear(); Dispatchers.resetMain() }
+        } finally { store.clear(); runCurrent() }
     }
 }
