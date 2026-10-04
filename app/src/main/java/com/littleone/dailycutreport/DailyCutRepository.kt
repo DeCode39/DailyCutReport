@@ -19,6 +19,10 @@ import java.time.ZoneId
 import java.time.Instant
 
 interface DailyCutRepository {
+    suspend fun productUsage(productId: String): ProductUsage = ProductUsage()
+    suspend fun deleteCatalogProduct(productId: String): ProductUsage = error("Food deletion unavailable")
+    suspend fun lastLoggedAmount(productId: String): FoodLogSnapshot? = null
+    suspend fun foodLogsForDate(date: LocalDate): List<FoodLogSnapshot> = emptyList()
     suspend fun initialize()
     fun observeReport(date: LocalDate): Flow<DailyReport>
     fun observeBurnForecast(date: LocalDate): Flow<BurnForecast?> = flowOf(null)
@@ -105,6 +109,19 @@ class DefaultDailyCutRepository(
     private val catalogImporter: ProductCatalogImporter,
     private val backupManager: AppBackupManager
 ) : DailyCutRepository {
+    override suspend fun productUsage(productId: String): ProductUsage = withContext(Dispatchers.IO) {
+        val logs = dao.linkedLogs(productId)
+        ProductUsage(logs.size, logs.map { it.date }.toSet().size)
+    }
+    override suspend fun deleteCatalogProduct(productId: String): ProductUsage = withContext(Dispatchers.IO) {
+        plannerSettingsMutex.withLock { dao.deleteCatalogProduct(productId) }
+    }
+    override suspend fun lastLoggedAmount(productId: String): FoodLogSnapshot? = withContext(Dispatchers.IO) {
+        dao.linkedLogs(productId).maxByOrNull { it.loggedAt }?.toDomainSnapshot()
+    }
+    override suspend fun foodLogsForDate(date: LocalDate): List<FoodLogSnapshot> = withContext(Dispatchers.IO) {
+        dao.foodLogsForDate(date.toString()).map { it.toDomainSnapshot() }
+    }
     private val initializationMutex = Mutex()
     private var initialized = false
     private val nutritionSync = NutritionSyncCoordinator(dao, healthConnect)
@@ -222,7 +239,7 @@ class DefaultDailyCutRepository(
         }.flowOn(Dispatchers.IO)
 
     override fun observePlannerProducts(): Flow<List<ProductEntity>> =
-        dao.observePlannerProducts().map { products -> products.filter { it.expiresAtEpochMs == null } }.flowOn(Dispatchers.IO)
+        dao.observePlannerProducts().flowOn(Dispatchers.IO)
 
     override fun observeFavoriteProducts(): Flow<List<ProductEntity>> =
         dao.observeFavoriteProducts().map { products -> products.filter { it.expiresAtEpochMs == null } }.flowOn(Dispatchers.IO)
@@ -414,6 +431,8 @@ class DefaultDailyCutRepository(
 
     override suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult = withContext(Dispatchers.IO) {
         plannerSettingsMutex.withLock {
+            val review = NutritionVerifier.review(product, extras)
+            require(review.errors.isEmpty()) { review.errors.joinToString(" ") }
             require(product.purchasePriceMicros == null || product.purchasePriceMicros >= 0L) { "Price cannot be negative." }
             require(product.purchaseUnitServings > 0.0) { "Minimum purchase servings must be greater than zero." }
             val quantitySpec = product.quantitySpec()
@@ -525,7 +544,7 @@ class DefaultDailyCutRepository(
         }
         if (decoded == null) {
             dao.deleteMetadata(PRODUCT_DRAFT_KEY)
-            error("The unfinished product draft was invalid or its product no longer exists, so it was discarded.")
+            return@withContext null
         }
         decoded
     }

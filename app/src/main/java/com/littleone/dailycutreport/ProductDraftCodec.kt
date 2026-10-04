@@ -12,7 +12,7 @@ data class PendingProductDraft(
 internal object ProductDraftCodec {
     private const val SCHEMA_VERSION = 1
 
-    fun isMeaningful(draft: ProductEditorDraft): Boolean = draft.existing != null || listOf(
+    fun isMeaningful(draft: ProductEditorDraft): Boolean = draft.existing == null && listOf(
         draft.barcode, draft.name, draft.brand, draft.measurePerServing, draft.calories,
         draft.protein, draft.sodium, draft.carbs, draft.fat, draft.sugar, draft.fiber,
         draft.saturatedFat, draft.purchasePrice, draft.extras
@@ -58,6 +58,7 @@ internal object ProductDraftCodec {
         require(root.optInt("schemaVersion") == SCHEMA_VERSION)
         val date = LocalDate.parse(root.getString("destinationDate")).coerceAtMost(LocalDate.now())
         val existingId = root.optString("existingProductId").takeIf(String::isNotBlank)
+        require(existingId == null) { "Only new products are recoverable." }
         val existing = existingId?.let { requireNotNull(productLookup(it)) }
         val storedTarget = ProductSaveTarget.valueOf(root.getString("saveTarget"))
         val target = if (storedTarget == ProductSaveTarget.MULTI_SCAN_QUEUE) ProductSaveTarget.BULK_CART else storedTarget

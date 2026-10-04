@@ -117,13 +117,13 @@ data class QuantityInputState(
         return when (unit) {
             QuantityUnit.SERVINGS -> copy(
                 servingsText = value,
-                measureText = parsed?.let { amount -> spec.measureUnit?.let { spec.amountFor(amount, it)?.toDisplay() } }
+                measureText = parsed?.let { amount -> spec.measureUnit?.let { spec.amountFor(amount, it)?.toEntryText() } }
                     ?: measureText,
                 activeUnit = unit
             )
             else -> copy(
                 measureText = value,
-                servingsText = parsed?.let { spec.servingsFor(it, unit)?.toDisplay() } ?: servingsText,
+                servingsText = parsed?.let { spec.servingsFor(it, unit)?.toEntryText() } ?: servingsText,
                 activeUnit = unit
             )
         }
@@ -132,8 +132,8 @@ data class QuantityInputState(
     fun withServings(servings: Double, active: QuantityUnit = activeUnit): QuantityInputState {
         val safeActive = spec.preferredOrFallback(active)
         return copy(
-            servingsText = servings.toDisplay(),
-            measureText = spec.measureUnit?.let { spec.amountFor(servings, it)?.toDisplay() }.orEmpty(),
+            servingsText = servings.toEntryText(),
+            measureText = spec.measureUnit?.let { spec.amountFor(servings, it)?.toEntryText() }.orEmpty(),
             activeUnit = safeActive
         )
     }
@@ -142,8 +142,8 @@ data class QuantityInputState(
         fun forProduct(product: ProductEntity, servings: Double = product.purchaseUnitServings): QuantityInputState {
             val spec = product.quantitySpec()
             return QuantityInputState(
-                servingsText = servings.toDisplay(),
-                measureText = spec.measureUnit?.let { spec.amountFor(servings, it)?.toDisplay() }.orEmpty(),
+                servingsText = servings.toEntryText(),
+                measureText = spec.measureUnit?.let { spec.amountFor(servings, it)?.toEntryText() }.orEmpty(),
                 activeUnit = spec.preferredOrFallback(product.preferredQuantityUnit()),
                 spec = spec
             )
@@ -153,11 +153,11 @@ data class QuantityInputState(
             val spec = log.quantitySpec()
             val unit = QuantityUnit.entries.firstOrNull { it.name == log.enteredUnit } ?: QuantityUnit.SERVINGS
             val measureText = when {
-                unit != QuantityUnit.SERVINGS && spec.supports(unit) -> log.enteredAmount.toDisplay()
-                else -> spec.measureUnit?.let { spec.amountFor(log.quantity, it)?.toDisplay() }.orEmpty()
+                unit != QuantityUnit.SERVINGS && spec.supports(unit) -> log.enteredAmount.toEntryText()
+                else -> spec.measureUnit?.let { spec.amountFor(log.quantity, it)?.toEntryText() }.orEmpty()
             }
             return QuantityInputState(
-                servingsText = log.quantity.toDisplay(),
+                servingsText = log.quantity.toEntryText(),
                 measureText = measureText,
                 activeUnit = spec.preferredOrFallback(unit),
                 spec = spec
@@ -166,7 +166,7 @@ data class QuantityInputState(
     }
 }
 
-private fun String.quantityNumber(): Double? = trim().replace(',', '.').toDoubleOrNull()?.takeIf(Double::isFinite)
+private fun String.quantityNumber(): Double? = parseEntryNumber(this)
 
 internal data class InferredQuantitySpec(
     val spec: ProductQuantitySpec,

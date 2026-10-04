@@ -63,6 +63,17 @@ class ProductDraftJsonTest {
         )
     }
 
+    @Test fun numericJsonPreservesPrecisionAndRejectsFormattedStrings() {
+        val draft = ProductEditorDraft().withProductJson("""{"schemaVersion":2,"product":{"name":"Food","calories":1140,"proteinG":0.123456789}}""")
+        assertEquals("1140", draft.calories)
+        assertEquals("0.123456789", draft.protein)
+        for (field in listOf("calories", "purchasePrice", "purchaseUnitServings", "measurePerServing", "fixedPurchaseUnits")) {
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                ProductEditorDraft().withProductJson("""{"schemaVersion":2,"product":{"name":"Food","$field":"1,140"}}""")
+            }
+        }
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectsNegativeNutrition() {
         ProductEditorDraft().withProductJson(

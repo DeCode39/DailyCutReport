@@ -384,6 +384,25 @@ interface NutritionDao {
     suspend fun linkedDates(productId: String): List<String>
     @Query("SELECT * FROM daily_food_logs WHERE productId = :productId")
     suspend fun linkedLogs(productId: String): List<DailyFoodLogEntity>
+    @Query("UPDATE daily_food_logs SET productId = NULL WHERE productId = :productId")
+    suspend fun detachProductLogs(productId: String)
+    @Query("DELETE FROM products WHERE productId = :productId")
+    suspend fun deleteCatalogProductRow(productId: String): Int
+    @Query("SELECT SUBSTR(`key`, 17) FROM app_metadata WHERE `key` GLOB 'deleted_product:*'")
+    suspend fun deletedProductIds(): List<String>
+    @Query("DELETE FROM app_metadata WHERE `key` GLOB 'deleted_product:*'")
+    suspend fun clearDeletedProductIds()
+
+    @Transaction
+    suspend fun deleteCatalogProduct(productId: String): ProductUsage {
+        requireNotNull(productById(productId)) { "Food no longer exists." }
+        val logs = linkedLogs(productId)
+        detachProductLogs(productId)
+        clearExtraNutrients(productId)
+        check(deleteCatalogProductRow(productId) == 1)
+        upsertMetadata(AppMetadataEntity("deleted_product:$productId", "deleted"))
+        return ProductUsage(logs.size, logs.map { it.date }.toSet().size)
+    }
     @Query("DELETE FROM daily_extra_nutrient_logs WHERE logId = :logId")
     suspend fun clearDailyExtrasForLog(logId: Long)
 
@@ -434,7 +453,8 @@ interface NutritionDao {
     suspend fun importSeedProducts(products: List<ProductWithExtras>, markerKey: String) {
         if (metadata(markerKey) == "complete") return
         products.forEach { item ->
-            if (insertProductIfMissing(item.product) != -1L && item.extras.isNotEmpty()) {
+            if (metadata("deleted_product:${item.product.productId}") == null &&
+                insertProductIfMissing(item.product) != -1L && item.extras.isNotEmpty()) {
                 insertExtraNutrientsIfMissing(item.extras)
             }
         }
@@ -750,11 +770,14 @@ interface NutritionDao {
         healthProfile: HealthProfileEntity = HealthProfileEntity(),
         weights: List<WeightEntryEntity> = emptyList(),
         walking: List<WalkingSessionSampleEntity> = emptyList(),
-        goalAssistant: String? = null
+        goalAssistant: String? = null,
+        deletedProductIds: List<String> = emptyList()
     ) {
         clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts(); clearUserGoals()
         clearWeightEntries(); clearWalkingSamples(); clearHealthProfile()
         clearBurnComparisonCaches()
+        clearDeletedProductIds()
+        deletedProductIds.forEach { upsertMetadata(AppMetadataEntity("deleted_product:$it", "deleted")) }
         products.forEach { upsertProduct(it) }
         if (productExtras.isNotEmpty()) upsertExtraNutrients(productExtras)
         if (reports.isNotEmpty()) insertDailyReports(reports)

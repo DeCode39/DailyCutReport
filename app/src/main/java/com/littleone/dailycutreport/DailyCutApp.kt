@@ -1,4 +1,6 @@
 package com.littleone.dailycutreport
+
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.testTag
 
@@ -154,7 +156,9 @@ internal fun TodayScreen(
     onEditLog: (FoodLogSnapshot) -> Unit,
     onDeleteLog: (Long) -> Unit,
     onDeleteGroup: (String) -> Unit,
-    onMessage: (String) -> Unit
+    onMessage: (String) -> Unit,
+    onCopyDay: () -> Unit,
+    onCopyGroup: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -289,7 +293,16 @@ internal fun TodayScreen(
                 }
             }
         }
-        item { Text("Food log", style = MaterialTheme.typography.titleLarge) }
+        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Food log", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(painterResource(R.drawable.ic_more), contentDescription = "Food log actions") }
+                DropdownMenu(menu, { menu = false }) {
+                    DropdownMenuItem(text = { Text("Copy previous day to cart") }, onClick = { menu = false; onCopyDay() })
+                }
+            }
+        } }
         if (state.logs.isEmpty()) item { Text("No food entries for this date.") }
         items(state.logs.groupForDisplay(), key = FoodLogGroup::key) { group ->
             when (group) {
@@ -300,7 +313,8 @@ internal fun TodayScreen(
                 )
                 is FoodLogGroup.Bulk -> BulkFoodLogCard(
                     group, state.goals.currencyCode, onEditLog, onDeleteLog,
-                    onDeleteGroup = { onDeleteGroup(group.mealId) }
+                    onDeleteGroup = { onDeleteGroup(group.mealId) },
+                    onCopy = { onCopyGroup(group.mealId) }
                 )
             }
         }
@@ -539,6 +553,15 @@ internal fun FoodWorkflowDialogs(
     }
     when (val workflow = state.workflow) {
         FoodWorkflowState.Idle -> Unit
+        is FoodWorkflowState.DeleteProduct -> AlertDialog(
+            onDismissRequest = viewModel::cancelDialogs,
+            title = { Text("Delete ${workflow.product.name}?") },
+            text = { Text("Used in ${workflow.usage.entries} logged entries across ${workflow.usage.dates} days. " +
+                "Historical nutrition and spending will stay unchanged; those entries will no longer follow product corrections." +
+                if (workflow.inCart) " This food will also be removed from the pending cart." else "") },
+            confirmButton = { TextButton(onClick = viewModel::confirmDeleteProduct) { Text("Delete food") } },
+            dismissButton = { TextButton(onClick = viewModel::cancelDialogs) { Text("Cancel") } }
+        )
         is FoodWorkflowState.ConfirmQuantity -> QuantityDialog(
             workflow.product,
             state.goals.currencyCode,
@@ -596,7 +619,7 @@ private fun MultiScanReviewDialog(
                         state = item.quantityInput,
                         onChange = { unit, value -> onQuantity(item.product.productId, unit, value) },
                         onPurchaseUnit = {
-                            onQuantity(item.product.productId, QuantityUnit.SERVINGS, item.product.purchaseUnitServings.toDisplay())
+                            onQuantity(item.product.productId, QuantityUnit.SERVINGS, item.product.purchaseUnitServings.toEntryText())
                         },
                         coordinator = formFocus,
                         fieldKeyPrefix = "multi-${item.product.productId}"
@@ -672,7 +695,8 @@ private fun BulkFoodLogCard(
     currencyCode: String,
     onEdit: (FoodLogSnapshot) -> Unit,
     onDelete: (Long) -> Unit,
-    onDeleteGroup: () -> Unit
+    onDeleteGroup: () -> Unit,
+    onCopy: () -> Unit
 ) {
     var expanded by remember(group.mealId) { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
@@ -696,6 +720,7 @@ private fun BulkFoodLogCard(
                         Icon(painterResource(R.drawable.ic_more), contentDescription = "Bulk order actions")
                     }
                     DropdownMenu(menuExpanded, { menuExpanded = false }) {
+                        DropdownMenuItem(text = { Text("Copy to cart") }, onClick = { menuExpanded = false; onCopy() })
                         DropdownMenuItem(
                             text = { Text("Delete entire order") },
                             onClick = { menuExpanded = false; onDeleteGroup() }
@@ -1383,7 +1408,7 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
 internal enum class SettingsPage(val route: String, val title: String, val summary: String) {
     GOALS("settings/goals", "Goals & budget", "Calories, deficit, macros, currency, and weight target"),
     GOAL_ASSISTANT("settings/goal-assistant", "Body profile & goals", "Internal burn comparison and optional nutrition suggestions"),
-    PLANNER("settings/planner", "Planner", "Choose included, fixed, food, and drink products"),
+    PLANNER("settings/planner", "Food database", "Edit foods and manage planning preferences"),
     HEALTH_CONNECT("settings/health-connect", "Health Connect", "Permissions, refresh, bootstrap, and nutrition sync"),
     PRODUCT_JSON("settings/product-json", "Product JSON", "Copy the schema for fast AI-assisted product entry"),
     BACKUP("settings/backup", "Backup & restore", "Encrypted local export and device migration"),
@@ -1560,9 +1585,12 @@ private fun SettingsPageHeader(title: String, onBack: () -> Unit) {
 internal fun PlannerSettingsScreen(
     viewModel: PlannerSettingsViewModel,
     onBack: () -> Unit,
-    onMessage: (String) -> Unit
+    onMessage: (String) -> Unit,
+    onEdit: (ProductEntity) -> Unit,
+    onDelete: (ProductEntity) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var reviewOnly by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { viewModel.events.collect(onMessage) }
@@ -1572,10 +1600,14 @@ internal fun PlannerSettingsScreen(
     ) {
         item { SettingsPageHeader(SettingsPage.PLANNER.title, onBack) }
         item {
+            ToggleRow("Review possible nutrition issues", reviewOnly) { reviewOnly = it }
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::setQuery,
-                label = { Text("Search planner products") },
+                label = { Text("Search food database") },
+                trailingIcon = if (state.query.isNotEmpty()) ({ IconButton(onClick = { viewModel.setQuery("") }) {
+                    Icon(painterResource(R.drawable.ic_clear), contentDescription = "Clear database search")
+                } }) else null,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus(); keyboard?.hide() }),
@@ -1586,13 +1618,17 @@ internal fun PlannerSettingsScreen(
                 style = MaterialTheme.typography.bodySmall
             )
         }
-        items(state.visibleProducts, key = ProductEntity::productId) { product ->
+        items(state.visibleProducts.filter { !reviewOnly || NutritionVerifier.review(it).let { r -> r.errors.isNotEmpty() || r.warnings.isNotEmpty() } }, key = ProductEntity::productId) { product ->
             val itemType = PlannerItemType.entries.firstOrNull { it.name == product.plannerItemType }
                 ?: PlannerItemType.FOOD
             val fixedText = state.amountDrafts[product.productId] ?: product.fixedPurchaseUnits.toString()
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(product.name, fontWeight = FontWeight.Bold)
+                    Row {
+                        TextButton(onClick = { onEdit(product) }) { Text("Edit") }
+                        TextButton(onClick = { onDelete(product) }) { Text("Delete") }
+                    }
                     product.brand.takeIf(String::isNotBlank)?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall)
                     }
@@ -1600,26 +1636,29 @@ internal fun PlannerSettingsScreen(
                         "One purchase unit = ${product.purchaseUnitServings.toDisplay()} serving(s)",
                         style = MaterialTheme.typography.bodySmall
                     )
-                    ToggleRow("Include in planning", product.includeInPlanner) {
+                    if (product.expiresAtEpochMs != null) Text("One-time meal · not used in planning", style = MaterialTheme.typography.bodySmall)
+                    ToggleRow("Include in planning", product.includeInPlanner, enabled = product.expiresAtEpochMs == null) {
                         viewModel.setIncluded(product, it)
                     }
                     Text("Item type", style = MaterialTheme.typography.labelLarge)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(
                             selected = itemType == PlannerItemType.FOOD,
-                            onClick = { viewModel.setItemType(product, PlannerItemType.FOOD) }
+                            onClick = { viewModel.setItemType(product, PlannerItemType.FOOD) },
+                            enabled = product.expiresAtEpochMs == null
                         )
                         Text("Food", Modifier.weight(1f))
                         RadioButton(
                             selected = itemType == PlannerItemType.DRINK,
-                            onClick = { viewModel.setItemType(product, PlannerItemType.DRINK) }
+                            onClick = { viewModel.setItemType(product, PlannerItemType.DRINK) },
+                            enabled = product.expiresAtEpochMs == null
                         )
                         Text("Drink")
                     }
                     ToggleRow(
                         "Fixed in strict plans",
                         product.alwaysIncludeInPlanner,
-                        enabled = product.includeInPlanner
+                        enabled = product.includeInPlanner && product.expiresAtEpochMs == null
                     ) { viewModel.setFixed(product, it) }
                     if (product.alwaysIncludeInPlanner) {
                         DecimalField("Fixed purchase units (1–6)", fixedText) {
@@ -1656,7 +1695,7 @@ private fun GoalsSettingsCard(
     var budget by remember(goals) { mutableStateOf(goals.dailyBudgetMicros.toMoneyInput()) }
     var weightUnit by remember(profile) { mutableStateOf(profile.weightUnit) }
     var targetWeight by remember(profile) {
-        mutableStateOf(profile.targetWeightKg?.let(profile.weightUnit::fromKg)?.let(::formatDecimal).orEmpty())
+        mutableStateOf(profile.targetWeightKg?.let(profile.weightUnit::fromKg)?.toEntryText().orEmpty())
     }
     val formFocus = rememberFormFocusCoordinator(
         FormImeSpec("calories", mode == GoalMode.CALORIE),
@@ -1722,7 +1761,7 @@ private fun GoalsSettingsCard(
                         onClick = {
                             if (weightUnit != unit) {
                                 targetWeight.numberOrNull()?.let { value ->
-                                    targetWeight = formatDecimal(unit.fromKg(weightUnit.toKg(value)))
+                                    targetWeight = unit.fromKg(weightUnit.toKg(value)).toEntryText()
                                 }
                                 weightUnit = unit
                             }
@@ -1871,9 +1910,41 @@ internal fun ProductEditorScreen(
     onScanBarcode: () -> Unit,
     onScanNutrition: () -> Unit,
     onDismiss: () -> Unit,
+    onBack: () -> Unit = onDismiss,
+    linkedUsage: ProductUsage = ProductUsage(),
     onSave: (ProductEntity, List<ProductExtraNutrientEntity>, Double) -> Unit
 ) {
     val product = draft.existing?.product
+    val initialDraft = remember(product?.productId) {
+        if (product == null) draft.copy(ocrDraft = null)
+        else ProductEditorDraft.create(product.barcode.orEmpty(), draft.existing, draft.saveTarget)
+    }
+    var showDiscardEdit by remember { mutableStateOf(false) }
+    val requestBack = {
+        if (product != null && draft.copy(ocrDraft = null) != initialDraft) showDiscardEdit = true
+        else onBack()
+    }
+    BackHandler(onBack = requestBack)
+    if (showDiscardEdit) AlertDialog(
+        onDismissRequest = { showDiscardEdit = false },
+        title = { Text("Discard changes?") },
+        text = { Text("Your saved food has not changed.") },
+        confirmButton = { TextButton(onClick = { showDiscardEdit = false; onDismiss() }) { Text("Discard changes") } },
+        dismissButton = { TextButton(onClick = { showDiscardEdit = false }) { Text("Keep editing") } }
+    )
+    var pendingReview by remember { mutableStateOf<Pair<ProductEntity, List<ProductExtraNutrientEntity>>?>(null) }
+    pendingReview?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingReview = null },
+            title = { Text("Review nutrition") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                NutritionVerifier.review(pending.first, pending.second).warnings.forEach { Text(it) }
+                if (product != null) Text("Saving nutrition corrections updates linked historical entries.")
+            } },
+            confirmButton = { TextButton(onClick = { pendingReview = null; onSave(pending.first, pending.second, 1.0) }) { Text("Save anyway") } },
+            dismissButton = { TextButton(onClick = { pendingReview = null }) { Text("Review values") } }
+        )
+    }
     var showJsonImport by remember { mutableStateOf(false) }
     var quantityModeExpanded by remember { mutableStateOf(false) }
     var jsonInput by remember { mutableStateOf("") }
@@ -1902,7 +1973,7 @@ internal fun ProductEditorScreen(
         FormImeSpec("purchase-measure", quantitySpec.measureAvailable),
         FormImeSpec("fixed-units", draft.alwaysIncludeInPlanner)
     )
-    val valid = draft.name.isNotBlank() && nutrientInputs.all { it.isBlank() || it.numberOrNull() != null } &&
+    val valid = draft.name.isNotBlank() && nutrientInputs.all { it.isBlank() || (it.numberOrNull()?.let { n -> n >= 0 } == true) } &&
         (draft.purchasePrice.isBlank() || parsedPrice != null) && parsedPurchaseServings != null &&
         (!draft.quantityMode.measureAvailable || parsedMeasure != null) &&
         parsedFixedUnits != null
@@ -1939,7 +2010,13 @@ internal fun ProductEditorScreen(
             createdAt = product?.createdAt ?: System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
-        onSave(entity, parseExtras(productId, draft.extras), 1.0)
+        runCatching {
+            val extras = parseExtras(productId, draft.extras)
+            val review = NutritionVerifier.review(entity, extras)
+            require(review.errors.isEmpty()) { review.errors.joinToString(" ") }
+            if (review.warnings.isNotEmpty()) pendingReview = entity to extras
+            else onSave(entity, extras, 1.0)
+        }.onFailure { validationError = it.message ?: "Check nutrition values." }
     }
 
     Scaffold(
@@ -1947,7 +2024,9 @@ internal fun ProductEditorScreen(
             TopAppBar(
                 title = { Text(if (product == null) "New product" else "Edit product") },
                 navigationIcon = {
-                    TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = onDismiss) { Text("Cancel") }
+                    TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = {
+                        if (product != null) requestBack() else onDismiss()
+                    }) { Text("Cancel") }
                 },
                 actions = {
                     TextButton(
@@ -1962,7 +2041,7 @@ internal fun ProductEditorScreen(
                                     "sodium" to draft.sodium, "carbs" to draft.carbs,
                                     "fat" to draft.fat, "sugar" to draft.sugar,
                                     "fiber" to draft.fiber, "saturated-fat" to draft.saturatedFat
-                                ).firstOrNull { (_, text) -> text.isNotBlank() && text.numberOrNull() == null }?.first
+                                ).firstOrNull { (_, text) -> text.isNotBlank() && (text.numberOrNull()?.let { it >= 0 } != true) }?.first
                                 val invalidKey = when {
                                     draft.name.isBlank() -> "name"
                                     draft.quantityMode.measureAvailable && parsedMeasure == null -> "measure"
@@ -1997,6 +2076,10 @@ internal fun ProductEditorScreen(
                 validationError?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
+                if (product != null && linkedUsage.entries > 0) Text(
+                    "Nutrition corrections update ${linkedUsage.entries} linked entries across ${linkedUsage.dates} days. Historical prices stay unchanged.",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 OutlinedTextField(
                     draft.barcode,
                     { onDraftChange(draft.copy(barcode = it)) },
@@ -2053,7 +2136,7 @@ internal fun ProductEditorScreen(
                                         servingLabel = servingLabel,
                                         preferredLogUnit = preferred,
                                         purchaseMeasure = spec.measureUnit
-                                            ?.let { spec.amountFor(draft.purchaseServings.numberOrNull() ?: 1.0, it)?.toDisplay() }.orEmpty()
+                                            ?.let { spec.amountFor(draft.purchaseServings.numberOrNull() ?: 1.0, it)?.toEntryText() }.orEmpty()
                                     ))
                                     quantityModeExpanded = false
                                 }
@@ -2087,7 +2170,7 @@ internal fun ProductEditorScreen(
                                 measurePerServing = value,
                                 servingLabel = servingLabel,
                                 purchaseMeasure = measure?.let { amount ->
-                                    draft.purchaseServings.numberOrNull()?.let { servings -> (amount * servings).toDisplay() }
+                                    draft.purchaseServings.numberOrNull()?.let { servings -> (amount * servings).toEntryText() }
                                 } ?: draft.purchaseMeasure
                             ))
                         },
@@ -2275,6 +2358,12 @@ internal fun DecimalField(
         ),
         keyboardActions = localCoordinator.actions(fieldKey),
         singleLine = true,
+        isError = value.isNotBlank() && parseEntryNumber(value) == null,
+        supportingText = if (value.isNotBlank() && (parseEntryNumber(value) == null || value.contains(java.text.DecimalFormatSymbols.getInstance().groupingSeparator))) ({
+            val parsed = parseEntryNumber(value)
+            Text(parsed?.let { "Value: ${formatDecimal(it)}" }
+                ?: "Use your local decimal separator and complete thousands groups.")
+        }) else null,
         modifier = Modifier.fillMaxWidth().formImeField(fieldKey, localCoordinator)
     )
 }
@@ -2324,10 +2413,10 @@ internal fun QuantityInputFields(
     }
 }
 
-private fun String.numberOrNull(): Double? = trim().replace(',', '.').takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+private fun String.numberOrNull(): Double? = parseEntryNumber(this)
 private fun String.number(): Double = numberOrNull() ?: 0.0
-private fun Double.toInput(): String = if (this == 0.0) "" else toString()
-private fun Double.toReviewInput(): String = if (this == 0.0) "0" else toString()
+private fun Double.toInput(): String = toEntryText()
+private fun Double.toReviewInput(): String = toDisplay()
 internal fun Double.toDisplay(): String = formatDecimal(this)
 private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
     EnergyBalance.Unavailable -> "Add Health Connect burn data"
@@ -2340,10 +2429,14 @@ private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
     }
 }
 private fun parseExtras(productId: String, value: String): List<ProductExtraNutrientEntity> = value.lineSequence().mapNotNull { line ->
+    if (line.isBlank()) return@mapNotNull null
     val parts = line.split('=', limit = 2)
-    if (parts.size != 2) return@mapNotNull null
+    require(parts.size == 2) { "Extra nutrients must use Name=value unit, one per line." }
     val amount = parts[1].trim().split(Regex("\\s+"), limit = 2)
-    val number = amount.firstOrNull()?.replace(',', '.')?.toDoubleOrNull() ?: return@mapNotNull null
+    val number = amount.firstOrNull()?.let(::parseEntryNumber)
+        ?: error("Enter a valid number for ${parts[0].trim()}.")
+    require(number >= 0) { "Extra nutrients cannot be negative." }
     val name = parts[0].trim()
-    if (name.isBlank()) null else ProductExtraNutrientEntity(productId, name, number, amount.getOrNull(1).orEmpty())
+    require(name.isNotBlank()) { "Extra nutrient names cannot be blank." }
+    ProductExtraNutrientEntity(productId, name, number, amount.getOrNull(1).orEmpty())
 }.toList()

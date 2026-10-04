@@ -1,8 +1,18 @@
-# Daily Cut Report 0.16.0
+# Daily Cut Report 0.17.0
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
-## New in 0.16.0
+## New in 0.17.0
+
+- Foods and Food database searches have a clear action without losing keyboard focus. The cart offers **Use last amount**, removal **Undo**, and Today can copy yesterday or a grouped order into the cart for review. Copies use current catalog nutrition and never reuse actual-paid checkout totals.
+- Settings → **Food database** retains planner preferences and adds Edit, Delete, and a possible-nutrition-issues filter. Deletion shows linked entry/date counts, detaches historical snapshots without changing nutrition or costs, and removes a pending cart item only after confirmation. Bundled foods stay deleted across restarts and new backups.
+- Only meaningful **new-product** drafts are recoverable. Existing edits close directly when unchanged, and request Discard/Keep editing when changed; barcode/OCR child routes preserve the active editor.
+- Strict locale-aware number entry accepts complete grouping (e.g. English/Taiwan `1,140 → 1140`) and rejects malformed separators. Editors use exact ungrouped values; display rounding never changes nutrition or costs. Product JSON requires actual JSON numbers, not formatted strings.
+- Local deterministic nutrition checks reject invalid/negative/non-finite values and invalid measurement bases. Improbable label relationships show a review prompt with **Save anyway**; no corrections are guessed and no existing data is rewritten.
+- Version code **38**. Room remains **10**, encrypted backup **8**, product JSON **2**, report JSON **3**, browser storage **dcr_v9**. Backup deletion markers are optional and old backups remain importable. Existing old backups cannot record catalog deletions made after they were created.
+- Health Connect, burn forecasting, planner scoring, bundled OCR, barcode recognition, signing identity, and offline permissions remain unchanged.
+
+## Previous: 0.16.0
 
 - Add → **One-time meal** saves a temporary catalog entry for seven elapsed days. Expiry hides availability, never deletes products, carts, or historical logs. Turn the toggle off to keep permanently; the nutrition preview also offers **Duplicate as one-time meal** without changing the source's linked logs.
 - Foods has a collapsible recent one-time-meals section. Temporary entries are excluded from favorites/recent permanent foods and planning.
@@ -34,7 +44,7 @@ The signed arm64 and universal APKs are distributed through GitHub prereleases. 
 - The idle Foods catalog shows up to five recently used favorites followed by five recently logged products that do not duplicate them; typing in search queries the complete catalog.
 - Optional catalog pricing by minimum purchase unit, historical cost snapshots, and per-entry actual-paid totals for discounts and free items.
 - A deterministic offline remaining-day planner that ranks up to three strict purchase-unit suggestions. Already-logged fixed items count toward their requirement, and pre-existing target violations produce one baseline-aware balanced recovery option instead of a minimums-at-any-cost fallback.
-- A dedicated searchable Planner settings page controls inclusion, food/drink classification, fixed status, and one-to-six required purchase units per product. Fixed items are exempt from category caps, so two additional non-fixed drink units remain available.
+- A dedicated searchable Food database settings page controls inclusion, food/drink classification, fixed status, and one-to-six required purchase units per product alongside safe catalog edit/delete actions. Fixed items are exempt from category caps, so two additional non-fixed drink units remain available.
 - Catalog cards use left-side line-art Add/Edit controls, tap-to-cart, and hold-to-edit. Every catalog add defaults to one complete purchase unit while keeping quantities editable.
 - Per-log price exclusion keeps the recorded paid/estimated amount visible while omitting it from daily budget and planner calculations.
 - Every catalog or barcode addition enters one persistent, date-locked cart. Duplicate products merge, date conflicts require an explicit choice, press-and-hold quantity controls accelerate from one to ten purchase units, and checkout atomically logs several products with one final paid total. A one-item checkout remains an ordinary entry.
@@ -56,7 +66,7 @@ The signed arm64 and universal APKs are distributed through GitHub prereleases. 
 - Missing burn data is shown as unavailable, never as a calorie surplus.
 - Deleted food entries can be restored from one-shot, finite-duration snackbar Undo actions; newer messages replace stale ones instead of queueing.
 - Today provides a selected-date Health Connect refresh and a privacy-marked clipboard action that copies versioned, barcode-free daily-report JSON.
-- Forms use keyboard Next/Done/Search actions with focus-aware scrolling. Unfinished product drafts can be resumed after process death, and the shared cart keeps its checkout action pinned above the scrollable contents.
+- Forms use keyboard Next/Done/Search actions with focus-aware scrolling. Unfinished new-product drafts can be resumed after process death, and the shared cart keeps its checkout action pinned above the scrollable contents.
 - Browser-based tablet preview with matching manual workflows and versioned localStorage.
 
 ## Offline contract
@@ -72,7 +82,7 @@ ML Kit dependencies declare them transitively, so the app manifest explicitly re
 
 OCR remains an assistive workflow with manual correction. Captured images and recognized text are transient and discarded after use or cancellation.
 
-Future quality-of-life candidates include sending a planner result directly into the bulk cart, food-log copy from a previous day, reusable meals, receipt capture, and richer Health Connect diagnostics.
+Future quality-of-life candidates include sending a planner result directly into the bulk cart, reusable meals, receipt capture, and richer Health Connect diagnostics.
 
 ## Build and verify
 

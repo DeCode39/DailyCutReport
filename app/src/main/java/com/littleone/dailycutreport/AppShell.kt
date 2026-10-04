@@ -169,7 +169,9 @@ fun DailyCutApp(
                         onEditLog = foodsViewModel::edit,
                         onDeleteLog = foodsViewModel::delete,
                         onDeleteGroup = foodsViewModel::deleteGroup,
-                        onMessage = showMessage
+                        onMessage = showMessage,
+                        onCopyDay = { foodsViewModel.copyDayToCart(selectedDate.minusDays(1)) },
+                        onCopyGroup = { foodsViewModel.copyDayToCart(selectedDate, it) }
                     )
                 }
                 composable(Destination.FOODS.route) {
@@ -214,7 +216,9 @@ fun DailyCutApp(
                     PlannerSettingsScreen(
                         viewModel = plannerSettingsViewModel,
                         onBack = { navController.popBackStack() },
-                        onMessage = showMessage
+                        onMessage = showMessage,
+                        onEdit = foodsViewModel::editProduct,
+                        onDelete = foodsViewModel::requestDeleteProduct
                     )
                 }
                 composable(Destination.HEALTH.route) {
@@ -267,9 +271,15 @@ fun DailyCutApp(
                 composable("product-editor") {
                     val foodState by foodsViewModel.uiState.collectAsStateWithLifecycle()
                     val editor = foodState.workflow as? FoodWorkflowState.EditProduct
+                    var linkedUsage by remember { mutableStateOf(ProductUsage()) }
+                    LaunchedEffect(editor?.draft?.existing?.product?.productId) {
+                        linkedUsage = runCatching { editor?.draft?.existing?.product?.productId?.let { foodsViewModel.productUsage(it) } }
+                            .getOrNull() ?: ProductUsage()
+                    }
                     if (editor != null) ProductEditorScreen(
                         draft = editor.draft,
                         currencyCode = foodState.goals.currencyCode,
+                        linkedUsage = linkedUsage,
                         onDraftChange = foodsViewModel::updateProductDraft,
                         onScanBarcode = {
                             scanContext = ScanLaunchContext(ScanTarget.PRODUCT_DRAFT_BARCODE, selectedDate)
@@ -279,6 +289,10 @@ fun DailyCutApp(
                         onScanNutrition = { navController.navigate("ocr") },
                         onDismiss = {
                             foodsViewModel.cancelProductEditor()
+                            navController.popBackStack()
+                        },
+                        onBack = {
+                            foodsViewModel.leaveProductEditor()
                             navController.popBackStack()
                         },
                         onSave = foodsViewModel::saveProduct

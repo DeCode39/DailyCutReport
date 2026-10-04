@@ -11,6 +11,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -381,6 +383,26 @@ class NutritionDatabaseTest {
 
         assertEquals(12_000_000L, spending.knownTotalMicros)
         assertEquals(1, spending.unknownEntries)
+    }
+
+    @Test fun catalogDeletionDetachesHistoryAndNeverResurrectsSeed() = runBlocking {
+        val dao = database.nutritionDao()
+        val product = ProductEntity(productId = "seed", name = "Seed", calories = 100.0, purchasePriceMicros = 10_000_000L)
+        val extras = listOf(ProductExtraNutrientEntity("seed", "Potassium", 10.0, "mg"))
+        dao.saveProductWithExtras(product, extras)
+        dao.addProductToDate("2026-01-02", product, 2.0, extras, actualPaidTotalMicros = 0L)
+        val before = dao.foodLogsForDate("2026-01-02").single()
+        val nutrientExtras = dao.dailyExtrasForLog(before.id)
+        val usage = dao.deleteCatalogProduct("seed")
+        assertEquals(1, usage.entries)
+        assertEquals(1, usage.dates)
+        assertNull(dao.productById("seed"))
+        assertEquals(before.copy(productId = null), dao.foodLogsForDate("2026-01-02").single())
+        assertEquals(nutrientExtras, dao.dailyExtrasForLog(before.id))
+        assertTrue(dao.extrasForProduct("seed").isEmpty())
+        assertEquals(listOf("seed"), dao.deletedProductIds())
+        dao.importSeedProducts(listOf(ProductWithExtras(product, extras)), "new_catalog_version")
+        assertNull(dao.productById("seed"))
     }
 
     private fun createVersionOneSchema(db: SupportSQLiteDatabase) {

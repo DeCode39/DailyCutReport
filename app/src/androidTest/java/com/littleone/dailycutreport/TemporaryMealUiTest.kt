@@ -17,11 +17,12 @@ class TemporaryMealUiTest {
         var draft by mutableStateOf(ProductEditorDraft(name = "Test lunch", brand = "Test cafe", saveTarget = ProductSaveTarget.BULK_CART))
         var saved: ProductEntity? = null
         compose.setContent {
-            MaterialTheme { ProductEditorScreen(draft, "TWD", { draft = it }, {}, {}, {}, { product, _, _ -> saved = product }) }
+            MaterialTheme { ProductEditorScreen(draft, "TWD", { draft = it }, {}, {}, {}, onSave = { product, _, _ -> saved = product }) }
         }
         compose.onNodeWithTag("one-time-meal").performScrollTo().performClick()
         compose.runOnIdle { draft = draft.copy(calories = "450", protein = "25") }
         compose.onNodeWithText("Save & continue").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Save anyway").performClick()
         compose.runOnIdle {
             assertEquals("Test lunch", saved?.name)
             assertEquals("Test cafe", saved?.brand)

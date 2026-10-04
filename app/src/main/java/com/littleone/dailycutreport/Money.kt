@@ -7,9 +7,8 @@ import java.util.Currency
 const val MONEY_MICROS_PER_UNIT = 1_000_000L
 
 fun parseMoneyMicros(value: String): Long? {
-    val normalized = value.trim().replace(',', '.')
-    if (normalized.isEmpty()) return null
-    val decimal = normalized.toBigDecimalOrNull() ?: throw IllegalArgumentException("Enter a valid price.")
+    if (value.isBlank()) return null
+    val decimal = parseEntryDecimal(value) ?: throw IllegalArgumentException("Enter a valid price using your local decimal separator.")
     require(decimal.signum() >= 0) { "Price cannot be negative." }
     return decimal.multiply(BigDecimal(MONEY_MICROS_PER_UNIT))
         .setScale(0, RoundingMode.HALF_UP)
@@ -19,7 +18,7 @@ fun parseMoneyMicros(value: String): Long? {
 fun Long.toMoneyInput(): String = BigDecimal(this)
     .divide(BigDecimal(MONEY_MICROS_PER_UNIT))
     .stripTrailingZeros()
-    .toPlainString()
+    .toPlainString().replace('.', java.text.DecimalFormatSymbols.getInstance().decimalSeparator)
 
 fun formatMoney(micros: Long, currencyCode: String): String {
     val normalizedCode = currencyCode.trim().uppercase()

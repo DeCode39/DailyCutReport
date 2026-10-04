@@ -11,6 +11,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
@@ -56,9 +59,7 @@ class ReleaseScreenshotsTest {
                 InternalActivity(outsideDistanceKm = 4.8), listOf(10.0, 12.0, 11.0), "synthetic release demo weight")
             dao.upsertMetadata(AppMetadataEntity(internalBurnKey(today), internal.toJson().toString()))
         }
-        for (tab in listOf("Today", "Foods", "Health", "Settings")) {
-            compose.onNode(hasText(tab) and hasClickAction() and
-                SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
+        fun capture(name: String) {
             compose.waitForIdle()
             SystemClock.sleep(700)
             val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
@@ -66,7 +67,7 @@ class ReleaseScreenshotsTest {
             // survives that cleanup; app-private external files do not.
             val uri = requireNotNull(context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, "${tab.lowercase()}.png")
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "$name.png")
                     put(MediaStore.Images.Media.MIME_TYPE, "image/png")
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DailyCutReleaseMedia")
                     put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -75,5 +76,14 @@ class ReleaseScreenshotsTest {
             context.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
             bitmap.recycle()
         }
+        for (tab in listOf("Today", "Foods", "Health", "Settings")) {
+            compose.onNode(hasText(tab) and hasClickAction() and
+                SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
+            capture(tab.lowercase())
+        }
+        compose.onNodeWithText("Food database").performClick()
+        capture("food-database")
+        compose.onAllNodesWithText("Edit").onFirst().performClick()
+        capture("product-editor")
     }
 }

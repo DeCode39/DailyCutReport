@@ -68,7 +68,7 @@
       <article class="card">
         <div class="actions"><h2>Saved products</h2><button id="newProduct">Add</button></div>
         <p class="muted">Tap a product to add one purchase unit. Use the pen to edit.</p>
-        <input id="productSearch" placeholder="Search products">
+        <div class="inline"><input id="productSearch" placeholder="Search products"><button id="clearProductSearch" aria-label="Clear product search">×</button></div>
         <div id="bulkCart" class="card hidden">
           <h3>Cart</h3><p id="bulkDate" class="muted"></p><div id="bulkItems"></div>
           <div class="grid">
@@ -80,7 +80,7 @@
         </div>
         <div id="productList"></div>
       </article>
-      <article class="card"><h2>Food log</h2><div id="foodLog"></div></article>
+      <article class="card"><h2>Food log</h2><button id="copyPreviousDay">Copy previous day to cart</button><div id="foodLog"></div></article>
       </div>
     </section>
 
@@ -99,7 +99,7 @@
       <div id="settingsHome">
         <article class="card"><h2>Settings</h2><div class="settings-menu">
           <button data-settings-page="goals">Goals &amp; budget</button>
-          <button data-settings-page="planner">Planner</button>
+          <button data-settings-page="planner">Food database</button>
           <button data-settings-page="health-connect">Health Connect</button>
           <button data-settings-page="product-json">Product JSON</button>
           <button data-settings-page="backup">Backup &amp; restore</button>
@@ -137,7 +137,7 @@
 
       <div id="settings-planner" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
-        <article class="card"><h2>Planner products</h2><p class="muted">Changes save automatically. Fixed items do not consume food or drink limits.</p><input id="plannerSearch" placeholder="Search planner products"><div id="plannerProducts"></div></article>
+        <article class="card"><h2>Food database</h2><p class="muted">Edit foods or planning preferences. Deleting catalog items preserves historical logs.</p><div class="inline"><input id="plannerSearch" placeholder="Search food database"><button id="clearPlannerSearch" aria-label="Clear database search">×</button></div><label><input id="reviewNutrition" type="checkbox"> Review possible nutrition issues</label><div id="plannerProducts"></div></article>
       </div>
 
       <div id="settings-health-connect" class="settings-page hidden">

@@ -9,6 +9,13 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class BackupCryptoTest {
+    @Test fun catalogDeletionMarkersSurviveBackupRoundTrip() {
+        val payload = BackupPayload(products = emptyList(), productExtras = emptyList(), reports = emptyList(),
+            foodLogs = emptyList(), dailyExtras = emptyList(), deletedProductIds = listOf("deleted-seed"))
+        assertEquals(listOf("deleted-seed"), BackupJson.decode(BackupJson.encode(payload)).deletedProductIds)
+        val legacy = org.json.JSONObject(BackupJson.encode(payload)).apply { remove("deletedProductIds") }
+        assertEquals(emptyList<String>(), BackupJson.decode(legacy.toString()).deletedProductIds)
+    }
     @Test fun encryptedBackupRoundTripsAndRejectsWrongPassword() {
         val plain = "private local report".toByteArray()
         val encrypted = BackupCrypto.encrypt(plain, "correct horse".toCharArray())

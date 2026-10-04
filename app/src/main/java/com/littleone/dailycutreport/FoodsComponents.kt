@@ -33,6 +33,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -99,6 +101,7 @@ internal fun BulkDraftCard(
                             coordinator = formFocus,
                             fieldKeyPrefix = "cart-${item.product.productId}"
                         )
+                        TextButton(onClick = { viewModel.useLastAmount(item.product.productId) }) { Text("Use last amount") }
                         item.quantity?.let { servings ->
                             Text(
                                 "${formatCalories(item.product.calories * servings)} kcal · ${formatDecimal(item.product.proteinG * servings)} g protein",
@@ -393,6 +396,7 @@ private fun ProductNutritionPreview(product: ProductEntity, currencyCode: String
 @Composable
 internal fun ProductSearchField(initialQuery: String, onQueryChange: (String) -> Unit) {
     var field by remember { mutableStateOf(TextFieldValue(initialQuery)) }
+    val requester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     OutlinedTextField(
@@ -402,9 +406,14 @@ internal fun ProductSearchField(initialQuery: String, onQueryChange: (String) ->
             onQueryChange(it.text)
         },
         label = { Text("Search saved products") },
+        trailingIcon = if (field.text.isNotEmpty()) ({
+            IconButton(onClick = { field = TextFieldValue(""); onQueryChange(""); requester.requestFocus(); keyboard?.show() }) {
+                Icon(painterResource(R.drawable.ic_clear), contentDescription = "Clear product search")
+            }
+        }) else null,
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus(); keyboard?.hide() }),
-        modifier = Modifier.fillMaxWidth().testTag("product_search")
+        modifier = Modifier.fillMaxWidth().focusRequester(requester).testTag("product_search")
     )
 }

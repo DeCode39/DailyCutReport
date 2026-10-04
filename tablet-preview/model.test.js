@@ -1,4 +1,5 @@
 const test=require('node:test');const assert=require('node:assert/strict');const M=require('./model.js');
+require('./release017.test.js');
 const Backup=require('./backup.js');
 test('v8 migration preserves the shared body profile and food history',()=>{
   const old=M.empty('2026-09-23');old.version=8;old.goalAssistant={version:1,profile:{age:30}};

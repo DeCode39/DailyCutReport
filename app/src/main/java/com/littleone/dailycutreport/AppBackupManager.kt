@@ -41,7 +41,8 @@ class EncryptedAppBackupManager(
                 healthProfile = dao.healthProfile() ?: HealthProfileEntity(),
                 weights = dao.allWeightEntries(),
                 walkingSessions = dao.allWalkingSamples(),
-                goalAssistant = dao.metadata(GoalAssistantState.KEY)?.let(GoalAssistantCodec::decode)
+                goalAssistant = dao.metadata(GoalAssistantState.KEY)?.let(GoalAssistantCodec::decode),
+                deletedProductIds = dao.deletedProductIds()
             )
         ).toByteArray(Charsets.UTF_8)
         val encrypted = BackupCrypto.encrypt(payload, password)
@@ -82,7 +83,7 @@ class EncryptedAppBackupManager(
         dao.replaceUserData(
             payload.products, payload.productExtras, payload.reports, payload.foodLogs,
             payload.dailyExtras, payload.goals, payload.healthProfile, payload.weights,
-            payload.walkingSessions, payload.goalAssistant?.let(GoalAssistantCodec::encode)
+            payload.walkingSessions, payload.goalAssistant?.let(GoalAssistantCodec::encode), payload.deletedProductIds
         )
     }
 
@@ -102,7 +103,8 @@ data class BackupPayload(
     val healthProfile: HealthProfileEntity = HealthProfileEntity(),
     val weights: List<WeightEntryEntity> = emptyList(),
     val walkingSessions: List<WalkingSessionSampleEntity> = emptyList(),
-    val goalAssistant: GoalAssistantState? = null
+    val goalAssistant: GoalAssistantState? = null,
+    val deletedProductIds: List<String> = emptyList()
 )
 
 object BackupCrypto {
@@ -189,6 +191,7 @@ object BackupJson {
         put("weightEntries", JSONArray().apply { payload.weights.forEach { put(it.toJson()) } })
         put("walkingSessions", JSONArray().apply { payload.walkingSessions.forEach { put(it.toJson()) } })
         payload.goalAssistant?.let { put("goalAssistant", JSONObject(GoalAssistantCodec.encode(it))) }
+        put("deletedProductIds", JSONArray(payload.deletedProductIds))
     }.toString()
 
     fun decode(json: String): BackupPayload {
@@ -207,7 +210,11 @@ object BackupJson {
         val walking = if (schema >= 3) root.getJSONArray("walkingSessions").objects(::walkingFromJson) else emptyList()
         validateHealth(weights, walking)
         val assistant = if (schema >= 7) root.optJSONObject("goalAssistant")?.let { GoalAssistantCodec.decode(it.toString()) } else null
-        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals, healthProfile, weights, walking, assistant)
+        val deleted = root.optJSONArray("deletedProductIds")?.let { ids ->
+            (0 until ids.length()).map { ids.getString(it).also { id -> require(id.isNotBlank() && id.length <= 256) } }
+        }.orEmpty()
+        require(deleted.distinct().size == deleted.size && deleted.none { id -> products.any { it.productId == id } }) { "Invalid deleted food IDs." }
+        return BackupPayload(products, productExtras, reports, logs, dailyExtras, goals, healthProfile, weights, walking, assistant, deleted)
     }
 
     private fun validate(

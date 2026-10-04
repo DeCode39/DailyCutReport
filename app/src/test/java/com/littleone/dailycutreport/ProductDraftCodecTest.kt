@@ -14,10 +14,8 @@ import java.time.LocalDate
 @RunWith(RobolectricTestRunner::class)
 class ProductDraftCodecTest {
     @Test fun roundTripKeepsEditableValuesAndDropsOcrReviewState() = runTest {
-        val product = ProductEntity(productId = "existing", name = "Old")
-        val existing = ProductWithExtras(product, emptyList())
         val original = PendingProductDraft(
-            ProductEditorDraft.create("", existing, ProductSaveTarget.CATALOG_ONLY).copy(
+            ProductEditorDraft.create("", null, ProductSaveTarget.CATALOG_ONLY).copy(
                 name = "Corrected name",
                 brand = "Brand",
                 quantityMode = QuantityMode.SERVING_AND_WEIGHT,
@@ -30,9 +28,7 @@ class ProductDraftCodecTest {
             LocalDate.of(2026, 8, 20)
         )
 
-        val restored = ProductDraftCodec.decode(ProductDraftCodec.encode(original)) {
-            existing.takeIf { it.product.productId == "existing" }
-        }!!
+        val restored = ProductDraftCodec.decode(ProductDraftCodec.encode(original)) { null }!!
 
         assertEquals("Corrected name", restored.draft.name)
         assertEquals("42.5", restored.draft.measurePerServing)
@@ -49,6 +45,13 @@ class ProductDraftCodecTest {
         )
         val restored = ProductDraftCodec.decode(ProductDraftCodec.encode(pending)) { null }!!
         assertEquals(ProductSaveTarget.BULK_CART, restored.draft.saveTarget)
+    }
+
+    @Test fun existingEditsNeverBecomeRecoveryDrafts() = runTest {
+        val existing = ProductWithExtras(ProductEntity(productId = "saved", name = "Saved"), emptyList())
+        val draft = ProductEditorDraft.create("", existing, ProductSaveTarget.CATALOG_ONLY).copy(name = "Edited")
+        assertFalse(ProductDraftCodec.isMeaningful(draft))
+        assertNull(ProductDraftCodec.decode(ProductDraftCodec.encode(PendingProductDraft(draft, LocalDate.now()))) { existing })
     }
 
     @Test fun blankCorruptAndMissingProductDraftsAreRejected() = runTest {

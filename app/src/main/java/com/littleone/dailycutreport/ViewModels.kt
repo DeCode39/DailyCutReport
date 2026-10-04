@@ -136,6 +136,7 @@ sealed interface FoodWorkflowState {
     data class EditProduct(val draft: ProductEditorDraft) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
     data class ReviewMultiScan(val items: List<MultiScanItem>) : FoodWorkflowState
+    data class DeleteProduct(val product: ProductEntity, val usage: ProductUsage, val inCart: Boolean) : FoodWorkflowState
 }
 
 data class ProductEditorDraft(
@@ -192,7 +193,7 @@ data class ProductEditorDraft(
                 sugar = product?.sugarG.editableNumber(),
                 fiber = product?.fiberG.editableNumber(),
                 saturatedFat = product?.saturatedFatG.editableNumber(),
-                purchasePrice = product?.purchasePriceMicros?.let { it / 1_000_000.0 }?.editableNumber().orEmpty(),
+                purchasePrice = product?.purchasePriceMicros?.toMoneyInput().orEmpty(),
                 purchaseServings = purchaseServings.editableNumber().ifNullOrBlank("1"),
                 purchaseMeasure = ProductQuantitySpec(mode, measure).measureUnit
                     ?.let { ProductQuantitySpec(mode, measure).amountFor(purchaseServings, it)?.editableNumber() }.orEmpty(),
@@ -208,7 +209,7 @@ data class ProductEditorDraft(
     }
 }
 
-private fun Double?.editableNumber(): String = this?.takeUnless { it == 0.0 }?.let(::formatDecimal).orEmpty()
+private fun Double?.editableNumber(): String = this?.toEntryText().orEmpty()
 private fun String?.ifNullOrBlank(fallback: String): String = if (isNullOrBlank()) fallback else this
 
 sealed interface FoodUiEvent {
@@ -223,6 +224,7 @@ sealed interface FoodUiEvent {
 sealed interface FoodUndo {
     data class Single(val value: DeletedFoodLogSnapshot) : FoodUndo
     data class Group(val value: DeletedFoodLogGroup) : FoodUndo
+    data class Cart(val item: BulkDraftItem, val date: LocalDate, val token: String = java.util.UUID.randomUUID().toString()) : FoodUndo
 }
 
 data class FoodsUiState(
@@ -298,6 +300,7 @@ class FoodsViewModel(
     private val _events = MutableSharedFlow<FoodUiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<FoodUiEvent> = _events.asSharedFlow()
     private val thresholdNotifier = MacroThresholdNotifier()
+    private val consumedCartUndo = linkedSetOf<String>()
     private val latestGoals = selectedDate.flatMapLatest { repository.observeGoals(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals())
     private val latestTargets = combine(
@@ -353,7 +356,7 @@ class FoodsViewModel(
     private fun requestProductEditor(draft: ProductEditorDraft, destinationDate: LocalDate) {
         val pending = PendingProductDraft(draft, destinationDate)
         val recoverable = recoverableDraft.value
-        if (recoverable != null && workflow.value !is FoodWorkflowState.EditProduct) {
+        if (draft.existing == null && recoverable != null && workflow.value !is FoodWorkflowState.EditProduct) {
             pendingEditorReplacement = pending
             draftReplacementPending.value = true
             viewModelScope.launch { _events.emit(FoodUiEvent.ShowDraftReplacement) }
@@ -395,6 +398,7 @@ class FoodsViewModel(
     }
 
     private fun scheduleDraftPersistence(draft: ProductEditorDraft) {
+        if (draft.existing != null) return
         val destination = editorDestinationDate ?: selectedDate.value
         draftPersistenceJob?.cancel()
         draftPersistenceJob = viewModelScope.launch {
@@ -658,9 +662,66 @@ class FoodsViewModel(
 
     fun removeBulkProduct(productId: String) {
         val current = bulkDraft.value
+        val removed = current.items.firstOrNull { it.product.productId == productId } ?: return
         val remaining = current.items.filterNot { it.product.productId == productId }
         bulkDraft.value = current.copy(items = remaining, date = current.date.takeIf { remaining.isNotEmpty() })
         if (remaining.isEmpty()) cartVisible.value = false
+        current.date?.let { date -> viewModelScope.launch {
+            _events.emit(FoodUiEvent.Message("Removed ${removed.product.name} from cart.", FoodUndo.Cart(removed, date)))
+        } }
+    }
+
+    fun useLastAmount(productId: String) = viewModelScope.launch {
+        val item = bulkDraft.value.items.firstOrNull { it.product.productId == productId } ?: return@launch
+        runCatching {
+            val previous = repository.lastLoggedAmount(productId) ?: error("No previous logged amount for this food.")
+            val unit = QuantityUnit.valueOf(previous.enteredUnit)
+            val servings = item.product.quantitySpec().servingsFor(previous.enteredAmount, unit)
+                ?: error("The previous amount uses a unit no longer available for this food.")
+            bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
+                if (it.product.productId == productId) it.copy(quantityInput = it.quantityInput.withServings(servings, unit)) else it
+            })
+        }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not reuse amount.")) }
+    }
+
+    fun copyDayToCart(sourceDate: LocalDate, mealId: String? = null) = viewModelScope.launch {
+        runCatching {
+            val logs = repository.foodLogsForDate(sourceDate).filter { mealId == null || it.mealId == mealId }
+            val items = logs.mapNotNull { log ->
+                val product = log.productId?.let { repository.getProduct(it)?.product } ?: return@mapNotNull null
+                val unit = QuantityUnit.valueOf(log.enteredUnit)
+                val servings = product.quantitySpec().servingsFor(log.enteredAmount, unit) ?: return@mapNotNull null
+                BulkDraftItem(product, QuantityInputState.forProduct(product, servings).withServings(servings, unit))
+            }
+            if (items.isEmpty()) error("No linked foods available to copy.")
+            enqueueCartItems(items, selectedDate.value, openAfter = true)
+            _events.emit(FoodUiEvent.Message("Copied ${items.size} entries to cart; review quantities and checkout price." +
+                if (items.size < logs.size) " Detached, deleted or incompatible-unit foods were skipped." else ""))
+        }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not copy foods.")) }
+    }
+
+    fun requestDeleteProduct(product: ProductEntity) = viewModelScope.launch {
+        runCatching { repository.productUsage(product.productId) }
+            .onSuccess { workflow.value = FoodWorkflowState.DeleteProduct(product, it,
+                bulkDraft.value.items.any { item -> item.product.productId == product.productId }) }
+            .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not check food history.")) }
+    }
+
+    suspend fun productUsage(productId: String): ProductUsage = repository.productUsage(productId)
+
+    fun confirmDeleteProduct() {
+        val pending = workflow.value as? FoodWorkflowState.DeleteProduct ?: return
+        workflow.value = FoodWorkflowState.Idle
+        viewModelScope.launch {
+            runCatching { repository.deleteCatalogProduct(pending.product.productId) }
+                .onSuccess { usage ->
+                    val current = bulkDraft.value
+                    val remaining = current.items.filterNot { it.product.productId == pending.product.productId }
+                    bulkDraft.value = current.copy(items = remaining, date = current.date.takeIf { remaining.isNotEmpty() })
+                    if (remaining.isEmpty()) cartVisible.value = false
+                    _events.emit(FoodUiEvent.Message("Deleted ${pending.product.name}; preserved ${usage.entries} historical entries."))
+                }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not delete food.")) }
+        }
     }
 
     fun updateBulkQuantity(productId: String, unit: QuantityUnit, value: String) {
@@ -746,8 +807,22 @@ class FoodsViewModel(
     fun cancelDialogs() { workflow.value = FoodWorkflowState.Idle }
 
     fun cancelProductEditor() {
+        val isNew = (workflow.value as? FoodWorkflowState.EditProduct)?.draft?.existing == null
         workflow.value = FoodWorkflowState.Idle
-        viewModelScope.launch { clearStoredProductDraft() }
+        if (isNew) viewModelScope.launch { clearStoredProductDraft() }
+    }
+
+    fun leaveProductEditor() {
+        val draft = (workflow.value as? FoodWorkflowState.EditProduct)?.draft ?: return
+        workflow.value = FoodWorkflowState.Idle
+        if (draft.existing == null) {
+            draftPersistenceJob?.cancel()
+            viewModelScope.launch {
+                val pending = PendingProductDraft(draft.copy(ocrDraft = null), editorDestinationDate ?: selectedDate.value)
+                repository.savePendingProductDraft(pending)
+                recoverableDraft.value = pending.takeIf { ProductDraftCodec.isMeaningful(it.draft) }
+            }
+        }
     }
 
     fun confirmAdd(quantity: LoggedQuantity, actualPaidTotalMicros: Long?, excludeCostFromBudget: Boolean) {
@@ -775,7 +850,7 @@ class FoodsViewModel(
             runCatching {
                 repository.saveProduct(product, extras)
             }.onSuccess { result ->
-                clearStoredProductDraft()
+                if (editor.draft.existing == null) clearStoredProductDraft()
                 when (editor.draft.saveTarget) {
                     ProductSaveTarget.STANDALONE_LOG -> {
                         workflow.value = FoodWorkflowState.ConfirmQuantity(ProductWithExtras(product, extras))
@@ -888,6 +963,10 @@ class FoodsViewModel(
 
     fun undo(undo: FoodUndo) {
         when (undo) {
+            is FoodUndo.Cart -> if (consumedCartUndo.add(undo.token)) {
+                if (consumedCartUndo.size > 64) consumedCartUndo.remove(consumedCartUndo.first())
+                enqueueCartItems(listOf(undo.item), undo.date, openAfter = true)
+            }
             is FoodUndo.Single -> undoDelete(undo.value)
             is FoodUndo.Group -> viewModelScope.launch {
                 runCatching { repository.restoreFoodLogGroup(undo.value) }
@@ -904,7 +983,7 @@ class FoodsViewModel(
 }
 
 internal fun ProductEditorDraft.mergeOcr(ocr: OcrNutritionDraft): ProductEditorDraft {
-    fun accepted(field: OcrField, previous: String): String = ocr.values[field]?.let(::formatDecimal) ?: previous
+    fun accepted(field: OcrField, previous: String): String = ocr.values[field]?.toEntryText() ?: previous
     val inferred = when (ocr.basis) {
         OcrBasis.PER_100_G -> ProductQuantitySpec(QuantityMode.WEIGHT_ONLY, 100.0)
         OcrBasis.PER_100_ML -> ProductQuantitySpec(QuantityMode.VOLUME_ONLY, 100.0)
@@ -914,7 +993,7 @@ internal fun ProductEditorDraft.mergeOcr(ocr: OcrNutritionDraft): ProductEditorD
     return copy(
         servingLabel = ocr.servingLabel?.takeIf(String::isNotBlank) ?: servingLabel,
         quantityMode = if (canSeedQuantity) inferred.mode else quantityMode,
-        measurePerServing = if (canSeedQuantity) inferred.measurePerServing?.let(::formatDecimal).orEmpty() else measurePerServing,
+        measurePerServing = if (canSeedQuantity) inferred.measurePerServing?.toEntryText().orEmpty() else measurePerServing,
         preferredLogUnit = if (canSeedQuantity && !inferred.mode.servingAvailable) inferred.measureUnit ?: QuantityUnit.SERVINGS else preferredLogUnit,
         calories = accepted(OcrField.CALORIES, calories),
         protein = accepted(OcrField.PROTEIN, protein),

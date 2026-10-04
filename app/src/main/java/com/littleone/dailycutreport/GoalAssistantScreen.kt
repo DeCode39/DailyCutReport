@@ -29,8 +29,8 @@ internal fun GoalAssistantScreen(viewModel: SettingsViewModel) {
             if (state?.previous != null) TextButton(onClick = { viewModel.stopGoalAssistant(true) }) { Text("Restore previous targets & stop") }
         } else {
             var age by rememberSaveable { mutableStateOf(saved?.age?.toString() ?: "") }
-            var height by rememberSaveable { mutableStateOf(saved?.heightCm?.toString() ?: "") }
-            var weight by rememberSaveable { mutableStateOf(saved?.weightKg?.toString() ?: "") }
+            var height by rememberSaveable { mutableStateOf(saved?.heightCm?.toEntryText() ?: "") }
+            var weight by rememberSaveable { mutableStateOf(saved?.weightKg?.toEntryText() ?: "") }
             var sex by rememberSaveable { mutableStateOf(saved?.equationSex ?: GoalEquationSex.FEMALE) }
             var activity by rememberSaveable { mutableStateOf(saved?.activity ?: GoalActivity.LIGHT) }
             var adaptive by rememberSaveable { mutableStateOf(saved?.adaptive ?: false) }
@@ -55,8 +55,8 @@ internal fun GoalAssistantScreen(viewModel: SettingsViewModel) {
                 GoalEquationSex.entries.forEach { option -> FilterChip(sex == option, { sex = option; invalidate() }, label = { Text(option.name.lowercase()) }) }
             }
             OutlinedButton(onClick = {
-                runCatching { GoalAssistantProfile(age.toIntOrNull() ?: 0, height.toDoubleOrNull() ?: 0.0,
-                    weight.toDoubleOrNull() ?: 0.0, sex, activity, locks = locks).validateBody() }
+                runCatching { GoalAssistantProfile(age.toIntOrNull() ?: 0, parseEntryNumber(height) ?: 0.0,
+                    parseEntryNumber(weight) ?: 0.0, sex, activity, locks = locks).validateBody() }
                     .onSuccess { viewModel.saveBodyProfile(it) { editing = false } }.onFailure { error = it.message }
             }) { Text("Save body profile only") }
             Text("Usual activity · used until seven completed burn days are available")
@@ -71,7 +71,7 @@ internal fun GoalAssistantScreen(viewModel: SettingsViewModel) {
             Row { Switch(adaptive, { adaptive = it; invalidate() }); Text("Adapt once daily", Modifier.padding(12.dp)) }
             Text("Recent daily-median weights and completed-day burn inform unlocked targets. Calorie allowance in deficit mode still follows your live forecast. Past dates keep their prior targets.", style = MaterialTheme.typography.bodySmall)
             Row { Checkbox(eligible, { eligible = it; invalidate() }); Text("I am an adult and none of the exclusions above apply.", Modifier.padding(top = 8.dp)) }
-            fun profile() = GoalAssistantProfile(age.toIntOrNull() ?: 0, height.toDoubleOrNull() ?: 0.0, weight.toDoubleOrNull() ?: 0.0, sex, activity, adaptive, locks).validate()
+            fun profile() = GoalAssistantProfile(age.toIntOrNull() ?: 0, parseEntryNumber(height) ?: 0.0, parseEntryNumber(weight) ?: 0.0, sex, activity, adaptive, locks).validate()
             Button(enabled = eligible, onClick = {
                 runCatching { profile() }.onSuccess { viewModel.previewGoals(it) }.onFailure { error = it.message }
             }) { Text("Preview suggested targets") }
