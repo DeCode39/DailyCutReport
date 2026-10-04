@@ -2,7 +2,10 @@ package com.littleone.dailycutreport
 
 import java.util.Locale
 
-private val extraAmountAndUnit = Regex("(?U)^(.+?)(?:\\s+([^\\d\\s].*))?$")
+// Do not use the JVM-only inline Unicode character-class flag: Android's regex
+// implementation rejects it while initializing this file, even for blank extras.
+// Numeric whitespace is normalized by parseEntryDecimal instead.
+private val extraAmountAndUnit = Regex("^(.+?)(?:\\s+([^\\d\\s].*))?$")
 
 internal fun parseProductExtras(productId: String, text: String, locale: Locale = Locale.getDefault()): List<ProductExtraNutrientEntity> =
     text.lineSequence().filter(String::isNotBlank).map { line ->
