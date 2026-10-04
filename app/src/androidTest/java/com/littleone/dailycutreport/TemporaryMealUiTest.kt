@@ -22,7 +22,15 @@ class TemporaryMealUiTest {
         compose.onNodeWithTag("one-time-meal").performScrollTo().performClick()
         compose.runOnIdle { draft = draft.copy(calories = "450", protein = "25") }
         compose.waitForIdle()
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodes(hasSetTextAction() and hasText("450")).fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText("Save & continue").assertIsDisplayed().performClick()
+        // AlertDialog uses a separate Android window. Its layout can become visible after
+        // the Compose click finishes, even when the composition itself is already idle.
+        compose.waitUntil(timeoutMillis = 5_000) {
+            runCatching { compose.onNodeWithText("Save anyway").assertIsDisplayed(); true }.getOrDefault(false)
+        }
         compose.onNodeWithText("Review nutrition").assertIsDisplayed()
         compose.onNodeWithText("Save anyway").performClick()
         compose.runOnIdle {
