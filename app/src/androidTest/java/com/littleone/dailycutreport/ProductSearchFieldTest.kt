@@ -36,7 +36,7 @@ class ProductSearchFieldTest {
         field.performTextInputSelection(TextRange(2))
         compose.runOnIdle { externalQuery = "database emission" }
         field.performTextInput("X")
-        field.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("miXlk")))
+        assertEntry("miXlk", TextRange(3))
     }
 
     @Test fun clearSearchKeepsKeyboardFocusAndAllowsImmediateTyping() {
@@ -47,6 +47,20 @@ class ProductSearchFieldTest {
         compose.onNodeWithContentDescription("Clear product search").performClick()
         field.assertIsFocused()
         field.performTextInput("rice")
-        field.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("rice")))
+        assertEntry("rice", TextRange(4))
+        field.assertIsFocused()
+    }
+
+    private fun assertEntry(text: String, selection: TextRange) {
+        // IME commits are asynchronous and can attach composing spans. Check the
+        // actual characters and cursor, not equality of their style annotations.
+        val characters = SemanticsMatcher("Editable characters = '$text'") {
+            it.config.getOrNull(SemanticsProperties.EditableText)?.text == text
+        }
+        compose.waitUntil(timeoutMillis = 5_000) {
+            characters.matches(compose.onNodeWithTag("product_search").fetchSemanticsNode())
+        }
+        compose.onNodeWithTag("product_search").assert(characters)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, selection))
     }
 }
