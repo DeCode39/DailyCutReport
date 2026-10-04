@@ -24,10 +24,15 @@ class ProductEditorBackTest {
         }
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.runOnIdle { assertEquals(1, exits); draft = draft.copy(name = "Edited") }
+        // State writes inside runOnIdle schedule another composition. Wait for the updated
+        // BackHandler closure before dispatching the next Android Back event.
+        compose.waitForIdle()
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
         compose.onNodeWithText("Discard changes?").assertIsDisplayed()
         compose.onNodeWithText("Keep editing").performClick()
         compose.runOnIdle { assertEquals(1, exits); assertEquals("Edited", draft.name) }
+        compose.waitForIdle()
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.onNodeWithText("Discard changes", useUnmergedTree = true).performClick()
         compose.runOnIdle { assertEquals(2, exits) }

@@ -154,6 +154,15 @@ jobs:
           script: |
             gradle --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.captureReleaseMedia=true
             adb pull /sdcard/Pictures/DailyCutReleaseMedia release-media
+      - name: Preserve instrumentation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumentation-reports
+          path: |
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: release-tab-screenshots
