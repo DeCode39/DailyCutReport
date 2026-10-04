@@ -21,7 +21,9 @@ class TemporaryMealUiTest {
         }
         compose.onNodeWithTag("one-time-meal").performScrollTo().performClick()
         compose.runOnIdle { draft = draft.copy(calories = "450", protein = "25") }
+        compose.waitForIdle()
         compose.onNodeWithText("Save & continue").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Review nutrition").assertIsDisplayed()
         compose.onNodeWithText("Save anyway").performClick()
         compose.runOnIdle {
             assertEquals("Test lunch", saved?.name)
