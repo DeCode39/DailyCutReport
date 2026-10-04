@@ -45,7 +45,7 @@ class FoodsWorkflowTest {
         val store = ViewModelStore().apply { put("foods", vm) }
         try {
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect() }
-            runCurrent(); vm.editProduct(product); runCurrent()
+            advanceTimeBy(300); runCurrent(); vm.editProduct(product); runCurrent()
             val editor = vm.uiState.value.workflow as FoodWorkflowState.EditProduct
             vm.updateProductDraft(editor.draft.copy(name = "Changed"))
             advanceTimeBy(300); runCurrent(); vm.leaveProductEditor(); runCurrent()
@@ -62,7 +62,7 @@ class FoodsWorkflowTest {
         val store = ViewModelStore().apply { put("foods", vm) }
         try {
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect() }
-            runCurrent(); vm.copyDayToCart(date.minusDays(1)); runCurrent()
+            advanceTimeBy(300); runCurrent(); vm.copyDayToCart(date.minusDays(1)); runCurrent()
             val cart = vm.uiState.value.bulkDraft
             assertEquals(date, cart.date)
             assertEquals("", cart.actualPaidText)
@@ -82,7 +82,7 @@ class FoodsWorkflowTest {
         try {
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect() }
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { if (it is FoodUiEvent.Message) undo = it.undo } }
-            runCurrent(); vm.addProductToCart(product); runCurrent()
+            advanceTimeBy(300); runCurrent(); vm.addProductToCart(product); runCurrent()
             assertEquals(2.0, vm.uiState.value.bulkDraft.items.single().quantity!!, 0.0)
             vm.useLastAmount("food"); runCurrent()
             assertEquals(1.5, vm.uiState.value.bulkDraft.items.single().quantity!!, 0.0)
