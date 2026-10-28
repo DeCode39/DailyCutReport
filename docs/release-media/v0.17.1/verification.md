@@ -11,4 +11,4 @@ Regression coverage includes historical source versus destination dates, explici
 
 Limitations: real barcode acquisition speed and live Health Connect provider/permission behavior were not re-measured. No OCR accuracy changes are included; the existing Base&U manual-correction limitation remains. The installed release and personal data were not used as test fixtures. FoodVision remains excluded.
 
-Signed release/R8, signature, ABI, size and offline-permission gates are handled by the linked CI run; publication occurs only after those gates pass.
+Signed release/R8, signature, ABI, APK-size and offline-permission gates all passed in [run 40721280273](https://github.com/DeCode39/DailyCutReport/actions/runs/40721280273). The published application source is identical to that validated commit; later commits add only release documentation and screenshots.
