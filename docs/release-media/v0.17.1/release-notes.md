@@ -7,6 +7,7 @@
 - Checkout Undo returns items and checkout details to the cart. It never deletes older history or overwrites a new cart; changed checkout entries are protected.
 - Logging and clearing the saved cart are transactional. Rapid taps, restart, incomplete paired quantities, failed writes, and late cart restoration are guarded against duplicate or lost entries.
 - Browser parity includes editable dates, explicit copy destination, checkout Undo, and atomic log/cart storage.
+- Macro alerts use the destination day's goals rather than the historical day being viewed.
 
 Version code 39. No Room, backup, product JSON, report JSON, or browser storage-version migration. Barcode recognition, OCR, planning, burn calculations, and network-permission exclusions are unchanged.
 

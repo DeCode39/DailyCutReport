@@ -9,6 +9,7 @@ Daily Cut Report is a strictly offline Android fitness and nutrition journal. It
 - Copy review identifies deleted/detached foods and incompatible units; old actual-paid totals are not copied.
 - Checkout freezes cart changes and prevents double taps. Food logs and clearing the recoverable cart commit in one Room transaction, preventing replay after process death. Finite Undo deletes only unchanged checkout rows and restores the cart transactionally.
 - Invalid paired quantities cannot submit; incompatible unit changes never infer density. Cart restoration waits before applying incoming additions.
+- Macro threshold alerts use the committed destination day's goals, even when a historical date remains open on screen.
 - Browser logs and recoverable cart now save in one `dcr_v9` document (legacy `dcr_cart_v1` is still read). Pending carts remain excluded from backups.
 
 Room schema **10**, encrypted backup schema **8**, product JSON **2**, and report JSON **3** remain unchanged. FoodVision development is excluded.
