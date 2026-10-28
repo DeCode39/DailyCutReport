@@ -170,8 +170,8 @@ fun DailyCutApp(
                         onDeleteLog = foodsViewModel::delete,
                         onDeleteGroup = foodsViewModel::deleteGroup,
                         onMessage = showMessage,
-                        onCopyDay = { foodsViewModel.copyDayToCart(selectedDate.minusDays(1)) },
-                        onCopyGroup = { foodsViewModel.copyDayToCart(selectedDate, it) }
+                        onCopyDay = { foodsViewModel.requestCopyDayToCart(selectedDate.minusDays(1)) },
+                        onCopyGroup = { foodsViewModel.requestCopyDayToCart(selectedDate, it) }
                     )
                 }
                 composable(Destination.FOODS.route) {

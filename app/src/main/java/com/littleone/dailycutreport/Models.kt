@@ -379,15 +379,17 @@ data class BulkDraft(
     val items: List<BulkDraftItem> = emptyList(),
     val label: String = "",
     val actualPaidText: String = "",
-    val excludeCostFromBudget: Boolean = false
+    val excludeCostFromBudget: Boolean = false,
+    val copySummary: String? = null
 ) {
-    val isValid: Boolean get() = items.isNotEmpty() && items.all { it.quantity != null } &&
+    val isValid: Boolean get() = date != null && date <= LocalDate.now() && items.isNotEmpty() && items.all { it.quantityInput.valid } &&
         (actualPaidText.isBlank() || runCatching { parseMoneyMicros(actualPaidText) != null }.getOrDefault(false))
 }
 
 data class PendingCartAddition(
     val requestedDate: LocalDate,
-    val items: List<BulkDraftItem>
+    val items: List<BulkDraftItem>,
+    val summary: String? = null
 )
 
 data class CartDateConflict(
@@ -411,16 +413,20 @@ fun resolveCartAddition(
     pending.items.forEach { addition ->
         val existing = result.items.firstOrNull { it.product.productId == addition.product.productId }
         result = if (existing == null) result.copy(items = result.items + addition)
-        else result.copy(items = result.items.map { item ->
-            if (item.product.productId == addition.product.productId) item.copy(
-                product = addition.product,
-                quantityInput = item.quantityInput.withServings(
-                    (item.quantity ?: 0.0) + (addition.quantity ?: 0.0)
-                )
-            ) else item
-        })
+        else {
+            require(existing.quantityInput.valid && addition.quantityInput.valid) { "Fix the cart quantity for ${addition.product.name} before adding more." }
+            val unit = existing.quantityInput.activeUnit
+            val prior = addition.product.quantitySpec().servingsFor(requireNotNull(existing.quantityInput.enteredAmount), unit)
+                ?: error("Quantity settings changed for ${addition.product.name}; review or re-add the cart item.")
+            val quantity = prior + requireNotNull(addition.quantity)
+            result.copy(items = result.items.map { item ->
+                if (item.product.productId == addition.product.productId) addition.copy(
+                    quantityInput = QuantityInputState.forProduct(addition.product, quantity).withServings(quantity, unit)
+                ) else item
+            })
+        }
     }
-    return result
+    return result.copy(copySummary = pending.summary ?: result.copySummary)
 }
 
 /**
@@ -502,7 +508,8 @@ data class FoodMutationResult(
     val date: LocalDate,
     val before: NutritionSummary,
     val after: NutritionSummary,
-    val deleted: DeletedFoodLogSnapshot? = null
+    val deleted: DeletedFoodLogSnapshot? = null,
+    val addedLogs: List<FoodLogSnapshot> = emptyList()
 )
 
 data class FoodGroupMutationResult(

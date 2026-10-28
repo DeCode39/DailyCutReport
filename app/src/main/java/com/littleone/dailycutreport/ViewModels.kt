@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 
 class ReportDateViewModel : ViewModel() {
@@ -136,6 +139,7 @@ sealed interface FoodWorkflowState {
     data class EditProduct(val draft: ProductEditorDraft) : FoodWorkflowState
     data class EditQuantity(val log: FoodLogSnapshot) : FoodWorkflowState
     data class ReviewMultiScan(val items: List<MultiScanItem>) : FoodWorkflowState
+    data class CopyDestination(val sourceDate: LocalDate, val mealId: String?) : FoodWorkflowState
     data class DeleteProduct(val product: ProductEntity, val usage: ProductUsage, val inCart: Boolean) : FoodWorkflowState
 }
 
@@ -225,6 +229,7 @@ sealed interface FoodUndo {
     data class Single(val value: DeletedFoodLogSnapshot) : FoodUndo
     data class Group(val value: DeletedFoodLogGroup) : FoodUndo
     data class Cart(val item: BulkDraftItem, val date: LocalDate, val token: String = java.util.UUID.randomUUID().toString()) : FoodUndo
+    data class Checkout(val draft: BulkDraft, val logs: List<FoodLogSnapshot>, val token: String = java.util.UUID.randomUUID().toString()) : FoodUndo
 }
 
 data class FoodsUiState(
@@ -295,6 +300,9 @@ class FoodsViewModel(
     private var editorDestinationDate: LocalDate? = null
     private var pendingEditorReplacement: PendingProductDraft? = null
     private var draftPersistenceJob: Job? = null
+    private var copyJob: Job? = null
+    private val cartRestored = CompletableDeferred<Unit>()
+    private val cartPersistenceMutex = Mutex()
     private val _scannerSession = MutableStateFlow(ScannerSessionState())
     val scannerSession: StateFlow<ScannerSessionState> = _scannerSession
     private val _events = MutableSharedFlow<FoodUiEvent>(extraBufferCapacity = 8)
@@ -343,8 +351,23 @@ class FoodsViewModel(
 
     init {
         viewModelScope.launch {
-            bulkDraft.value = repository.loadCartDraft()
-            bulkDraft.debounce(250).collectLatest { repository.saveCartDraft(it) }
+            var loaded = false
+            try {
+                bulkDraft.value = repository.loadCartDraft()
+                loaded = true
+            } catch (failure: Exception) {
+                _events.emit(FoodUiEvent.Message("Could not restore cart. Stored data was not cleared."))
+            } finally { cartRestored.complete(Unit) }
+            bulkDraft.debounce(250).collectLatest { draft ->
+                // Serialize autosave with checkout, and never let a stale save
+                // recreate the cart after its logs have committed.
+                cartPersistenceMutex.withLock {
+                    if (cartSubmitting.value || (!loaded && draft.items.isEmpty())) return@withLock
+                    runCatching { repository.saveCartDraft(draft) }.onFailure {
+                        _events.emit(FoodUiEvent.Message("Cart changes could not be saved for restart."))
+                    }
+                }
+            }
         }
         viewModelScope.launch {
             runCatching { repository.loadPendingProductDraft() }
@@ -598,11 +621,18 @@ class FoodsViewModel(
     }
 
     fun openCart() { if (bulkDraft.value.items.isNotEmpty()) cartVisible.value = true }
-    fun closeCart() { cartVisible.value = false }
+    fun closeCart() { if (!cartSubmitting.value) cartVisible.value = false }
+
+    fun changeCartDate(date: LocalDate): Boolean {
+        if (cartSubmitting.value || bulkDraft.value.items.isEmpty() || date > LocalDate.now()) return false
+        bulkDraft.value = bulkDraft.value.copy(date = date)
+        return true
+    }
 
     fun resolveCartDateConflict(useRequestedDate: Boolean?) {
+        if (cartSubmitting.value) return
         val pending = pendingCartAddition.value ?: return
-        when (useRequestedDate) {
+        runCatching { when (useRequestedDate) {
             null -> Unit
             true -> {
                 bulkDraft.value = resolveCartAddition(
@@ -616,33 +646,49 @@ class FoodsViewModel(
                 )
                 cartVisible.value = true
             }
+        } }.onFailure { failure ->
+            cartVisible.value = true
+            viewModelScope.launch { _events.emit(FoodUiEvent.Message(failure.message ?: "Review your cart before adding these items.")) }
         }
         pendingCartAddition.value = null
         cartDateConflict.value = null
     }
 
-    private fun enqueueCartItems(items: List<BulkDraftItem>, requestedDate: LocalDate, openAfter: Boolean = false) {
+    private fun enqueueCartItems(items: List<BulkDraftItem>, requestedDate: LocalDate, openAfter: Boolean = false, summary: String? = null) {
+        if (!cartRestored.isCompleted) {
+            viewModelScope.launch { cartRestored.await(); enqueueCartItems(items, requestedDate, openAfter, summary) }
+            return
+        }
+        if (cartSubmitting.value || requestedDate > LocalDate.now()) {
+            viewModelScope.launch { _events.emit(FoodUiEvent.Message("Wait for checkout to finish and choose a date no later than today.")) }
+            return
+        }
         if (items.isEmpty()) return
         val current = bulkDraft.value
         if (current.items.isNotEmpty() && current.date != null && current.date != requestedDate) {
-            pendingCartAddition.value = PendingCartAddition(requestedDate, items)
+            pendingCartAddition.value = PendingCartAddition(requestedDate, items, summary)
             cartDateConflict.value = CartDateConflict(current.date, requestedDate, items.size)
             cartVisible.value = false
             return
         }
-        mergeIntoCart(items, requestedDate)
+        runCatching { mergeIntoCart(items, requestedDate, summary) }.onFailure { failure ->
+            viewModelScope.launch { _events.emit(FoodUiEvent.Message(failure.message ?: "Review your cart quantities.")) }
+            cartVisible.value = true
+            return
+        }
         if (openAfter) cartVisible.value = true
     }
 
-    private fun mergeIntoCart(items: List<BulkDraftItem>, date: LocalDate) {
+    private fun mergeIntoCart(items: List<BulkDraftItem>, date: LocalDate, summary: String? = null) {
         bulkDraft.value = resolveCartAddition(
             bulkDraft.value,
-            PendingCartAddition(date, items),
+            PendingCartAddition(date, items, summary),
             CartDateResolution.KEEP_EXISTING
         )
     }
 
     fun incrementCartProduct(productId: String, servings: Int = 1) {
+        if (cartSubmitting.value) return
         if (servings <= 0) return
         bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map { item ->
             if (item.product.productId == productId) item.copy(
@@ -652,6 +698,7 @@ class FoodsViewModel(
     }
 
     fun decrementCartProduct(productId: String) {
+        if (cartSubmitting.value) return
         bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map { item ->
             if (item.product.productId != productId) item else {
                 val next = (item.quantity ?: 1.0) - 1.0
@@ -661,6 +708,7 @@ class FoodsViewModel(
     }
 
     fun removeBulkProduct(productId: String) {
+        if (cartSubmitting.value) return
         val current = bulkDraft.value
         val removed = current.items.firstOrNull { it.product.productId == productId } ?: return
         val remaining = current.items.filterNot { it.product.productId == productId }
@@ -672,32 +720,48 @@ class FoodsViewModel(
     }
 
     fun useLastAmount(productId: String) = viewModelScope.launch {
+        if (cartSubmitting.value) return@launch
         val item = bulkDraft.value.items.firstOrNull { it.product.productId == productId } ?: return@launch
         runCatching {
             val previous = repository.lastLoggedAmount(productId) ?: error("No previous logged amount for this food.")
             val unit = QuantityUnit.valueOf(previous.enteredUnit)
             val servings = item.product.quantitySpec().servingsFor(previous.enteredAmount, unit)
                 ?: error("The previous amount uses a unit no longer available for this food.")
+            if (cartSubmitting.value) return@launch
             bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
                 if (it.product.productId == productId) it.copy(quantityInput = it.quantityInput.withServings(servings, unit)) else it
             })
         }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not reuse amount.")) }
     }
 
-    fun copyDayToCart(sourceDate: LocalDate, mealId: String? = null) = viewModelScope.launch {
+    fun requestCopyDayToCart(sourceDate: LocalDate, mealId: String? = null) {
+        if (!cartSubmitting.value) workflow.value = FoodWorkflowState.CopyDestination(sourceDate, mealId)
+    }
+
+    fun copyDayToCart(sourceDate: LocalDate, mealId: String? = null, destinationDate: LocalDate = LocalDate.now()) {
+        if (cartSubmitting.value || copyJob?.isActive == true) return
+        workflow.value = FoodWorkflowState.Idle
+        // Capture the destination before any suspension, never from the historical screen later.
+        copyJob = viewModelScope.launch {
         runCatching {
+            cartRestored.await()
+            require(destinationDate <= LocalDate.now()) { "Choose a date no later than today." }
             val logs = repository.foodLogsForDate(sourceDate).filter { mealId == null || it.mealId == mealId }
+            val skipped = mutableListOf<String>()
             val items = logs.mapNotNull { log ->
-                val product = log.productId?.let { repository.getProduct(it)?.product } ?: return@mapNotNull null
-                val unit = QuantityUnit.valueOf(log.enteredUnit)
-                val servings = product.quantitySpec().servingsFor(log.enteredAmount, unit) ?: return@mapNotNull null
+                val product = log.productId?.let { repository.getProduct(it)?.product }
+                if (product == null) { skipped += "${log.productName}: deleted or detached"; return@mapNotNull null }
+                val unit = QuantityUnit.entries.firstOrNull { it.name == log.enteredUnit }
+                val servings = unit?.let { product.quantitySpec().servingsFor(log.enteredAmount, it) }
+                if (unit == null || servings == null) { skipped += "${log.productName}: incompatible quantity unit"; return@mapNotNull null }
                 BulkDraftItem(product, QuantityInputState.forProduct(product, servings).withServings(servings, unit))
             }
-            if (items.isEmpty()) error("No linked foods available to copy.")
-            enqueueCartItems(items, selectedDate.value, openAfter = true)
-            _events.emit(FoodUiEvent.Message("Copied ${items.size} entries to cart; review quantities and checkout price." +
-                if (items.size < logs.size) " Detached, deleted or incompatible-unit foods were skipped." else ""))
+            if (items.isEmpty()) error("No foods available to copy." + if (skipped.isEmpty()) "" else " Skipped: ${skipped.joinToString("; ")}")
+            val summary = "Copied ${items.size} of ${logs.size} entries from $sourceDate. Old actual-paid totals were not copied." +
+                if (skipped.isEmpty()) "" else "\nSkipped: ${skipped.joinToString("; ")}."
+            enqueueCartItems(items, destinationDate, openAfter = true, summary = summary)
         }.onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not copy foods.")) }
+        }
     }
 
     fun requestDeleteProduct(product: ProductEntity) = viewModelScope.launch {
@@ -725,12 +789,14 @@ class FoodsViewModel(
     }
 
     fun updateBulkQuantity(productId: String, unit: QuantityUnit, value: String) {
+        if (cartSubmitting.value) return
         bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
             if (it.product.productId == productId) it.copy(quantityInput = it.quantityInput.edit(unit, value)) else it
         })
     }
 
     fun resetBulkQuantity(productId: String) {
+        if (cartSubmitting.value) return
         bulkDraft.value = bulkDraft.value.copy(items = bulkDraft.value.items.map {
             if (it.product.productId == productId) it.copy(
                 quantityInput = it.quantityInput.withServings(it.product.purchaseUnitServings)
@@ -738,10 +804,11 @@ class FoodsViewModel(
         })
     }
 
-    fun updateBulkLabel(value: String) { bulkDraft.value = bulkDraft.value.copy(label = value) }
-    fun updateBulkPaid(value: String) { bulkDraft.value = bulkDraft.value.copy(actualPaidText = value) }
-    fun updateBulkBudgetExclusion(value: Boolean) { bulkDraft.value = bulkDraft.value.copy(excludeCostFromBudget = value) }
+    fun updateBulkLabel(value: String) { if (!cartSubmitting.value) bulkDraft.value = bulkDraft.value.copy(label = value) }
+    fun updateBulkPaid(value: String) { if (!cartSubmitting.value) bulkDraft.value = bulkDraft.value.copy(actualPaidText = value) }
+    fun updateBulkBudgetExclusion(value: Boolean) { if (!cartSubmitting.value) bulkDraft.value = bulkDraft.value.copy(excludeCostFromBudget = value) }
     fun discardBulkDraft() {
+        if (cartSubmitting.value) return
         bulkDraft.value = BulkDraft()
         cartVisible.value = false
     }
@@ -754,37 +821,15 @@ class FoodsViewModel(
         cartSubmitting.value = true
         viewModelScope.launch {
             try {
-                runCatching {
-                    require(draft.isValid) { "Choose at least one item and enter valid quantities and price." }
-                    val paid = if (draft.actualPaidText.isBlank()) null
-                    else requireNotNull(parseMoneyMicros(draft.actualPaidText)) { "Enter a valid final checkout total." }
-                    val entries = draft.items.map {
-                        BulkLogSelection(
-                            productId = it.product.productId,
-                            quantity = requireNotNull(it.quantity),
-                            enteredUnit = it.quantityInput.activeUnit.name,
-                            enteredAmount = requireNotNull(it.quantityInput.enteredAmount)
-                        )
-                    }
-                    if (entries.size == 1) {
-                        val entry = entries.single()
-                        val product = requireNotNull(repository.getProduct(entry.productId))
-                        repository.addProduct(
-                            date, product, entry.quantity, paid, draft.excludeCostFromBudget,
-                            QuantityUnit.valueOf(entry.enteredUnit), entry.enteredAmount
-                        )
-                    } else repository.addBulkPurchase(
-                        date, draft.label, entries, paid, draft.excludeCostFromBudget
-                    )
-                }
+                runCatching { cartPersistenceMutex.withLock { repository.checkoutCart(draft) } }
                     .onSuccess { result ->
                         workflow.value = FoodWorkflowState.Idle
                         bulkDraft.value = BulkDraft()
                         cartVisible.value = false
                         afterFoodChange(result)
                         _events.emit(FoodUiEvent.Message(
-                            if (draft.items.size == 1) "Logged ${draft.items.single().product.name}."
-                            else "Logged ${draft.items.size} cart items with one checkout total."
+                            "Logged ${draft.items.size} cart item(s) to $date.",
+                            result.addedLogs.takeIf { it.isNotEmpty() }?.let { FoodUndo.Checkout(draft, it) }
                         ))
                     }
                     .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not bulk log items.")) }
@@ -963,6 +1008,23 @@ class FoodsViewModel(
 
     fun undo(undo: FoodUndo) {
         when (undo) {
+            is FoodUndo.Checkout -> {
+                if (cartSubmitting.value || !consumedCartUndo.add(undo.token)) return
+                cartSubmitting.value = true
+                viewModelScope.launch {
+                    try {
+                        check(bulkDraft.value.items.isEmpty()) { "Keep or finish your new cart; checkout was not undone." }
+                        val result = cartPersistenceMutex.withLock { repository.undoCheckout(undo.logs, undo.draft) }
+                        bulkDraft.value = undo.draft
+                        cartVisible.value = true
+                        afterFoodChange(result)
+                        _events.emit(FoodUiEvent.Message("Checkout undone. Items restored to the cart for ${undo.draft.date}."))
+                    } catch (failure: Exception) {
+                        consumedCartUndo.remove(undo.token)
+                        _events.emit(FoodUiEvent.Message(failure.message ?: "Could not undo checkout."))
+                    } finally { cartSubmitting.value = false }
+                }
+            }
             is FoodUndo.Cart -> if (consumedCartUndo.add(undo.token)) {
                 if (consumedCartUndo.size > 64) consumedCartUndo.remove(consumedCartUndo.first())
                 enqueueCartItems(listOf(undo.item), undo.date, openAfter = true)

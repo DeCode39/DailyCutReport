@@ -24,7 +24,8 @@ class CartDraftCodecTest {
             items = listOf(BulkDraftItem(product, QuantityInputState.forProduct(product, 4.0))),
             label = "Convenience store",
             actualPaidText = "75",
-            excludeCostFromBudget = true
+            excludeCostFromBudget = true,
+            copySummary = "Copied from a previous meal"
         )
 
         val restored = CartDraftCodec.decode(CartDraftCodec.encode(original)) {
@@ -36,6 +37,26 @@ class CartDraftCodecTest {
         assertEquals("Convenience store", restored.label)
         assertEquals("75", restored.actualPaidText)
         assertTrue(restored.excludeCostFromBudget)
+        assertEquals(original.copySummary, restored.copySummary)
+    }
+
+    @Test fun legacyCartWithoutADateCanBeReviewedAndLoggedToday() = runTest {
+        val product = ProductEntity("food", name = "Food")
+        val restored = CartDraftCodec.decode(CartDraftCodec.encode(BulkDraft(items = listOf(BulkDraftItem(product))))) { product }
+        assertEquals(LocalDate.now(), restored.date)
+        assertTrue(restored.isValid)
+    }
+
+    @Test fun restartPreservesPhysicalAmountsButNeverConvertsGramsToMilliliters() = runTest {
+        val product = ProductEntity("food", name = "Food", quantityMode = "SERVING_AND_WEIGHT", measurePerServing = 40.0)
+        val input = QuantityInputState.forProduct(product).edit(QuantityUnit.GRAMS, "80")
+        val encoded = CartDraftCodec.encode(BulkDraft(LocalDate.now(), listOf(BulkDraftItem(product, input))))
+        val compatible = CartDraftCodec.decode(encoded) { product.copy(measurePerServing = 20.0) }
+        assertEquals(4.0, compatible.items.single().quantity!!, 0.0)
+        assertEquals(80.0, compatible.items.single().quantityInput.enteredAmount!!, 0.0)
+        val incompatible = CartDraftCodec.decode(encoded) { product.copy(quantityMode = "VOLUME_ONLY") }
+        assertTrue(!incompatible.isValid)
+        assertTrue(incompatible.copySummary!!.contains("Previous entry 80 g"))
     }
 
     @Test fun corruptOrMissingProductsRestoreAsEmptyCart() = runTest {

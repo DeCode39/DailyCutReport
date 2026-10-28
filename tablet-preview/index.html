@@ -70,13 +70,14 @@
         <p class="muted">Tap a product to add one purchase unit. Use the pen to edit.</p>
         <div class="inline"><input id="productSearch" placeholder="Search products"><button id="clearProductSearch" aria-label="Clear product search">×</button></div>
         <div id="bulkCart" class="card hidden">
-          <h3>Cart</h3><p id="bulkDate" class="muted"></p><div id="bulkItems"></div>
+          <h3>Cart</h3><div class="inline"><label>Log to date<input id="bulkDate" type="date"></label><button id="cartToday">Today</button><button id="commitBulk">Log to today</button></div>
+          <p id="cartCopySummary" class="muted"></p><div id="bulkItems"></div>
           <div class="grid">
             <label>Store or group label<input id="bulkLabel" placeholder="e.g. 7-Eleven"></label>
             <label>Final checkout total<input id="bulkPaid" inputmode="decimal" placeholder="Blank uses estimates"></label>
           </div>
           <label><input id="bulkIgnoreBudget" type="checkbox"> Log price but ignore it in budget calculations</label>
-          <div class="actions"><button id="commitBulk">Log selected items</button><button id="discardBulk" class="danger">Discard cart</button></div>
+          <div class="actions"><button id="discardBulk" class="danger">Discard cart</button></div>
         </div>
         <div id="productList"></div>
       </article>
@@ -163,7 +164,7 @@
 
       <div id="settings-about" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
-        <article class="card"><h2>About</h2><p>DailyCutReport 0.16.0 · database schema 10 · backup schema 8.</p><p>Health Connect, goal-assistant configuration, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
+        <article class="card"><h2>About</h2><p>DailyCutReport 0.17.1 · database schema 10 · backup schema 8.</p><p>Health Connect, goal-assistant configuration, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
       </div>
     </section>
   </main>
@@ -171,6 +172,8 @@
   <script src="catalog.js"></script>
   <script src="model.js"></script>
   <script src="backup.js"></script>
+  <dialog id="copyDestination"><h2>Copy foods to cart</h2><label>Destination date<input id="copyDate" type="date"></label><p>Defaults to today. Old actual-paid totals are not copied.</p><button id="confirmCopy">Copy to chosen date</button><button id="cancelCopy">Cancel</button></dialog>
+  <script src="cart.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

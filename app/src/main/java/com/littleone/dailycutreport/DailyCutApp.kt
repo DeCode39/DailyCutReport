@@ -467,37 +467,32 @@ internal fun FoodWorkflowDialogs(
     viewModel: FoodsViewModel
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val submitting by androidx.compose.runtime.rememberUpdatedState(state.cartSubmitting)
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     var confirmDiscardCart by remember { mutableStateOf(false) }
     if (state.cartVisible) {
         val maximumCartHeight = (LocalConfiguration.current.screenHeightDp * 0.85f).dp
         val cartScrollState = rememberScrollState()
-        ModalBottomSheet(onDismissRequest = viewModel::closeCart) {
+        val sheetState = androidx.compose.material3.rememberModalBottomSheetState(
+            skipPartiallyExpanded = true,
+            confirmValueChange = { !submitting || it != androidx.compose.material3.SheetValue.Hidden }
+        )
+        ModalBottomSheet(onDismissRequest = viewModel::closeCart, sheetState = sheetState) {
             Column(
                 Modifier.fillMaxWidth().height(maximumCartHeight).imePadding().navigationBarsPadding()
             ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(onClick = viewModel::closeCart, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
-                        Text("Close")
-                    }
-                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("${state.bulkDraft.items.size} item${if (state.bulkDraft.items.size == 1) "" else "s"}", fontWeight = FontWeight.Bold)
-                        Text(state.bulkDraft.date?.toString().orEmpty(), style = MaterialTheme.typography.bodySmall)
-                    }
-                    TextButton(
-                        onClick = {
+                CartSheetHeader(
+                    draft = state.bulkDraft,
+                    submitting = state.cartSubmitting,
+                    onClose = viewModel::closeCart,
+                    onDateChange = { viewModel.changeCartDate(it) },
+                    onCommit = {
                             focusManager.clearFocus(force = true)
                             keyboard?.hide()
                             viewModel.confirmBulkPurchase()
-                        },
-                        enabled = state.bulkDraft.isValid && !state.cartSubmitting,
-                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    ) { Text(if (state.cartSubmitting) "Saving…" else "Done") }
-                }
+                    }
+                )
                 Column(
                     Modifier.weight(1f).verticalScroll(cartScrollState)
                         .padding(horizontal = 16.dp)
@@ -539,8 +534,8 @@ internal fun FoodWorkflowDialogs(
             title = { Text("Cart date conflict") },
             text = {
                 Text(
-                    "Your cart is for ${conflict.existingDate}. The scanned item${if (conflict.pendingItemCount == 1) "" else "s"} " +
-                        "target ${conflict.requestedDate}. Choose where to add ${if (conflict.pendingItemCount == 1) "it" else "them"}."
+                    "Your cart is for ${conflict.existingDate}. ${conflict.pendingItemCount} pending item(s) target " +
+                        "${conflict.requestedDate}. Keeping the existing date merges them; starting the new date discards the old cart. Cancel leaves it unchanged."
                 )
             },
             confirmButton = {
@@ -556,6 +551,11 @@ internal fun FoodWorkflowDialogs(
     }
     when (val workflow = state.workflow) {
         FoodWorkflowState.Idle -> Unit
+        is FoodWorkflowState.CopyDestination -> CopyDestinationDialog(
+            sourceDate = workflow.sourceDate,
+            onDismiss = viewModel::cancelDialogs,
+            onCopy = { viewModel.copyDayToCart(workflow.sourceDate, workflow.mealId, it) }
+        )
         is FoodWorkflowState.DeleteProduct -> AlertDialog(
             onDismissRequest = viewModel::cancelDialogs,
             title = { Text("Delete ${workflow.product.name}?") },

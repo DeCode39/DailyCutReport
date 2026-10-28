@@ -1,6 +1,17 @@
-# Daily Cut Report 0.17.0
+# Daily Cut Report 0.17.1
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
+
+## New in 0.17.1
+
+- Meal/day copying explicitly offers **Copy to today** or **Choose date**, independently of the date being viewed. Existing cart conflicts require a keep/replace/cancel decision.
+- The pinned cart header has an editable destination date and a date-specific **Log to…** action. Date changes preserve quantities, label, checkout total, and budget exclusion.
+- Copy review identifies deleted/detached foods and incompatible units; old actual-paid totals are not copied.
+- Checkout freezes cart changes and prevents double taps. Food logs and clearing the recoverable cart commit in one Room transaction, preventing replay after process death. Finite Undo deletes only unchanged checkout rows and restores the cart transactionally.
+- Invalid paired quantities cannot submit; incompatible unit changes never infer density. Cart restoration waits before applying incoming additions.
+- Browser logs and recoverable cart now save in one `dcr_v9` document (legacy `dcr_cart_v1` is still read). Pending carts remain excluded from backups.
+
+Room schema **10**, encrypted backup schema **8**, product JSON **2**, and report JSON **3** remain unchanged. FoodVision development is excluded.
 
 ## New in 0.17.0
 

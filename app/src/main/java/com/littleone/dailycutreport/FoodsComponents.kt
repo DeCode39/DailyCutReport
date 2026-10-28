@@ -75,6 +75,7 @@ internal fun BulkDraftCard(
     val formFocus = rememberFormFocusCoordinator(*formSpecs.toTypedArray())
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            draft.copySummary?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             draft.items.forEach { item ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

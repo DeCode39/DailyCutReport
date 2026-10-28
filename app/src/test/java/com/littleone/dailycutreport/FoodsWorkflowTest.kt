@@ -64,7 +64,7 @@ class FoodsWorkflowTest {
         val store = ViewModelStore().apply { put("foods", vm) }
         try {
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect() }
-            advanceTimeBy(300); runCurrent(); vm.copyDayToCart(date.minusDays(1)); runCurrent()
+            advanceTimeBy(300); runCurrent(); vm.copyDayToCart(date.minusDays(1), destinationDate = date); runCurrent()
             val cart = vm.uiState.value.bulkDraft
             assertEquals(date, cart.date)
             assertEquals("", cart.actualPaidText)

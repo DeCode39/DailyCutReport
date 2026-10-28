@@ -227,7 +227,8 @@ data class DailyNutritionMutation(
     val date: String,
     val before: DailyNutritionTotals,
     val after: DailyNutritionTotals,
-    val deleted: DeletedFoodLogEntity? = null
+    val deleted: DeletedFoodLogEntity? = null,
+    val addedLogs: List<DailyFoodLogEntity> = emptyList()
 )
 
 data class DailyNutritionGroupMutation(
@@ -533,7 +534,7 @@ interface NutritionDao {
         if (extras.isNotEmpty()) insertDailyExtraLogs(extras.map {
             DailyExtraNutrientLogEntity(logId = logId, name = it.name, valuePerServing = it.value, unit = it.unit)
         })
-        return DailyNutritionMutation(date, before, totalsForDate(date))
+        return DailyNutritionMutation(date, before, totalsForDate(date), addedLogs = listOf(requireNotNull(foodLogById(logId))))
     }
 
     @Transaction
@@ -551,7 +552,7 @@ interface NutritionDao {
             BulkLogEntryInput(ProductWithExtras(product, extrasForProduct(product.productId)), selection.quantity)
         }
         val allocations = allocateBulkPaidTotal(actualPaidTotalMicros, entries)
-        entries.forEachIndexed { index, entry ->
+        val added = entries.flatMapIndexed { index, entry ->
             addProductToDate(
                 date = date,
                 product = entry.product.product,
@@ -563,15 +564,15 @@ interface NutritionDao {
                 excludeCostFromBudget = excludeCostFromBudget,
                 mealId = groupId,
                 mealName = groupLabel
-            )
+            ).addedLogs
         }
-        return DailyNutritionMutation(date, before, totalsForDate(date))
+        return DailyNutritionMutation(date, before, totalsForDate(date), addedLogs = added)
     }
 
     @Transaction
     suspend fun addMultipleProductsToDate(date: String, selections: List<BulkLogSelection>): DailyNutritionMutation {
         val before = totalsForDate(date)
-        selections.forEach { selection ->
+        val added = selections.flatMap { selection ->
             val product = productById(selection.productId) ?: error("A scanned product no longer exists.")
             addProductToDate(
                 date = date,
@@ -582,8 +583,46 @@ interface NutritionDao {
                 enteredAmount = selection.enteredAmount,
                 actualPaidTotalMicros = selection.actualPaidTotalMicros,
                 excludeCostFromBudget = selection.excludeCostFromBudget
-            )
+            ).addedLogs
         }
+        return DailyNutritionMutation(date, before, totalsForDate(date), addedLogs = added)
+    }
+
+    /** Commit logs and clear the recoverable cart together, so process death cannot replay it. */
+    @Transaction
+    suspend fun checkoutCart(date: String, label: String, selections: List<BulkLogSelection>, paid: Long?, excluded: Boolean): DailyNutritionMutation {
+        require(selections.isNotEmpty() && selections.map { it.productId }.distinct().size == selections.size)
+        require(java.time.LocalDate.parse(date) <= java.time.LocalDate.now())
+        require(paid == null || paid >= 0)
+        selections.forEach { selection ->
+            val product = productById(selection.productId) ?: error("A selected product no longer exists.")
+            val unit = QuantityUnit.valueOf(selection.enteredUnit)
+            require(selection.quantity.isFinite() && selection.quantity > 0 &&
+                product.quantitySpec().servingsFor(selection.enteredAmount, unit)
+                    ?.let { quantitiesEquivalent(it, selection.quantity) } == true) { "Check quantity and units for ${product.name}." }
+        }
+        val mutation = if (selections.size == 1) {
+            val entry = selections.single()
+            val product = requireNotNull(productById(entry.productId))
+            addProductToDate(date, product, entry.quantity, extrasForProduct(entry.productId),
+                entry.enteredUnit, entry.enteredAmount, paid, excluded)
+        } else addBulkPurchaseToDate(date, java.util.UUID.randomUUID().toString(), label.trim().ifBlank { "Bulk purchase" }, selections, paid, excluded)
+        selections.forEach { updatePreferredLogUnit(it.productId, it.enteredUnit) }
+        upsertMetadata(AppMetadataEntity(CartDraftCodec.METADATA_KEY, CartDraftCodec.encode(BulkDraft())))
+        return mutation
+    }
+
+    /** Delete only this checkout, and nothing if any of its rows changed meanwhile. */
+    @Transaction
+    suspend fun undoCheckout(expected: List<DailyFoodLogEntity>, cart: BulkDraft): DailyNutritionMutation {
+        require(expected.isNotEmpty() && expected.map { it.id }.distinct().size == expected.size)
+        val date = expected.first().date
+        require(cart.isValid && cart.date.toString() == date)
+        require(expected.all { it.id > 0 && it.date == date })
+        check(expected.all { foodLogById(it.id) == it }) { "Checkout entries changed; review them in Today instead." }
+        val before = totalsForDate(date)
+        expected.forEach { check(deleteLog(it.id) == 1) }
+        upsertMetadata(AppMetadataEntity(CartDraftCodec.METADATA_KEY, CartDraftCodec.encode(cart)))
         return DailyNutritionMutation(date, before, totalsForDate(date))
     }
 

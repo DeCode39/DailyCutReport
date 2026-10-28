@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -81,6 +82,14 @@ class ReleaseScreenshotsTest {
                 SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
             capture(tab.lowercase())
         }
+        val foods = ViewModelProvider(compose.activity)[FoodsViewModel::class.java]
+        val demo = runBlocking { requireNotNull(repository.getProduct("release-demo")).product }
+        compose.runOnIdle { foods.addProductToCart(demo, destinationDate = today, openAfter = true) }
+        capture("cart")
+        compose.onNodeWithText("Close").performClick()
+        compose.runOnIdle { foods.requestCopyDayToCart(today) }
+        capture("copy-destination")
+        compose.onNodeWithText("Cancel").performClick()
         compose.onNodeWithText("Food database").performClick()
         capture("food-database")
         compose.onAllNodesWithText("Edit").onFirst().performClick()

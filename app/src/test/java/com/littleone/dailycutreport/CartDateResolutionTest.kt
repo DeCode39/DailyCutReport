@@ -1,6 +1,7 @@
 package com.littleone.dailycutreport
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 
@@ -23,6 +24,24 @@ class CartDateResolutionTest {
         assertEquals(oldDate, result.date)
         assertEquals(2, result.items.size)
         assertEquals(4.0, result.items.first { it.product.productId == "first" }.quantity!!, 0.0)
+    }
+
+    @Test fun `invalid quantities cannot be silently replaced by another addition`() {
+        val input = QuantityInputState.forProduct(first).edit(QuantityUnit.SERVINGS, "-")
+        val current = BulkDraft(oldDate, listOf(BulkDraftItem(first, input)))
+        assertTrue(runCatching { resolveCartAddition(current, PendingCartAddition(oldDate, listOf(BulkDraftItem(first))), CartDateResolution.KEEP_EXISTING) }.isFailure)
+        assertEquals("-", current.items.single().quantityInput.servingsText)
+    }
+
+    @Test fun `merging corrected products preserves physical amounts and updates conversion`() {
+        val measured = first.copy(quantityMode = "SERVING_AND_WEIGHT", measurePerServing = 40.0)
+        val input = QuantityInputState.forProduct(measured).edit(QuantityUnit.GRAMS, "80")
+        val corrected = measured.copy(measurePerServing = 20.0)
+        val result = resolveCartAddition(BulkDraft(oldDate, listOf(BulkDraftItem(measured, input))),
+            PendingCartAddition(oldDate, listOf(BulkDraftItem(corrected))), CartDateResolution.KEEP_EXISTING)
+        assertEquals(6.0, result.items.single().quantity!!, 0.0)
+        assertEquals(120.0, result.items.single().quantityInput.enteredAmount!!, 0.0)
+        assertEquals(corrected.quantitySpec(), result.items.single().quantityInput.spec)
     }
 
     @Test fun `starting requested date discards prior cart only after confirmation`() {

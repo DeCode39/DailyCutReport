@@ -77,6 +77,8 @@ interface DailyCutRepository {
     suspend fun addProducts(date: LocalDate, entries: List<BulkLogSelection>): FoodMutationResult
     suspend fun updateFoodLog(edit: FoodQuantityEdit): FoodMutationResult
     suspend fun deleteFoodLog(id: Long): FoodMutationResult
+    suspend fun checkoutCart(draft: BulkDraft): FoodMutationResult
+    suspend fun undoCheckout(logs: List<FoodLogSnapshot>, draft: BulkDraft): FoodMutationResult
     suspend fun restoreFoodLog(deleted: DeletedFoodLogSnapshot): FoodMutationResult
     suspend fun deleteFoodLogGroup(mealId: String): FoodGroupMutationResult
     suspend fun restoreFoodLogGroup(deleted: DeletedFoodLogGroup): FoodGroupMutationResult
@@ -634,6 +636,18 @@ class DefaultDailyCutRepository(
         completeFoodMutation(mutation)
     }
 
+    override suspend fun checkoutCart(draft: BulkDraft): FoodMutationResult = withContext(Dispatchers.IO) {
+        require(draft.isValid) { "Choose a valid date, quantity and checkout total." }
+        val selections = draft.items.map { BulkLogSelection(it.product.productId, requireNotNull(it.quantity),
+            it.quantityInput.activeUnit.name, requireNotNull(it.quantityInput.enteredAmount)) }
+        completeFoodMutation(dao.checkoutCart(requireNotNull(draft.date).toString(), draft.label, selections,
+            parseMoneyMicros(draft.actualPaidText), draft.excludeCostFromBudget))
+    }
+
+    override suspend fun undoCheckout(logs: List<FoodLogSnapshot>, draft: BulkDraft): FoodMutationResult = withContext(Dispatchers.IO) {
+        completeFoodMutation(dao.undoCheckout(logs.map { it.toEntity() }, draft))
+    }
+
     override suspend fun restoreFoodLog(deleted: DeletedFoodLogSnapshot): FoodMutationResult = withContext(Dispatchers.IO) {
         val entity = deleted.log.toEntity()
         completeFoodMutation(dao.restoreFoodLogSnapshot(DeletedFoodLogEntity(entity, deleted.extras)))
@@ -760,12 +774,15 @@ class DefaultDailyCutRepository(
             date = date,
             before = mutation.before.toSummary(emptyMap()),
             after = mutation.after.toSummary(emptyMap()),
+            addedLogs = mutation.addedLogs.map { it.toDomainSnapshot() },
             deleted = mutation.deleted?.let { deleted ->
                 DeletedFoodLogSnapshot(deleted.log.toDomainSnapshot(), deleted.extras)
             }
         )
-        DailyCutWidgetUpdater.updateAll(context)
-        nutritionSync.sync(date)
+        // The Room commit already succeeded. A widget or Health Connect failure
+        // must not make the UI offer to submit this same checkout again.
+        runCatching { DailyCutWidgetUpdater.updateAll(context) }
+        runCatching { nutritionSync.sync(date) }
         return result
     }
 
@@ -785,7 +802,7 @@ class DefaultDailyCutRepository(
     }
 
     private companion object {
-        const val CART_DRAFT_KEY = "pending_cart_v1"
+        const val CART_DRAFT_KEY = CartDraftCodec.METADATA_KEY
         const val PRODUCT_DRAFT_KEY = "pending_product_draft_v1"
         const val CLEAR_OVERRIDES_KEY = "manual_overrides_cleared_0_8_5"
         const val HEALTH_HISTORY_SYNC_DAY_KEY = "health_history_sync_day_v1"
