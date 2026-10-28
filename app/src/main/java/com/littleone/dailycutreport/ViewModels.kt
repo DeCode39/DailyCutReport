@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -311,11 +312,6 @@ class FoodsViewModel(
     private val consumedCartUndo = linkedSetOf<String>()
     private val latestGoals = selectedDate.flatMapLatest { repository.observeGoals(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals())
-    private val latestTargets = combine(
-        latestGoals,
-        selectedDate.flatMapLatest(repository::observeReport)
-    ) { goals, report -> goals.targetsFor(report.projectedBurnCalories) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, UserGoals().targetsFor(null))
     private val productSearch = query.debounce(200).distinctUntilChanged().flatMapLatest { value ->
         if (value.isBlank()) flowOf(emptyList()) else repository.observeProducts(value)
     }
@@ -998,8 +994,7 @@ class FoodsViewModel(
         viewModelScope.launch {
             runCatching { repository.deleteFoodLogGroup(mealId) }
                 .onSuccess { result ->
-                    thresholdNotifier.crossingMessage(result.date, result.before, result.after, latestTargets.value)
-                        ?.let { _events.emit(FoodUiEvent.Threshold(it)) }
+                    afterFoodChange(FoodMutationResult(result.date, result.before, result.after))
                     _events.emit(FoodUiEvent.Message("Bulk order deleted.", FoodUndo.Group(result.deleted)))
                 }
                 .onFailure { _events.emit(FoodUiEvent.Message(it.message ?: "Could not delete bulk order.")) }
@@ -1039,7 +1034,11 @@ class FoodsViewModel(
     }
 
     private suspend fun afterFoodChange(result: FoodMutationResult) {
-        thresholdNotifier.crossingMessage(result.date, result.before, result.after, latestTargets.value)
+        val targets = runCatching {
+            repository.observeGoals(result.date).first()
+                .targetsFor(repository.observeReport(result.date).first().projectedBurnCalories)
+        }.getOrNull() ?: return
+        thresholdNotifier.crossingMessage(result.date, result.before, result.after, targets)
             ?.let { _events.emit(FoodUiEvent.Threshold(it)) }
     }
 }

@@ -27,11 +27,13 @@ class CartWorkflowTest {
         var gate: CompletableDeferred<FoodMutationResult>? = null
         var loadGate: CompletableDeferred<BulkDraft>? = null
         var checkoutFailure = false
+        var after = NutritionSummary()
+        var goals = emptyMap<LocalDate, UserGoals>()
         var checkouts = 0
         var undos = 0
         val repo = Proxy.newProxyInstance(DailyCutRepository::class.java.classLoader, arrayOf(DailyCutRepository::class.java)) { _, method, args ->
             when (method.name) {
-                "observeGoals" -> flowOf(UserGoals())
+                "observeGoals" -> flowOf(goals[args?.firstOrNull() as? LocalDate] ?: UserGoals())
                 "observeReport" -> flowOf(DailyReport(args!![0] as LocalDate))
                 "observeFoodLogs", "observeProducts", "observeTemporaryMeals", "observeRecentProducts", "observeFavoriteProducts" -> flowOf(emptyList<Any>())
                 "loadCartDraft" -> loadGate?.let { suspendFor(it, args!!) } ?: stored
@@ -53,7 +55,7 @@ class CartWorkflowTest {
             gate.invokeOnCompletion { error -> if (error == null) continuation.resume(gate.getCompleted()) else continuation.resumeWithException(error) }
             return COROUTINE_SUSPENDED
         }
-        fun result(cart: BulkDraft) = FoodMutationResult(requireNotNull(cart.date), NutritionSummary(), NutritionSummary(),
+        fun result(cart: BulkDraft) = FoodMutationResult(requireNotNull(cart.date), NutritionSummary(), after,
             addedLogs = listOf(logs.first().copy(date = requireNotNull(cart.date))))
     }
 
@@ -149,6 +151,20 @@ class CartWorkflowTest {
             fake.checkoutFailure = false; vm.confirmBulkPurchase(); runCurrent()
             assertEquals(2, fake.checkouts)
             assertTrue(vm.uiState.value.bulkDraft.items.isEmpty())
+        }
+    }
+
+    @Test fun thresholdsUseDestinationGoalsNotTheHistoricalDateBeingViewed() = runTest {
+        val destination = date.minusDays(2)
+        val fake = Fake(food, cart(destination)).apply {
+            after = NutritionSummary(calories = 100.0)
+            goals = mapOf(destination to UserGoals(calories = 50.0))
+        }
+        withVm(fake) { vm, _ ->
+            val messages = mutableListOf<String>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { if (it is FoodUiEvent.Threshold) messages += it.text } }
+            vm.confirmBulkPurchase(); runCurrent()
+            assertTrue(messages.any { it.contains("Calories target reached (100 / 50)") })
         }
     }
 
