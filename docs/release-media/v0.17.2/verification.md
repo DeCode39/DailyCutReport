@@ -10,4 +10,4 @@ Coverage includes inclusive seven-day boundaries, year/leap transitions, empty d
 
 The connected phone was not used: its test packages remain removed and the release installation/data remain untouched. No database or backup migration, no OCR/barcode changes, no Health Connect query changes. FoodVision remains excluded.
 
-Final application source: `bda7514b7dc5830c4575125eea9d8a42278d1aa0`. Build-only [CI run 42814641294](https://github.com/DeCode39/DailyCutReport/actions/runs/42814641294); this patch does not create a release tag or publish a GitHub Release.
+Final application source: `bda7514b7dc5830c4575125eea9d8a42278d1aa0`. The signed APKs from [CI run 42814641294](https://github.com/DeCode39/DailyCutReport/actions/runs/42814641294) are distributed with SHA-256 checksums in the [v0.17.2 prerelease](https://github.com/DeCode39/DailyCutReport/releases/tag/v0.17.2). Subsequent commits change only documentation and screenshots, not the validated application/build sources.
