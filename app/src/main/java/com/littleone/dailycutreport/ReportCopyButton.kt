@@ -21,8 +21,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ReportCopyButton(busy: Boolean, onCopyDay: () -> Unit, onCopyWeek: () -> Unit) {
     Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
         shape = CircleShape,
         modifier = Modifier.size(48.dp).clip(CircleShape).combinedClickable(
             enabled = !busy,
