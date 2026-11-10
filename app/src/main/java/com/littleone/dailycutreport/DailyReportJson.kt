@@ -11,7 +11,7 @@ import kotlin.math.roundToLong
 object DailyReportJson {
     const val SCHEMA_VERSION = 3
 
-    fun encode(state: TodayUiState): String {
+    fun encode(state: TodayUiState, generatedAt: Instant = Instant.now()): String {
         val report = state.report
         val root = JSONObject()
             .put("internalBurnComparison", state.internalBurn?.toJson()?.apply {
@@ -20,7 +20,7 @@ object DailyReportJson {
             .put("schemaVersion", SCHEMA_VERSION)
             .put("app", "DailyCutReport")
             .put("date", report.date.toString())
-            .put("generatedAt", Instant.now().toString())
+            .put("generatedAt", generatedAt.toString())
             .put("goalMode", state.goals.mode.name.lowercase())
             .put("energy", JSONObject()
                 .put("projectedFinalBurnKcal", report.projectedBurnCalories?.let(::calories) ?: JSONObject.NULL)

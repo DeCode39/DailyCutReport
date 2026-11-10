@@ -130,7 +130,8 @@ class TodayViewModel(
         }
     }
 
-    fun reportJson(): String = DailyReportJson.encode(uiState.value)
+    suspend fun reportJson(date: LocalDate, weekly: Boolean = false): String =
+        ReportJsonExporter(repository).export(date, weekly)
     fun clearMessage() { message.value = null }
 }
 

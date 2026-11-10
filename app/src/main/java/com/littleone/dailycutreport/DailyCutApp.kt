@@ -166,6 +166,33 @@ internal fun TodayScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var expandedTargets by remember { mutableStateOf(false) }
+    var copyingReport by remember { mutableStateOf(false) }
+    val copyScope = rememberCoroutineScope()
+    fun copyReport(weekly: Boolean) {
+        if (copyingReport) return
+        val date = selectedDate
+        copyingReport = true
+        copyScope.launch {
+            try {
+                val json = viewModel.reportJson(date, weekly)
+                val label = if (weekly) "DailyCutReport ${date.minusDays(6)} to $date" else "DailyCutReport $date"
+                val clip = ClipData.newPlainText(label, json)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    clip.description.extras = PersistableBundle().apply {
+                        putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                    }
+                }
+                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+                onMessage(if (weekly) "Weekly report JSON copied: ${date.minusDays(6)} to $date." else "Daily report JSON copied.")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                onMessage("Could not copy report JSON. Please try again.")
+            } finally {
+                copyingReport = false
+            }
+        }
+    }
 
     LaunchedEffect(state.message) {
         state.message?.let { onMessage(it); viewModel.clearMessage() }
@@ -190,20 +217,7 @@ internal fun TodayScreen(
                     if (state.refreshing) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     else Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Refresh selected date")
                 }
-                FilledIconButton(
-                    modifier = Modifier.size(48.dp),
-                    onClick = {
-                        val clipboard = context.getSystemService(ClipboardManager::class.java)
-                        val clip = ClipData.newPlainText("DailyCutReport ${state.report.date}", viewModel.reportJson())
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            clip.description.extras = PersistableBundle().apply {
-                                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-                            }
-                        }
-                        clipboard.setPrimaryClip(clip)
-                        onMessage("Daily report JSON copied.")
-                    }
-                ) { Icon(painterResource(R.drawable.ic_copy), contentDescription = "Copy daily report JSON") }
+                ReportCopyButton(copyingReport, onCopyDay = { copyReport(false) }, onCopyWeek = { copyReport(true) })
             }
         }
         item {

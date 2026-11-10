@@ -1,4 +1,16 @@
 const M=DailyCutModel,C=DailyCutCart,$=id=>document.getElementById(id),today=M.localDate(new Date());
+let copyingReport=false;
+async function copyReportJson(weekly){
+  if(copyingReport)return;
+  copyingReport=true;
+  const end=state.selectedDate;
+  try{
+    const text=weekly?DailyCutReportCopy.weeklyReportJson(M,state,end):M.dailyReportJson(state,end);
+    try{await navigator.clipboard.writeText(text);alert(weekly?'Seven-day report JSON copied.':'Daily report JSON copied.');}
+    catch{prompt(weekly?'Copy seven-day report JSON':'Copy daily report JSON',text);}
+  }finally{copyingReport=false;}
+}
+DailyCutReportCopy.bindCopyButton($('copyReport'),()=>copyReportJson(false),()=>copyReportJson(true));
 let editorBaseline='',cartUndo=null;let state=M.migrate(localStorage),editingProductId=null,bulkDraft=restoreCartDraft(),activeSettingsPage=null;
 const plannerAmountTimers=new Map();
 const fields=['steps','distance','burn'];
@@ -85,7 +97,7 @@ document.querySelectorAll('[data-settings-back]').forEach(button=>button.addEven
 const initialRoute=location.hash.slice(1);if(initialRoute.startsWith('settings/')){activeSettingsPage=initialRoute.split('/')[1];document.querySelector('nav button[data-tab="settings"]').click();showSettingsPage(activeSettingsPage);}else document.querySelector(`nav button[data-tab="${initialRoute.split('/')[0]}"]`)?.click();
 $('previousDate').onclick=()=>{const d=new Date(state.selectedDate+'T12:00:00');d.setDate(d.getDate()-1);state.selectedDate=M.localDate(d);loadReportForm();loadHealthForm();persist();};
 $('nextDate').onclick=()=>{const d=new Date(state.selectedDate+'T12:00:00');d.setDate(d.getDate()+1);state.selectedDate=M.localDate(d)>today?today:M.localDate(d);loadReportForm();loadHealthForm();persist();};
-$('selectedDate').onchange=e=>{state.selectedDate=e.target.value>today?today:e.target.value;loadReportForm();loadHealthForm();persist();};$('saveReport').onclick=saveReport;$('refreshReport').onclick=()=>alert('Health Connect refresh is Android-only.');$('copyReport').onclick=async()=>{const text=M.dailyReportJson(state,state.selectedDate);try{await navigator.clipboard.writeText(text);alert('Daily report JSON copied.');}catch{prompt('Copy daily report JSON',text);}};$('importProductJson').onclick=importProductJson;$('saveProduct').onclick=saveProduct;$('productSearch').oninput=render;$('plannerSearch').oninput=renderPlannerProducts;$('reviewNutrition').onchange=renderPlannerProducts;$('clearProductSearch').onclick=()=>{$('productSearch').value='';renderCatalog();$('productSearch').focus();};$('clearPlannerSearch').onclick=()=>{$('plannerSearch').value='';renderPlannerProducts();$('plannerSearch').focus();};
+$('selectedDate').onchange=e=>{state.selectedDate=e.target.value>today?today:e.target.value;loadReportForm();loadHealthForm();persist();};$('saveReport').onclick=saveReport;$('refreshReport').onclick=()=>alert('Health Connect refresh is Android-only.');$('importProductJson').onclick=importProductJson;$('saveProduct').onclick=saveProduct;$('productSearch').oninput=render;$('plannerSearch').oninput=renderPlannerProducts;$('reviewNutrition').onchange=renderPlannerProducts;$('clearProductSearch').onclick=()=>{$('productSearch').value='';renderCatalog();$('productSearch').focus();};$('clearPlannerSearch').onclick=()=>{$('plannerSearch').value='';renderPlannerProducts();$('plannerSearch').focus();};
 $('newProduct').onclick=()=>{fillProduct();$('foodsCatalog').classList.add('hidden');$('productEditor').classList.remove('hidden');};$('closeProductEditor').onclick=()=>{if(editingProductId&&JSON.stringify(productFromForm())!==editorBaseline&&!confirm('Discard unsaved changes to this existing food?'))return;$('productEditor').classList.add('hidden');$('foodsCatalog').classList.remove('hidden');};$('previewBarcodeScan').onclick=()=>alert('Camera barcode scanning is Android-only. You can type the barcode here.');
 $('productPurchaseServings').oninput=e=>{const previous=Number(e.target.dataset.previous||1),next=M.parseNumber(e.target.value),quantity=Number($('productQuantity').value);if(Number.isFinite(next)&&next>0&&(!$('productQuantity').value.trim()||quantity===previous))$('productQuantity').value=String(next);if(Number.isFinite(next)&&next>0)e.target.dataset.previous=String(next);};
 $('productQuantityMode').onchange=()=>{syncQuantityInputs();const measure=n('productMeasurePerServing');if(measure>0)$('productMeasureQuantity').value=String(n('productQuantity')*measure);};

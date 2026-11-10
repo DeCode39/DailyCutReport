@@ -17,7 +17,7 @@
     </section>
 
     <section id="todayTab" class="tab-panel">
-      <div class="actions"><button id="refreshReport">Refresh</button><button id="copyReport">Copy JSON</button></div>
+      <div class="actions"><button id="refreshReport">Refresh</button><button id="copyReport" title="Tap: selected day. Hold or Shift+Enter: seven days ending on selected date." aria-label="Copy report JSON. Tap for a day; hold or Shift+Enter for seven days.">Copy JSON</button></div>
       <article id="resultCard" class="card hero"></article>
       <article id="nutritionCard" class="card"></article>
       <article class="card"><h2>Remaining-day planner</h2><button id="planDay">Generate suggestions</button><div id="planResults"></div></article>
@@ -164,7 +164,7 @@
 
       <div id="settings-about" class="settings-page hidden">
         <button class="settings-back" data-settings-back>← Settings</button>
-        <article class="card"><h2>About</h2><p>DailyCutReport 0.17.1 · database schema 10 · backup schema 8.</p><p>Health Connect, goal-assistant configuration, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
+        <article class="card"><h2>About</h2><p>DailyCutReport 0.17.2 · database schema 10 · backup schema 8.</p><p>Health Connect, goal-assistant configuration, camera barcode scanning, and nutrition-label OCR require the Android APK.</p></article>
       </div>
     </section>
   </main>
@@ -174,6 +174,7 @@
   <script src="backup.js"></script>
   <dialog id="copyDestination"><h2>Copy foods to cart</h2><label>Destination date<input id="copyDate" type="date"></label><p>Defaults to today. Old actual-paid totals are not copied.</p><button id="confirmCopy">Copy to chosen date</button><button id="cancelCopy">Cancel</button></dialog>
   <script src="cart.js"></script>
+  <script src="report-copy.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
