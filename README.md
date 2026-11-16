@@ -92,7 +92,7 @@ The signed arm64 and universal APKs are distributed through GitHub prereleases. 
 - Legacy manual overrides are cleared during initialization and every restore; report values now come from Health Connect and local food logs.
 - Missing burn data is shown as unavailable, never as a calorie surplus.
 - Deleted food entries can be restored from one-shot, finite-duration snackbar Undo actions; newer messages replace stale ones instead of queueing.
-- Today provides a selected-date Health Connect refresh and a privacy-marked clipboard action that copies versioned, barcode-free daily-report JSON.
+- Today provides a forced last-28-days Health Connect refresh and a privacy-marked clipboard action: tap for the selected day's JSON, hold for seven days ending on that date. Reports are versioned and barcode-free.
 - Forms use keyboard Next/Done/Search actions with focus-aware scrolling. Unfinished new-product drafts can be resumed after process death, and the shared cart keeps its checkout action pinned above the scrollable contents.
 - Browser-based tablet preview with matching manual workflows and versioned localStorage.
 
