@@ -752,9 +752,11 @@ interface NutritionDao {
         endDate: String,
         reports: List<DailyReportEntity>,
         weights: List<WeightEntryEntity>,
-        walking: List<WalkingSessionSampleEntity>
+        walking: List<WalkingSessionSampleEntity>,
+        forecasts: List<AppMetadataEntity> = emptyList()
     ) {
         reports.forEach { upsertDailyReport(it) }
+        forecasts.forEach { upsertMetadata(it) }
         clearImportedWeights(startDate, endDate)
         if (weights.isNotEmpty()) upsertWeightEntries(weights)
         clearWalkingSamples(startDate, endDate)

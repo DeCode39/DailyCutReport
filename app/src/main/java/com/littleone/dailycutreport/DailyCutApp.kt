@@ -215,7 +215,7 @@ internal fun TodayScreen(
                     onClick = viewModel::refreshHealth
                 ) {
                     if (state.refreshing) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    else Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Refresh selected date")
+                    else Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Refresh last 28 days")
                 }
                 ReportCopyButton(copyingReport, onCopyDay = { copyReport(false) }, onCopyWeek = { copyReport(true) })
             }
@@ -1102,7 +1102,7 @@ internal fun HealthScreen(
                             onClick = viewModel::refreshHistory,
                             enabled = !state.refreshing,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (state.refreshing) "Refreshing…" else "Refresh Health history") }
+                        ) { Text(if (state.refreshing) "Refreshing…" else "Refresh last 28 days") }
                         TextButton(onClick = { explanationExpanded = !explanationExpanded }) {
                             Text(if (explanationExpanded) "Hide calculation" else "How this is calculated")
                         }
@@ -1491,10 +1491,10 @@ internal fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (state.corePermissionsGranted) "Activity permissions granted" else "Grant activity permissions") }
                     OutlinedButton(
-                        onClick = { viewModel.refreshHealth(selectedDate) },
+                        onClick = viewModel::refreshHealth,
                         enabled = state.healthAvailable && state.corePermissionsGranted && !state.isRefreshingHealth,
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (state.isRefreshingHealth) "Refreshing…" else "Refresh selected date") }
+                    ) { Text(if (state.isRefreshingHealth) "Refreshing…" else "Refresh last 28 days") }
                     Text(if (state.nutritionPermissionGranted) "Optional nutrition read permission granted" else "Optional nutrition read permission not granted")
                     OutlinedButton(
                         onClick = onGrantNutritionPermission,

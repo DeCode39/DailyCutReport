@@ -48,6 +48,7 @@ interface DailyCutRepository {
     suspend fun recommendations(date: LocalDate): RecommendationResult
     suspend fun nutritionForDate(date: LocalDate): NutritionSummary
     suspend fun refreshHealth(date: LocalDate): Result<Unit>
+    suspend fun refreshRecentHealth(): Result<Unit>
     suspend fun lookupProduct(barcode: String): ProductWithExtras?
     suspend fun getProduct(productId: String): ProductWithExtras?
     suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult
@@ -384,7 +385,29 @@ class DefaultDailyCutRepository(
         dao.totalsForDate(date.toString()).toSummary(emptyMap())
     }
 
-    override suspend fun refreshHealth(date: LocalDate): Result<Unit> = runCatching {
+    override suspend fun refreshHealth(date: LocalDate): Result<Unit> = healthRefreshResult {
+        historySyncMutex.withLock { refreshHealthDay(date) }
+    }
+
+    /** Manual refresh always bypasses the daily throttle; history must precede today's forecast. */
+    override suspend fun refreshRecentHealth(): Result<Unit> = healthRefreshResult {
+        initialize()
+        historySyncMutex.withLock {
+            requireHealthAccess()
+            val today = LocalDate.now()
+            importHealthHistory(today.minusDays(27), today, preserveToday = true)
+            try {
+                refreshHealthDay(today)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                throw IllegalStateException("History refreshed, but today's refresh failed. Please retry.", error)
+            }
+        }
+    }
+
+    private suspend fun refreshHealthDay(date: LocalDate) {
+        requireHealthAccess()
         val raw = healthConnect.readDailySummary(date)
         val today = LocalDate.now()
         val refreshedAt = raw.recordedThroughEpochMs?.let(Instant::ofEpochMilli) ?: Instant.now()
@@ -720,30 +743,48 @@ class DefaultDailyCutRepository(
         syncScope.launch { syncWeights() }
     }
 
-    override suspend fun syncHealthHistory(force: Boolean): Result<Unit> = runCatching {
+    override suspend fun syncHealthHistory(force: Boolean): Result<Unit> = healthRefreshResult {
         historySyncMutex.withLock {
-            require(healthConnect.isAvailable()) { healthConnect.availabilityMessage() }
-            require(healthConnect.hasCorePermissions()) { "Health Connect activity permission not granted" }
+            requireHealthAccess()
             val today = LocalDate.now()
             if (!force && withContext(Dispatchers.IO) { dao.metadata(HEALTH_HISTORY_SYNC_DAY_KEY) } == today.toString()) {
                 return@withLock
             }
-            val start = today.minusDays(29)
-            val imported = healthConnect.readHealthHistory(start, today)
-            withContext(Dispatchers.IO) {
-                val reports = imported.dailySummaries.map { (date, summary) ->
-                    val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
-                    existing.withHealth(summary)
-                }
-                dao.replaceImportedHealthHistory(
-                    start.toString(), today.toString(), reports,
-                    imported.weights.map(WeightEntry::toEntity),
-                    imported.walkingSessions.map(WalkingSessionSample::toEntity)
-                )
-                imported.dailySummaries.toSortedMap().forEach { (date, summary) -> saveInternalBurn(date, summary) }
-                dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_DAY_KEY, today.toString()))
-                dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_STATUS_KEY, java.time.Instant.now().toString()))
+            importHealthHistory(today.minusDays(29), today)
+        }
+    }
+
+    private suspend fun requireHealthAccess() {
+        require(healthConnect.isAvailable()) { healthConnect.availabilityMessage() }
+        require(healthConnect.hasCorePermissions()) { "Health Connect activity permission not granted" }
+    }
+
+    private suspend fun importHealthHistory(start: LocalDate, today: LocalDate, preserveToday: Boolean = false) {
+        val imported = healthConnect.readHealthHistory(start, today)
+        val expectedDates = generateSequence(start) { it.plusDays(1).takeIf { next -> next <= today } }.toSet()
+        check(imported.dailySummaries.keys == expectedDates) { "Incomplete Health Connect history; please retry." }
+        val refreshedAt = Instant.now()
+        withContext(Dispatchers.IO) {
+            val persistedSummaries = imported.dailySummaries.filterKeys { !preserveToday || it < today }
+            val reports = persistedSummaries.map { (date, summary) ->
+                val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
+                existing.withHealth(summary)
             }
+            // Past days may still have a projected forecast cached from when they were today.
+            // Replace it with actual completed-day data in the same transaction as the totals.
+            val forecasts = imported.dailySummaries.filterKeys { it < today }.map { (date, summary) ->
+                val forecast = burnForecastEngine.forecast(date, today, refreshedAt, ZoneId.systemDefault(),
+                    summary.totalCalories, null, emptyList())
+                AppMetadataEntity(burnForecastMetadataKey(date), BurnForecastCodec.encode(forecast))
+            }
+            dao.replaceImportedHealthHistory(
+                start.toString(), today.toString(), reports,
+                imported.weights.map(WeightEntry::toEntity),
+                imported.walkingSessions.map(WalkingSessionSample::toEntity), forecasts
+            )
+            persistedSummaries.toSortedMap().forEach { (date, summary) -> saveInternalBurn(date, summary) }
+            dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_DAY_KEY, today.toString()))
+            dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_STATUS_KEY, refreshedAt.toString()))
         }
     }
 
@@ -808,6 +849,15 @@ class DefaultDailyCutRepository(
         const val HEALTH_HISTORY_SYNC_DAY_KEY = "health_history_sync_day_v1"
         const val HEALTH_HISTORY_SYNC_STATUS_KEY = "health_history_sync_status_v1"
     }
+}
+
+private suspend fun healthRefreshResult(block: suspend () -> Unit): Result<Unit> = try {
+    block()
+    Result.success(Unit)
+} catch (cancelled: kotlinx.coroutines.CancellationException) {
+    throw cancelled
+} catch (error: Exception) {
+    Result.failure(error)
 }
 
 private data class HealthHistoryState(

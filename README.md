@@ -1,8 +1,16 @@
-# Daily Cut Report 0.17.2
+# Daily Cut Report 0.17.3
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
-## New in 0.17.2
+## New in 0.17.3
+
+- Manual refresh on Today, Health, and Settings re-imports **today plus the previous 27 calendar days**, anchored to today even when viewing an older date. Every press bypasses the daily history throttle, picking up delayed Health Connect corrections.
+- Completed-day burn caches are refreshed transactionally with imported totals. Today's live forecast runs last, using the corrected history. Concurrent manual/foreground imports and daily refreshes are serialized.
+- Permission failures, incomplete imports, and cancellations do not replace history with partial results. If today's final read fails after history succeeds, the prior today values remain intact and the UI reports the partial failure; retry stays available.
+- Automatic foreground refresh stays lightweight; the existing once-daily/permission bootstrap still imports up to 30 days. No new permissions or background work.
+- Version code **41**. Room **10**, encrypted backup **8**, product JSON **2**, daily report JSON **3**, weekly envelope **1**, and browser storage **dcr_v9** remain unchanged. FoodVision is excluded.
+
+## Previous: 0.17.2
 
 - Tap Today's Copy action for the selected day; hold it for the seven calendar days ending on that date (inclusive). Accessibility exposes a separate long-click action. The tablet preview also supports Shift+Enter.
 - Weekly clipboard JSON uses a version-1 envelope (`period`, `startDate`, `endDate`, `days`) containing seven date-ordered schema-3 daily reports. Empty days remain included and missing burn stays unavailable. Daily goals, grouped foods, spending, and both burn sources use that day's saved local data; export does not refresh Health Connect.

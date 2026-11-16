@@ -121,12 +121,15 @@ class TodayViewModel(
 
     fun refreshHealth() {
         if (refreshing.value) return
+        refreshing.value = true
         viewModelScope.launch {
-            refreshing.value = true
-            repository.refreshHealth(selectedDate.value)
-                .onSuccess { message.value = "Health data refreshed." }
-                .onFailure { message.value = it.message ?: "Could not refresh Health Connect." }
-            refreshing.value = false
+            try {
+                repository.refreshRecentHealth()
+                    .onSuccess { message.value = "Last 28 days of Health Connect data refreshed." }
+                    .onFailure { message.value = it.message ?: "Could not refresh Health Connect." }
+            } finally {
+                refreshing.value = false
+            }
         }
     }
 
@@ -1285,20 +1288,18 @@ class SettingsViewModel(private val repository: DailyCutRepository) : ViewModel(
         }
     }
 
-    fun refreshHealth(date: LocalDate) {
+    fun refreshHealth() {
         if (_uiState.value.isRefreshingHealth) return
+        _uiState.value = _uiState.value.copy(isRefreshingHealth = true)
         viewModelScope.launch {
-            if (!repository.healthConnectAvailable() || !repository.healthCorePermissionsGranted()) {
-                _uiState.value = _uiState.value.copy(message = "Grant Health Connect activity permissions first.")
+            try {
+                repository.refreshRecentHealth()
+                    .onSuccess { _uiState.value = _uiState.value.copy(message = "Last 28 days of Health Connect data refreshed.") }
+                    .onFailure { _uiState.value = _uiState.value.copy(message = "Health refresh failed: ${it.message ?: "unknown error"}") }
+            } finally {
+                _uiState.value = _uiState.value.copy(isRefreshingHealth = false)
                 refresh()
-                return@launch
             }
-            _uiState.value = _uiState.value.copy(isRefreshingHealth = true)
-            repository.refreshHealth(date)
-                .onSuccess { _uiState.value = _uiState.value.copy(message = "Health Connect refreshed.") }
-                .onFailure { _uiState.value = _uiState.value.copy(message = "Health refresh failed: ${it.message ?: "unknown error"}") }
-            _uiState.value = _uiState.value.copy(isRefreshingHealth = false)
-            refresh()
         }
     }
 
@@ -1460,18 +1461,15 @@ class HealthViewModel(
 
     fun refreshHistory() {
         if (refreshing.value) return
+        refreshing.value = true
         viewModelScope.launch {
-            refreshing.value = true
-            val result = repository.syncHealthHistory(force = true)
-            if (result.isSuccess) {
-                repository.refreshHealth(LocalDate.now())
-                    .onSuccess { message.value = "30-day Health Connect history refreshed." }
-                    .onFailure { message.value = "Current-day refresh failed: ${it.message ?: "unknown error"}" }
-            } else {
-                val error = result.exceptionOrNull()
-                message.value = "History refresh failed: ${error?.message ?: "unknown error"}"
+            try {
+                repository.refreshRecentHealth()
+                    .onSuccess { message.value = "Last 28 days of Health Connect data refreshed." }
+                    .onFailure { message.value = "History refresh failed: ${it.message ?: "unknown error"}" }
+            } finally {
+                refreshing.value = false
             }
-            refreshing.value = false
         }
     }
 
