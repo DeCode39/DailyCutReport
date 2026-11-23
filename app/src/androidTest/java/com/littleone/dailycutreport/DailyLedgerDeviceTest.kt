@@ -77,7 +77,11 @@ class DailyLedgerDeviceTest {
             tab("Settings").assertIsSelected()
             compose.onNodeWithText("‹ Back").performClick()
             tab("Today").performClick()
-            compose.onNodeWithContentDescription("Copy daily report JSON").performScrollTo()
+            // On a compact screen the restored lazy list can have disposed its header.
+            // Scroll the list itself before asserting the action is visible.
+            compose.onNode(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.ScrollToIndex))
+                .performScrollToIndex(0)
+            compose.onNodeWithContentDescription("Copy daily report JSON").assertIsDisplayed().assertHasClickAction()
         } finally {
             compose.runOnUiThread { date.select(original) }
             if (seeded) runBlocking {
