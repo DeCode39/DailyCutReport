@@ -275,6 +275,29 @@ fun DailyFoodLogEntity.toDomainSnapshot() = FoodLogSnapshot(
 
 @Dao
 interface NutritionDao {
+    @Transaction
+    suspend fun readReportSnapshot(dates: List<String>): List<TodayUiState> {
+        val current = (userGoals() ?: UserGoalsEntity()).toDomain().sanitized()
+        val assistant = metadata(GoalAssistantState.KEY)?.let(GoalAssistantCodec::decode)
+        val today = java.time.LocalDate.now()
+        return dates.map { key ->
+            val date = java.time.LocalDate.parse(key)
+            val entity = dailyReport(key) ?: DailyReportEntity(key, savedAtEpochMs = 0)
+            val costs = spendingForDate(key)
+            val report = entity.toDomain(totalsForDate(key).toSummary(emptyMap()))
+            val missing = metadata("activity_missing:$key")?.split(",")?.filter(String::isNotEmpty)?.toSet().orEmpty()
+            TodayUiState(report = report.copy(health = report.health.copy(missingActivityFields = missing)),
+                goals = if (date < today && assistant != null) assistant.goalsFor(date, current) else current,
+                logs = foodLogsForDate(key).map(DailyFoodLogEntity::toDomainSnapshot),
+                internalBurn = InternalBurnEstimate.decode(metadata(internalBurnKey(date))),
+                burnForecast = BurnForecastCodec.decode(metadata(burnForecastMetadataKey(date)).orEmpty())
+                    ?: entity.totalCalories.takeIf { date < today && it > 0 }?.let {
+                        BurnForecast(date, it, it, it, it, BurnForecastSource.ACTUAL, BurnForecastConfidence.HIGH, 0, entity.savedAtEpochMs)
+                    },
+                spending = DailySpending(costs.knownTotalMicros, costs.unknownEntries, current.dailyBudgetMicros,
+                    costs.catalogEstimatedMicros, costs.actualPaidMicros, costs.actualPaidEntries))
+        }
+    }
     @Query("SELECT * FROM user_goals WHERE id = 1") fun observeUserGoals(): Flow<UserGoalsEntity?>
     @Query("SELECT * FROM user_goals WHERE id = 1") suspend fun userGoals(): UserGoalsEntity?
     @Upsert suspend fun upsertUserGoals(goals: UserGoalsEntity)
@@ -753,12 +776,15 @@ interface NutritionDao {
         reports: List<DailyReportEntity>,
         weights: List<WeightEntryEntity>,
         walking: List<WalkingSessionSampleEntity>,
-        forecasts: List<AppMetadataEntity> = emptyList()
+        forecasts: List<AppMetadataEntity> = emptyList(),
+        replaceWeights: Boolean = true
     ) {
         reports.forEach { upsertDailyReport(it) }
         forecasts.forEach { upsertMetadata(it) }
-        clearImportedWeights(startDate, endDate)
-        if (weights.isNotEmpty()) upsertWeightEntries(weights)
+        if (replaceWeights) {
+            clearImportedWeights(startDate, endDate)
+            if (weights.isNotEmpty()) upsertWeightEntries(weights)
+        }
         clearWalkingSamples(startDate, endDate)
         if (walking.isNotEmpty()) upsertWalkingSamples(walking)
     }
@@ -769,6 +795,8 @@ interface NutritionDao {
     @Query("DELETE FROM app_metadata WHERE `key` = :key") suspend fun deleteMetadata(key: String)
     @Query("DELETE FROM app_metadata WHERE `key` GLOB 'internal_burn_v1_*' OR `key` GLOB 'burn_forecast_v1:*'")
     suspend fun clearBurnComparisonCaches()
+    @Query("DELETE FROM app_metadata WHERE `key` GLOB 'activity_missing:*'")
+    suspend fun clearActivityCoverage()
     @Query("""
         UPDATE daily_reports
         SET manualFoodCalories = NULL,
@@ -817,6 +845,8 @@ interface NutritionDao {
         clearDailyExtras(); clearFoodLogs(); clearDailyReports(); clearProductExtras(); clearProducts(); clearUserGoals()
         clearWeightEntries(); clearWalkingSamples(); clearHealthProfile()
         clearBurnComparisonCaches()
+        clearActivityCoverage()
+        deleteMetadata("completed_day_burn_checked_v1")
         clearDeletedProductIds()
         deletedProductIds.forEach { upsertMetadata(AppMetadataEntity("deleted_product:$it", "deleted")) }
         products.forEach { upsertProduct(it) }

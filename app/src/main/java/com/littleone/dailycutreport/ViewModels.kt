@@ -135,6 +135,8 @@ class TodayViewModel(
 
     suspend fun reportJson(date: LocalDate, weekly: Boolean = false): String =
         ReportJsonExporter(repository).export(date, weekly)
+    // Never place a large health document in a Bundle or backup.
+    val weeklyFile = MutableStateFlow<Pair<LocalDate, String>?>(null)
     fun clearMessage() { message.value = null }
 }
 

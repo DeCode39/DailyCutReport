@@ -54,64 +54,47 @@ class WeeklyReportJsonTest {
         }
     }
 
-    @Test fun exporterReadsEachDatesOwnLocalGoalsLogsAndSpendingWithoutRefreshingHealth() = runBlocking {
-        val reads = mutableListOf<LocalDate>()
-        var initialized = false
-        val repo = fake { name, date ->
-            if (name == "initialize") { initialized = true; return@fake Unit }
-            check(initialized)
-            when (name) {
-                "observeReport" -> { reads += date!!; flowOf(DailyReport(date)) }
-                "observeBurnForecast" -> flowOf(null)
-                "observeInternalBurn" -> flowOf(null)
-                "observeFoodLogs" -> flowOf(listOf(FoodLogSnapshot(date = date!!, productName = date.toString())))
-                "observeGoals" -> flowOf(UserGoals(calories = 1000.0 + date!!.dayOfMonth))
-                "observeSpending" -> flowOf(DailySpending(knownTotalMicros = date!!.dayOfMonth * 1000000L))
-                else -> error("Unexpected call $name")
-            }
+    @Test fun compactWeekRetainsLastItemOfLargeUnicodeLog() {
+        val dates = WeeklyReportJson.datesEndingOn(end)
+        val days = dates.map { date ->
+            TodayUiState(report = DailyReport(date), logs = (1..100).map { i ->
+                FoodLogSnapshot(id = i.toLong(), date = date, productName = "測試 • $i")
+            })
         }
-        val reports = JSONObject(ReportJsonExporter(repo).export(end, true)).getJSONArray("days")
-        assertEquals(WeeklyReportJson.datesEndingOn(end), reads)
-        repeat(7) { index ->
-            val date = reads[index]
-            val report = reports.getJSONObject(index)
-            assertEquals(1000 + date.dayOfMonth, report.getJSONObject("targets").getInt("caloriesKcal"))
-            assertEquals(date.dayOfMonth * 1000000L, report.getJSONObject("spending").getLong("knownTotalMicros"))
-            assertEquals(date.toString(), report.getJSONArray("foodGroups").getJSONObject(0).getJSONArray("items").getJSONObject(0).getString("name"))
+        val encoded = WeeklyReportJson.encode(days)
+        assertFalse(encoded.contains('\n'))
+        val reports = JSONObject(encoded).getJSONArray("days")
+        repeat(7) {
+            val groups = reports.getJSONObject(it).getJSONArray("foodGroups")
+            assertEquals(100, groups.length())
+            assertEquals((1..100).map { n -> "測試 • $n" }.toSet(), (0 until groups.length()).map { n ->
+                groups.getJSONObject(n).getJSONArray("items").getJSONObject(0).getString("name")
+            }.toSet())
         }
     }
 
-    @Test fun dailyExportStillEmitsOneDayAndFailuresDoNotReturnPartialWeeks() = runBlocking {
-        val repo = fake { name, date -> when (name) {
-            "initialize" -> Unit
-            "observeReport" -> flowOf(DailyReport(date!!))
-            "observeBurnForecast", "observeInternalBurn" -> flowOf(null)
-            "observeFoodLogs" -> flowOf(emptyList<FoodLogSnapshot>())
-            "observeGoals" -> flowOf(UserGoals())
-            "observeSpending" -> flowOf(DailySpending())
-            else -> error("Unexpected $name")
-        } }
-        val day = JSONObject(ReportJsonExporter(repo).export(end, false))
-        assertEquals(end.toString(), day.getString("date"))
-        assertFalse(day.has("days"))
-        assertTrue(runCatching { ReportJsonExporter(repo).export(LocalDate.now().plusDays(1), true) }.isFailure)
-        val failing = fake { name, date -> when (name) {
-            "initialize" -> Unit
-            "observeReport" -> {
-                check(date != end.minusDays(4)) { "Local read failed mid-week" }
-                flowOf(DailyReport(date!!))
+    @Test fun exporterUsesOneSnapshotAndRefusesIncompleteResults() = runBlocking {
+        val requested = mutableListOf<List<LocalDate>>()
+        var dropDay = false
+        val repo = Proxy.newProxyInstance(DailyCutRepository::class.java.classLoader, arrayOf(DailyCutRepository::class.java)) { _, method, args ->
+            when (method.name) {
+                "initialize" -> Unit
+                "reportSnapshot" -> {
+                    @Suppress("UNCHECKED_CAST") val dates = args!![0] as List<LocalDate>
+                    requested += dates
+                    (if (dropDay) dates.dropLast(1) else dates).map { TodayUiState(report = DailyReport(it)) }
+                }
+                else -> error("Unexpected call ${method.name}")
             }
-            "observeBurnForecast", "observeInternalBurn" -> flowOf(null)
-            "observeFoodLogs" -> flowOf(emptyList<FoodLogSnapshot>())
-            "observeGoals" -> flowOf(UserGoals())
-            "observeSpending" -> flowOf(DailySpending())
-            else -> error("Unexpected $name")
-        } }
-        assertTrue(runCatching { ReportJsonExporter(failing).export(end, true) }.isFailure)
-    }
-
-    private fun fake(call: (String, LocalDate?) -> Any?): DailyCutRepository =
-        Proxy.newProxyInstance(DailyCutRepository::class.java.classLoader, arrayOf(DailyCutRepository::class.java)) { _, method, args ->
-            call(method.name, args?.firstOrNull() as? LocalDate)
         } as DailyCutRepository
+        val exporter = ReportJsonExporter(repo)
+        val week = JSONObject(exporter.export(end, true))
+        assertEquals(listOf(WeeklyReportJson.datesEndingOn(end)), requested)
+        assertEquals(7, week.getJSONArray("datesWithoutBurn").length())
+        assertEquals(0, week.getInt("daysWithFoodLogs"))
+        assertEquals(end.toString(), JSONObject(exporter.export(end, false)).getString("date"))
+        dropDay = true
+        assertTrue(runCatching { exporter.export(end, true) }.isFailure)
+        assertTrue(runCatching { exporter.export(LocalDate.now().plusDays(1), true) }.isFailure)
+    }
 }

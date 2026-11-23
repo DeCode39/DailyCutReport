@@ -9,7 +9,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import java.time.LocalDate
 
 class DailyCutApplication : Application() {
     lateinit var container: AppContainer
@@ -28,8 +27,8 @@ class DailyCutApplication : Application() {
                         if (repository.healthConnectAvailable() && repository.healthCorePermissionsGranted()) {
                             repository.ensureHealthBootstrap()
                             repository.syncHealthHistory(force = false)
-                            // History imports include today; always write the current live forecast last.
-                            repository.refreshHealth(LocalDate.now())
+                            // Reconcile yesterday if history didn't cover it, then forecast today.
+                            repository.refreshOnForeground()
                         }
                         repository.adaptGoals()
                         repository.retryPendingNutritionSync()

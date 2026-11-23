@@ -1,11 +1,20 @@
 const M=DailyCutModel,C=DailyCutCart,$=id=>document.getElementById(id),today=M.localDate(new Date());
 let copyingReport=false;
+let weekFile=null;
+$('saveWeek').onclick=()=>{
+  if(!weekFile)return;
+  const url=URL.createObjectURL(new Blob([weekFile.text],{type:'application/json'}));
+  const link=document.createElement('a');
+  link.download='DailyCutReport_week_ending_'+weekFile.end+'.json';link.href=url;link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
 async function copyReportJson(weekly){
   if(copyingReport)return;
   copyingReport=true;
   const end=state.selectedDate;
   try{
     const text=weekly?DailyCutReportCopy.weeklyReportJson(M,state,end):M.dailyReportJson(state,end);
+    if(weekly){weekFile={text,end};$('saveWeek').hidden=false;$('saveWeek').textContent='Save weekly JSON · '+end;}
     try{await navigator.clipboard.writeText(text);alert(weekly?'Seven-day report JSON copied.':'Daily report JSON copied.');}
     catch{prompt(weekly?'Copy seven-day report JSON':'Copy daily report JSON',text);}
   }finally{copyingReport=false;}

@@ -19,7 +19,10 @@ data class HealthSummary(
     /** Transient values used while refreshing; they are not persisted in daily_reports. */
     val providerFullDayCalories: Double? = null,
     val recordedThroughEpochMs: Long? = null,
-    val internalActivity: InternalActivity? = null
+    val internalActivity: InternalActivity? = null,
+    val totalBurnMissing: Boolean = false,
+    val nutritionAccess: Boolean = true,
+    val missingActivityFields: Set<String> = emptySet()
 )
 
 data class NutritionSummary(

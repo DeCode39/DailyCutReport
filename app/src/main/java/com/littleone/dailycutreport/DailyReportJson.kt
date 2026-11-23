@@ -13,6 +13,7 @@ object DailyReportJson {
 
     fun encode(state: TodayUiState, generatedAt: Instant = Instant.now()): String {
         val report = state.report
+        val neverLoaded = report.savedAtEpochMs <= 0 || report.health.healthConnectStatus == "Not loaded"
         val root = JSONObject()
             .put("internalBurnComparison", state.internalBurn?.toJson()?.apply {
                 keys().asSequence().filter { it.endsWith("Kcal") }.toList().forEach { key -> put(key, calories(getDouble(key))) }
@@ -46,8 +47,25 @@ object DailyReportJson {
                 .put("exerciseSessions", report.health.exerciseSessions)
                 .put("exerciseMinutes", report.health.exerciseMinutes)
                 .put("source", report.health.healthConnectStatus)
-                .put("updatedAt", Instant.ofEpochMilli(report.savedAtEpochMs).toString()))
-            .put("nutrition", nutrition(report.nutrition))
+                .put("updatedAt", if (neverLoaded) JSONObject.NULL else Instant.ofEpochMilli(report.savedAtEpochMs).toString())
+                .apply {
+                    val missing = if (neverLoaded) setOf("steps", "distanceKm", "activeCaloriesKcal", "exerciseSessions", "exerciseMinutes")
+                                  else report.health.missingActivityFields
+                    missing.forEach { put(it, JSONObject.NULL) }
+                })
+            .put("nutrition", nutrition(report.nutrition).put("source", "local_food_logs"))
+            .put("effectiveIntake", JSONObject().apply {
+                val source = when {
+                    report.manual.foodCalories != null -> "manual"
+                    report.nutrition.entries > 0 -> "local_food_logs"
+                    report.health.nutritionRecords > 0 -> "health_connect"
+                    else -> "unavailable"
+                }
+                put("source", source)
+                put("caloriesKcal", if (source == "unavailable") JSONObject.NULL else calories(report.finalFoodCalories))
+                put("proteinG", if (source == "unavailable") JSONObject.NULL else decimal(report.finalProteinG))
+                put("sodiumMg", if (source == "unavailable") JSONObject.NULL else decimal(report.finalSodiumMg))
+            })
             .put("targets", targets(state.targets))
             .put("spending", spending(state.spending, state.goals))
             .put("foodGroups", foodGroups(state.logs))

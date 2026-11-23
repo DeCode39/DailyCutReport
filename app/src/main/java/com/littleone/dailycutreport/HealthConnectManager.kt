@@ -29,6 +29,12 @@ internal data class HealthRecordWindow(
     val end: ZonedDateTime
 )
 
+private fun missingActivityFields(result: androidx.health.connect.client.aggregate.AggregationResult) = buildSet {
+    if (result[StepsRecord.COUNT_TOTAL] == null) add("steps")
+    if (result[DistanceRecord.DISTANCE_TOTAL] == null) add("distanceKm")
+    if (result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL] == null) add("activeCaloriesKcal")
+}
+
 internal fun FoodLogSnapshot.healthRecordWindow(zone: ZoneId): HealthRecordWindow {
     val logged = Instant.ofEpochMilli(loggedAt).atZone(zone)
     val localTime = if (logged.toLocalDate() == date) logged.toLocalTime() else LocalTime.NOON
@@ -60,7 +66,8 @@ interface HealthDataSource {
 data class HealthHistoryImport(
     val dailySummaries: Map<LocalDate, HealthSummary>,
     val weights: List<WeightEntry>,
-    val walkingSessions: List<WalkingSessionSample>
+    val walkingSessions: List<WalkingSessionSample>,
+    val weightAccess: Boolean = true
 )
 
 class HealthConnectManager(private val context: Context) : HealthDataSource {
@@ -128,10 +135,10 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
     }
 
     override suspend fun readDailySummary(date: LocalDate): HealthSummary {
-        val hc = client ?: return HealthSummary(healthConnectStatus = availabilityMessage())
+        val hc = client ?: error(availabilityMessage())
         val granted = hc.permissionController.getGrantedPermissions()
         if (!granted.containsAll(CORE_PERMISSIONS)) {
-            return HealthSummary(healthConnectStatus = "Health Connect activity permission not granted")
+            error("Health Connect activity permission not granted")
         }
 
         val zone = ZoneId.systemDefault()
@@ -184,6 +191,9 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
             nutritionProteinG = nutritionRecords.sumOf { it.protein?.inGrams ?: 0.0 },
             nutritionSodiumMg = nutritionRecords.sumOf { it.sodium?.inMilligrams ?: 0.0 },
             nutritionRecords = nutritionRecords.size,
+            totalBurnMissing = aggregate[TotalCaloriesBurnedRecord.ENERGY_TOTAL] == null,
+            nutritionAccess = nutritionGranted,
+            missingActivityFields = missingActivityFields(aggregate),
             healthConnectStatus = nutritionStatus,
             providerFullDayCalories = providerFullDayCalories,
             recordedThroughEpochMs = end.toEpochMilli(),
@@ -292,6 +302,9 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                 nutritionProteinG = dayNutrition.sumOf { it.protein?.inGrams ?: 0.0 },
                 nutritionSodiumMg = dayNutrition.sumOf { it.sodium?.inMilligrams ?: 0.0 },
                 nutritionRecords = dayNutrition.size,
+                totalBurnMissing = aggregate[TotalCaloriesBurnedRecord.ENERGY_TOTAL] == null,
+                nutritionAccess = NUTRITION_PERMISSION in granted,
+                missingActivityFields = missingActivityFields(aggregate),
                 healthConnectStatus = if (NUTRITION_PERMISSION in granted) {
                     "Activity and nutrition history loaded from Health Connect"
                 } else "Activity history loaded from Health Connect",
@@ -341,7 +354,7 @@ class HealthConnectManager(private val context: Context) : HealthDataSource {
                 ))
             }
         }
-        return HealthHistoryImport(daily, weights, walking)
+        return HealthHistoryImport(daily, weights, walking, WEIGHT_PERMISSION in granted)
     }
 
     override suspend fun writeNutrition(

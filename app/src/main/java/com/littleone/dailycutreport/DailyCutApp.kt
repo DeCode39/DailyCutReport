@@ -168,13 +168,32 @@ internal fun TodayScreen(
     var expandedTargets by remember { mutableStateOf(false) }
     var copyingReport by remember { mutableStateOf(false) }
     val copyScope = rememberCoroutineScope()
+    val weeklyFile by viewModel.weeklyFile.collectAsStateWithLifecycle()
+    val saveWeek = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            val payload = viewModel.weeklyFile.value?.second
+            if (payload == null) onMessage("Report expired. Hold Copy again to prepare it.")
+            else copyScope.launch {
+                try {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        requireNotNull(context.contentResolver.openOutputStream(uri, "wt")).bufferedWriter(Charsets.UTF_8).use { it.write(payload) }
+                    }
+                    viewModel.weeklyFile.value = null
+                    onMessage("Full seven-day JSON saved.")
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { onMessage("Could not save the file. Please retry.") }
+            }
+        }
+    }
     fun copyReport(weekly: Boolean) {
         if (copyingReport) return
         val date = selectedDate
+        if (weekly) viewModel.weeklyFile.value = null
         copyingReport = true
         copyScope.launch {
             try {
                 val json = viewModel.reportJson(date, weekly)
+                if (weekly) viewModel.weeklyFile.value = date to json
                 val label = if (weekly) "DailyCutReport ${date.minusDays(6)} to $date" else "DailyCutReport $date"
                 val clip = ClipData.newPlainText(label, json)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -183,11 +202,11 @@ internal fun TodayScreen(
                     }
                 }
                 context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
-                onMessage(if (weekly) "Weekly report JSON copied: ${date.minusDays(6)} to $date." else "Daily report JSON copied.")
+                onMessage(if (weekly) "7 days copied: ${date.minusDays(6)} to $date. If pasting cuts it off, use Save weekly JSON." else "Daily report JSON copied.")
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                onMessage("Could not copy report JSON. Please try again.")
+                onMessage(if (weekly && viewModel.weeklyFile.value != null) "Could not copy the week. Use Save weekly JSON instead." else "Could not copy report JSON. Please try again.")
             } finally {
                 copyingReport = false
             }
@@ -217,8 +236,16 @@ internal fun TodayScreen(
                     if (state.refreshing) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     else Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Refresh last 28 days")
                 }
-                ReportCopyButton(copyingReport, onCopyDay = { copyReport(false) }, onCopyWeek = { copyReport(true) })
+                ReportCopyButton(copyingReport || state.refreshing, onCopyDay = { copyReport(false) }, onCopyWeek = { copyReport(true) })
             }
+        }
+        weeklyFile?.let { (end, _) ->
+            item { Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { saveWeek.launch("DailyCutReport_${end.minusDays(6)}_${end}.json") }) {
+                    Text("Save weekly JSON · $end")
+                }
+                TextButton(onClick = { viewModel.weeklyFile.value = null }) { Text("Dismiss") }
+            } }
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {

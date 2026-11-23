@@ -19,6 +19,11 @@ test('weekly export keeps logs and spending on their original dates and never ex
   M.addLog(state,'2025-12-31',product,1,500000);
   const before=JSON.stringify(state),json=R.weeklyReportJson(M,state,'2026-01-03');
   const days=JSON.parse(json).days;
+  assert.equal(JSON.parse(json).daysWithFoodLogs,1);
+  assert.equal(JSON.parse(json).datesWithoutBurn.length,7);
+  assert.equal(days[3].effectiveIntake.caloriesKcal,98);
+  assert.equal(days[0].effectiveIntake.caloriesKcal,null);
+  assert.ok(!json.includes('\n'));
   assert.equal(days[3].nutrition.caloriesKcal,98);
   assert.equal(days[3].spending.knownTotalMicros,500000);
   assert.equal(days[6].nutrition.entries,0);

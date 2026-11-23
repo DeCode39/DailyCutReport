@@ -1,7 +1,6 @@
 package com.littleone.dailycutreport
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,11 +24,15 @@ object WeeklyReportJson {
             .put("period", "week")
             .put("startDate", days.first().report.date.toString())
             .put("endDate", end.toString())
+            .put("daysWithFoodLogs", days.count { it.logs.isNotEmpty() })
+            .put("datesWithoutBurn", JSONArray(days.filter { it.report.projectedBurnCalories == null }.map { it.report.date.toString() }))
+            .put("datesWithoutIntake", JSONArray(days.filter { it.report.nutrition.entries == 0 &&
+                it.report.health.nutritionRecords == 0 && it.report.manual.foodCalories == null }.map { it.report.date.toString() }))
             .put("generatedAt", generatedAt.toString())
             .put("days", JSONArray().apply {
                 days.forEach { put(JSONObject(DailyReportJson.encode(it, generatedAt))) }
             })
-            .toString(2)
+            .toString()
     }
 }
 
@@ -39,16 +42,8 @@ internal class ReportJsonExporter(private val repository: DailyCutRepository) {
         require(!endDate.isAfter(LocalDate.now())) { "Future dates cannot be exported." }
         repository.initialize()
         val dates = if (weekly) WeeklyReportJson.datesEndingOn(endDate) else listOf(endDate)
-        val days = dates.map { date ->
-            TodayUiState(
-                report = repository.observeReport(date).first(),
-                burnForecast = repository.observeBurnForecast(date).first(),
-                internalBurn = repository.observeInternalBurn(date).first(),
-                logs = repository.observeFoodLogs(date).first(),
-                goals = repository.observeGoals(date).first(),
-                spending = repository.observeSpending(date).first()
-            )
-        }
+        val days = repository.reportSnapshot(dates)
+        check(days.map { it.report.date } == dates) { "Incomplete report snapshot" }
         if (weekly) WeeklyReportJson.encode(days) else DailyReportJson.encode(days.single())
     }
 }

@@ -32,6 +32,44 @@ class RecentHealthRefreshTest {
 
     @After fun close() { db.close() }
 
+    @Test fun firstForegroundRechecksYesterdayBeforeTodayAndRetriesMissingBurn() = runBlocking {
+        val yesterday = today.minusDays(1)
+        health.missingDailyBurn = true
+        repository.refreshOnForeground().getOrThrow()
+        health.missingDailyBurn = false
+        repository.refreshOnForeground().getOrThrow()
+        repository.refreshOnForeground().getOrThrow()
+        assertEquals(listOf("day:$yesterday", "day:$today", "day:$yesterday", "day:$today", "day:$today"), health.calls)
+    }
+
+    @Test fun missingProviderMeasurementsKeepPriorBurnAndOptionalData() = runBlocking {
+        val day = today.minusDays(1)
+        dao.upsertDailyReport(DailyReportEntity(day.toString(), totalCalories = 2345.0, nutritionCalories = 1500.0, nutritionRecords = 1))
+        dao.upsertWeightEntry(WeightEntryEntity("imported", day.toString(), 1234, 70.0, WeightSource.HEALTH_CONNECT.name))
+        health.missingHistory = true
+        repository.refreshRecentHealth().getOrThrow()
+        assertEquals(2345.0, dao.dailyReport(day.toString())!!.totalCalories, 0.0)
+        assertEquals(1, dao.allWeightEntries().size)
+        val json = org.json.JSONObject(ReportJsonExporter(repository).export(day, false))
+        assertEquals(1500, json.getJSONObject("effectiveIntake").getInt("caloriesKcal"))
+        assertTrue(json.getJSONObject("activity").isNull("steps"))
+        assertTrue(json.getJSONObject("activity").getString("source").contains("retained"))
+    }
+
+    @Test fun successfulRangeAlreadyCoversYesterdayAndSnapshotLabelsMissingAndImportedIntake() = runBlocking {
+        repository.syncHealthHistory(force = true).getOrThrow()
+        repository.refreshOnForeground().getOrThrow()
+        assertEquals(listOf("history:${today.minusDays(29)}:$today", "day:$today"), health.calls)
+        val end = today.minusDays(45)
+        dao.upsertDailyReport(DailyReportEntity(end.toString(), nutritionRecords = 1, nutritionCalories = 1300.0))
+        val week = org.json.JSONObject(ReportJsonExporter(repository).export(end, true)).getJSONArray("days")
+        assertTrue(week.getJSONObject(0).getJSONObject("activity").isNull("updatedAt"))
+        assertTrue(week.getJSONObject(0).getJSONObject("effectiveIntake").isNull("caloriesKcal"))
+        val intake = week.getJSONObject(6).getJSONObject("effectiveIntake")
+        assertEquals("health_connect", intake.getString("source"))
+        assertEquals(1300, intake.getInt("caloriesKcal"))
+    }
+
     @Test fun manualRefreshBypassesThrottleImportsExactly28DaysAndForecastsTodayLast() = runBlocking {
         val previous = today.minusDays(1)
         dao.upsertDailyReport(DailyReportEntity(previous.toString(), totalCalories = 1000.0, notes = "Keep note"))
@@ -128,6 +166,8 @@ private class RefreshGateway : HealthDataSource {
     var available = true
     var failHistory = false
     var failToday = false
+    var missingDailyBurn = false
+    var missingHistory = false
     var incomplete = false
     var historicalBurn = 2400.0
     var gate: CompletableDeferred<Unit>? = null
@@ -140,7 +180,8 @@ private class RefreshGateway : HealthDataSource {
         calls += "day:$date"
         check(!failToday) { "Provider busy" }
         val noon = date.atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant()
-        return HealthSummary(totalCalories = 1200.0, recordedThroughEpochMs = noon.toEpochMilli())
+        return HealthSummary(totalCalories = if (missingDailyBurn) 0.0 else 1200.0,
+            totalBurnMissing = missingDailyBurn, recordedThroughEpochMs = noon.toEpochMilli())
     }
     override suspend fun readHealthHistory(startDate: LocalDate, endDate: LocalDate): HealthHistoryImport {
         calls += "history:$startDate:$endDate"
@@ -148,8 +189,10 @@ private class RefreshGateway : HealthDataSource {
         check(!failHistory) { "Provider busy" }
         val days = generateSequence(startDate) { it.plusDays(1).takeIf { next -> next <= endDate } }.toList()
         val selected = if (incomplete) days.dropLast(1) else days
-        return HealthHistoryImport(selected.associateWith { HealthSummary(totalCalories = historicalBurn,
-            recordedThroughEpochMs = Instant.now().toEpochMilli()) }, emptyList(), emptyList())
+        return HealthHistoryImport(selected.associateWith { HealthSummary(totalCalories = if (missingHistory) 0.0 else historicalBurn,
+            totalBurnMissing = missingHistory, nutritionAccess = !missingHistory,
+            missingActivityFields = if (missingHistory) setOf("steps") else emptySet(),
+            recordedThroughEpochMs = Instant.now().toEpochMilli()) }, emptyList(), emptyList(), weightAccess = !missingHistory)
     }
     override suspend fun writeNutrition(date: LocalDate, logs: List<FoodLogSnapshot>, priorClientRecordIds: Set<String>, clientRecordVersion: Long) =
         HealthWriteSummary(logs.size, date)

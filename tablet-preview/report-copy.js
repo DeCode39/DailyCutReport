@@ -6,9 +6,12 @@
     for(let offset=6;offset>=0;offset--){
       const date=new Date(end);date.setDate(date.getDate()-offset);
       const day=JSON.parse(model.dailyReportJson(state,model.localDate(date)));
+      const logged=day.nutrition.entries>0;
+      day.nutrition.source='local_food_logs';
+      day.effectiveIntake={source:logged?'local_food_logs':'unavailable',caloriesKcal:logged?day.nutrition.caloriesKcal:null,proteinG:logged?day.nutrition.proteinG:null,sodiumMg:logged?day.nutrition.sodiumMg:null};
       day.generatedAt=generatedAt;days.push(day);
     }
-    return JSON.stringify({schemaVersion:1,dailyReportSchemaVersion:3,app:'DailyCutReport',period:'week',startDate:days[0].date,endDate,generatedAt,days},null,2);
+    return JSON.stringify({schemaVersion:1,dailyReportSchemaVersion:3,app:'DailyCutReport',period:'week',startDate:days[0].date,endDate,generatedAt,daysWithFoodLogs:days.filter(d=>d.nutrition.entries>0).length,datesWithoutBurn:days.filter(d=>d.energy.projectedFinalBurnKcal==null).map(d=>d.date),datesWithoutIntake:days.filter(d=>d.effectiveIntake.source==='unavailable').map(d=>d.date),days});
   }
 
   // A hold must never also trigger the browser's trailing click. Drag/scroll/cancel aborts it.

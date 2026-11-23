@@ -1,5 +1,11 @@
 # Daily Cut Report 0.17.3
 
+### Unreleased: refresh and export reliability
+
+- On foreground entry, refresh today's forecast after checking yesterday. A successful history import covering yesterday satisfies the check; if total burn is not available, retry on later opens. Manual refresh still covers the last 28 calendar days. A provider read without weight or nutrition access no longer replaces the corresponding cached data with an empty dataset.
+- Hold Copy on Today for compact weekly JSON. **Save weekly JSON** writes the same prepared document through the system picker, including when clipboard copy fails. It is plain-text health data, not an encrypted backup. The selected end date is inclusive; an incomplete current day is not a completed calendar week.
+- Report reads share a database transaction. The week lists dates missing burn or intake; each day distinguishes local log totals from effective intake (including Health Connect fallback). Newly imported missing activity measurements are null in the report. Older snapshots cannot reliably distinguish provider-missing measurements from measured zeros until refreshed.
+
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
 ## New in 0.17.3

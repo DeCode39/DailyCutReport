@@ -49,6 +49,8 @@ interface DailyCutRepository {
     suspend fun nutritionForDate(date: LocalDate): NutritionSummary
     suspend fun refreshHealth(date: LocalDate): Result<Unit>
     suspend fun refreshRecentHealth(): Result<Unit>
+    suspend fun refreshOnForeground(): Result<Unit>
+    suspend fun reportSnapshot(dates: List<LocalDate>): List<TodayUiState>
     suspend fun lookupProduct(barcode: String): ProductWithExtras?
     suspend fun getProduct(productId: String): ProductWithExtras?
     suspend fun saveProduct(product: ProductEntity, extras: List<ProductExtraNutrientEntity>): ProductMutationResult
@@ -389,6 +391,23 @@ class DefaultDailyCutRepository(
         historySyncMutex.withLock { refreshHealthDay(date) }
     }
 
+    override suspend fun refreshOnForeground(): Result<Unit> = healthRefreshResult {
+        historySyncMutex.withLock {
+            val today = LocalDate.now()
+            val yesterday = today.minusDays(1)
+            val caughtUp = dao.metadata(YESTERDAY_CHECKED) == yesterday.toString()
+            val catchUp = if (caughtUp) Result.success(Unit) else healthRefreshResult {
+                // A failed/throttled range import must not prevent a targeted retry.
+                if (refreshHealthDay(yesterday)) dao.upsertMetadata(AppMetadataEntity(YESTERDAY_CHECKED, yesterday.toString()))
+            }
+            refreshHealthDay(today)
+            catchUp.getOrThrow()
+        }
+    }
+
+    override suspend fun reportSnapshot(dates: List<LocalDate>): List<TodayUiState> =
+        historySyncMutex.withLock { dao.readReportSnapshot(dates.map(LocalDate::toString)) }
+
     /** Manual refresh always bypasses the daily throttle; history must precede today's forecast. */
     override suspend fun refreshRecentHealth(): Result<Unit> = healthRefreshResult {
         initialize()
@@ -406,10 +425,11 @@ class DefaultDailyCutRepository(
         }
     }
 
-    private suspend fun refreshHealthDay(date: LocalDate) {
+    private suspend fun refreshHealthDay(date: LocalDate): Boolean {
         requireHealthAccess()
         val raw = healthConnect.readDailySummary(date)
         val today = LocalDate.now()
+        if (date < today && raw.totalBurnMissing) return false
         val refreshedAt = raw.recordedThroughEpochMs?.let(Instant::ofEpochMilli) ?: Instant.now()
         val completed = withContext(Dispatchers.IO) {
             if (date == today) dao.dailyReports(today.minusDays(28).toString(), today.minusDays(1).toString())
@@ -440,10 +460,12 @@ class DefaultDailyCutRepository(
         withContext(Dispatchers.IO) {
             val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
             dao.upsertDailyReport(existing.withHealth(summary))
+            dao.upsertMetadata(activityCoverage(date, raw))
             dao.upsertMetadata(AppMetadataEntity(burnForecastMetadataKey(date), BurnForecastCodec.encode(forecast)))
             saveInternalBurn(date, raw)
         }
         DailyCutWidgetUpdater.updateAll(context)
+        return !raw.totalBurnMissing
     }
 
     override suspend fun lookupProduct(barcode: String): ProductWithExtras? = withContext(Dispatchers.IO) {
@@ -768,11 +790,15 @@ class DefaultDailyCutRepository(
             val persistedSummaries = imported.dailySummaries.filterKeys { !preserveToday || it < today }
             val reports = persistedSummaries.map { (date, summary) ->
                 val existing = dao.dailyReport(date.toString()) ?: DailyReportEntity(date = date.toString())
-                existing.withHealth(summary)
+                existing.withHealth(summary).let { updated ->
+                    if (summary.totalBurnMissing && existing.totalCalories > 0)
+                        updated.copy(totalCalories = existing.totalCalories, healthConnectStatus = "Burn unavailable on refresh; retained previous burn")
+                    else updated
+                }
             }
             // Past days may still have a projected forecast cached from when they were today.
             // Replace it with actual completed-day data in the same transaction as the totals.
-            val forecasts = imported.dailySummaries.filterKeys { it < today }.map { (date, summary) ->
+            val forecasts = persistedSummaries.filter { (date, summary) -> date < today && !summary.totalBurnMissing }.map { (date, summary) ->
                 val forecast = burnForecastEngine.forecast(date, today, refreshedAt, ZoneId.systemDefault(),
                     summary.totalCalories, null, emptyList())
                 AppMetadataEntity(burnForecastMetadataKey(date), BurnForecastCodec.encode(forecast))
@@ -780,11 +806,15 @@ class DefaultDailyCutRepository(
             dao.replaceImportedHealthHistory(
                 start.toString(), today.toString(), reports,
                 imported.weights.map(WeightEntry::toEntity),
-                imported.walkingSessions.map(WalkingSessionSample::toEntity), forecasts
+                imported.walkingSessions.map(WalkingSessionSample::toEntity),
+                forecasts + persistedSummaries.map { (day, summary) -> activityCoverage(day, summary) }, imported.weightAccess
             )
             persistedSummaries.toSortedMap().forEach { (date, summary) -> saveInternalBurn(date, summary) }
             dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_DAY_KEY, today.toString()))
             dao.upsertMetadata(AppMetadataEntity(HEALTH_HISTORY_SYNC_STATUS_KEY, refreshedAt.toString()))
+            val yesterday = today.minusDays(1)
+            if (imported.dailySummaries[yesterday]?.totalBurnMissing == false)
+                dao.upsertMetadata(AppMetadataEntity(YESTERDAY_CHECKED, yesterday.toString()))
         }
     }
 
@@ -847,9 +877,13 @@ class DefaultDailyCutRepository(
         const val PRODUCT_DRAFT_KEY = "pending_product_draft_v1"
         const val CLEAR_OVERRIDES_KEY = "manual_overrides_cleared_0_8_5"
         const val HEALTH_HISTORY_SYNC_DAY_KEY = "health_history_sync_day_v1"
+        const val YESTERDAY_CHECKED = "completed_day_burn_checked_v1"
         const val HEALTH_HISTORY_SYNC_STATUS_KEY = "health_history_sync_status_v1"
     }
 }
+
+private fun activityCoverage(day: LocalDate, summary: HealthSummary) =
+    AppMetadataEntity("activity_missing:$day", summary.missingActivityFields.sorted().joinToString(","))
 
 private suspend fun healthRefreshResult(block: suspend () -> Unit): Result<Unit> = try {
     block()
@@ -875,7 +909,7 @@ private data class PlannerRepositoryInput(
     val loggedServings: Map<String, Double>
 )
 
-private fun DailyReportEntity.toDomain(nutrition: NutritionSummary) = DailyReport(
+internal fun DailyReportEntity.toDomain(nutrition: NutritionSummary) = DailyReport(
     date = LocalDate.parse(date),
     health = HealthSummary(
         steps, distanceKm, activeCalories, totalCalories, exerciseSessions, exerciseMinutes,
@@ -908,10 +942,10 @@ private fun DailyReportEntity.withHealth(health: HealthSummary) = copy(
     totalCalories = health.totalCalories,
     exerciseSessions = health.exerciseSessions,
     exerciseMinutes = health.exerciseMinutes,
-    nutritionCalories = health.nutritionCalories,
-    nutritionProteinG = health.nutritionProteinG,
-    nutritionSodiumMg = health.nutritionSodiumMg,
-    nutritionRecords = health.nutritionRecords,
+    nutritionCalories = if (health.nutritionAccess) health.nutritionCalories else nutritionCalories,
+    nutritionProteinG = if (health.nutritionAccess) health.nutritionProteinG else nutritionProteinG,
+    nutritionSodiumMg = if (health.nutritionAccess) health.nutritionSodiumMg else nutritionSodiumMg,
+    nutritionRecords = if (health.nutritionAccess) health.nutritionRecords else nutritionRecords,
     healthConnectStatus = health.healthConnectStatus,
     savedAtEpochMs = System.currentTimeMillis()
 )
