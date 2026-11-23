@@ -1,6 +1,8 @@
 package com.littleone.dailycutreport
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -130,10 +132,11 @@ fun DailyCutApp(
         ) { settingsViewModel.permissionsChanged() }
 
         Scaffold(
+            topBar = { if (Destination.entries.any { it.route == route }) LedgerMasthead() },
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 if (route != "scanner" && route != "ocr" && route != "product-editor") {
-                    NavigationBar {
+                    NavigationBar(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                         Destination.entries.forEach { destination ->
                             NavigationBarItem(
                                 selected = route == destination.route ||
@@ -146,6 +149,11 @@ fun DailyCutApp(
                                     }
                                 },
                                 icon = { Icon(painterResource(destination.icon), contentDescription = destination.label) },
+                                colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                                    selectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                                    indicatorColor = androidx.compose.material3.MaterialTheme.colorScheme.surface
+                                ),
                                 label = { Text(destination.label) }
                             )
                         }
@@ -153,9 +161,18 @@ fun DailyCutApp(
                 }
             }
         ) { padding ->
-            Box(Modifier.fillMaxSize().padding(padding)) {
+            val cartAction: @Composable () -> Unit = {
+                if (foodState.bulkDraft.items.isNotEmpty() && !foodState.cartVisible) {
+                    androidx.compose.material3.OutlinedButton(onClick = foodsViewModel::openCart) {
+                        Text("Cart · ${foodState.bulkDraft.items.size}")
+                    }
+                }
+            }
+            Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             NavHost(
                 navController = navController,
+                modifier = if (Destination.entries.any { it.route == route } || route.startsWith("settings/"))
+                    Modifier.align(Alignment.TopCenter).widthIn(max = 640.dp).fillMaxSize() else Modifier.fillMaxSize(),
                 startDestination = Destination.TODAY.route
             ) {
                 composable(Destination.TODAY.route) {
@@ -166,6 +183,7 @@ fun DailyCutApp(
                             foodsViewModel.beginScanner(scanContext)
                             navController.navigate("scanner")
                         },
+                        cart = cartAction,
                         onEditLog = foodsViewModel::edit,
                         onDeleteLog = foodsViewModel::delete,
                         onDeleteGroup = foodsViewModel::deleteGroup,
@@ -177,6 +195,7 @@ fun DailyCutApp(
                 composable(Destination.FOODS.route) {
                     FoodsScreen(
                         selectedDate, dateViewModel, foodsViewModel,
+                        cart = cartAction,
                         onCreateProduct = foodsViewModel::createProduct
                     )
                 }
@@ -225,6 +244,7 @@ fun DailyCutApp(
                     HealthScreen(
                         selectedDate = selectedDate,
                         dateViewModel = dateViewModel,
+                        cart = cartAction,
                         viewModel = healthViewModel,
                         onMessage = showMessage
                     )
@@ -300,7 +320,7 @@ fun DailyCutApp(
                 }
             }
                 if (
-                    route != "scanner" && route != "ocr" && route != "product-editor" &&
+                    route.startsWith("settings") &&
                     foodState.bulkDraft.items.isNotEmpty() && !foodState.cartVisible
                 ) {
                     ExtendedFloatingActionButton(
@@ -308,11 +328,13 @@ fun DailyCutApp(
                         modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
                         text = {
                             Text(
-                                "Cart ${foodState.bulkDraft.items.size}" +
-                                    (foodState.bulkDraft.date?.let { " · $it" } ?: "")
+                                "Cart · ${foodState.bulkDraft.items.size}"
                             )
                         },
-                        icon = { Text("●") }
+                        icon = { Icon(painterResource(R.drawable.ic_foods), null) },
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface
                     )
                 }
             }

@@ -15,6 +15,10 @@ import android.os.Build
 import android.os.PersistableBundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
@@ -123,8 +127,7 @@ import kotlin.math.roundToInt
 @Composable
 internal fun DateHeader(
     date: LocalDate,
-    dateViewModel: ReportDateViewModel,
-    actions: @Composable RowScope.() -> Unit = {}
+    dateViewModel: ReportDateViewModel
 ) {
     val context = LocalContext.current
     Row(
@@ -132,8 +135,8 @@ internal fun DateHeader(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-            OutlinedButton(modifier = Modifier.size(48.dp), onClick = dateViewModel::previous) { Text("‹") }
-            OutlinedButton(
+            IconButton(modifier = Modifier.semantics { contentDescription = "Previous date" }, onClick = dateViewModel::previous) { Text("‹") }
+            TextButton(
                 modifier = Modifier.weight(1f),
                 onClick = {
                     DatePickerDialog(
@@ -145,8 +148,7 @@ internal fun DateHeader(
             ) {
                 Text(date.format(DateTimeFormatter.ofPattern("EEE, dd MMM yyyy")))
             }
-            OutlinedButton(modifier = Modifier.size(48.dp), onClick = dateViewModel::next, enabled = date < LocalDate.now()) { Text("›") }
-            actions()
+            IconButton(modifier = Modifier.semantics { contentDescription = "Next date" }, onClick = dateViewModel::next, enabled = date < LocalDate.now()) { Text("›") }
     }
 }
 
@@ -156,6 +158,7 @@ internal fun TodayScreen(
     dateViewModel: ReportDateViewModel,
     viewModel: TodayViewModel,
     onScan: () -> Unit,
+    cart: @Composable () -> Unit,
     onEditLog: (FoodLogSnapshot) -> Unit,
     onDeleteLog: (Long) -> Unit,
     onDeleteGroup: (String) -> Unit,
@@ -165,7 +168,7 @@ internal fun TodayScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var expandedTargets by remember { mutableStateOf(false) }
+    var expandedTargets by rememberSaveable { mutableStateOf(false) }
     var copyingReport by remember { mutableStateOf(false) }
     val copyScope = rememberCoroutineScope()
     val weeklyFile by viewModel.weeklyFile.collectAsStateWithLifecycle()
@@ -218,17 +221,15 @@ internal fun TodayScreen(
     }
 
     Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(onClick = onScan) { Text("Scan") }
-        }
+        bottomBar = { LedgerActions("Scan", R.drawable.ic_barcode_scan, onScan, cart) }
     ) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
         item {
-            DateHeader(selectedDate, dateViewModel) {
-                FilledIconButton(
+            LedgerTitle("Today") {
+                IconButton(
                     modifier = Modifier.size(48.dp),
                     enabled = !state.refreshing,
                     onClick = viewModel::refreshHealth
@@ -238,6 +239,7 @@ internal fun TodayScreen(
                 }
                 ReportCopyButton(copyingReport || state.refreshing, onCopyDay = { copyReport(false) }, onCopyWeek = { copyReport(true) })
             }
+            DateHeader(selectedDate, dateViewModel)
         }
         weeklyFile?.let { (end, _) ->
             item { Row(verticalAlignment = Alignment.CenterVertically) {
@@ -247,44 +249,7 @@ internal fun TodayScreen(
                 TextButton(onClick = { viewModel.weeklyFile.value = null }) { Text("Dismiss") }
             } }
         }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(state.report.verdict.label, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
-                    Text(balanceLabel(state.report.energyBalance), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                    MetricRow(
-                        if (state.burnForecast?.isEstimate == true) "Estimated final burn" else "Burn",
-                        "${formatCalories(state.report.finalBurnCalories)} kcal"
-                    )
-                    state.burnForecast?.takeIf { it.isEstimate }?.liveBurnCalories?.let {
-                        MetricRow("Recorded so far", "${formatCalories(it)} kcal")
-                    }
-                    Text("Internal comparison: ${state.internalBurn?.finalKcal?.let(::formatCalories) ?: "Unavailable"} kcal · details in Health", style = MaterialTheme.typography.bodySmall)
-                    MetricRow("Food", "${formatCalories(state.report.finalFoodCalories)} kcal")
-                    MetricRow("Protein", "${formatDecimal(state.report.finalProteinG)} g")
-                    MetricRow("Sodium", "${formatDecimal(state.report.finalSodiumMg)} mg")
-                    Text(
-                        if (state.report.finalBurnCalories > 0.0) {
-                            "Health data updated ${Instant.ofEpochMilli(state.report.savedAtEpochMs).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd MMM, HH:mm"))}"
-                        } else "Health burn data has not been loaded",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    state.burnForecast?.takeIf { it.isEstimate }?.let { forecast ->
-                        Text(
-                            buildString {
-                                append(forecast.confidence.name.lowercase().replaceFirstChar(Char::uppercaseChar))
-                                append(" confidence")
-                                if (forecast.sampleDays > 0) append(" · ${forecast.sampleDays} completed days")
-                                if (forecast.lowerBoundCalories != null && forecast.upperBoundCalories != null) {
-                                    append(" · ${formatCalories(forecast.lowerBoundCalories)}–${formatCalories(forecast.upperBoundCalories)} kcal")
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-        }
+        item { LedgerBalance(state) }
         item {
             NutritionTargetsCard(
                 state.report.nutrition, state.targets, expandedTargets,
@@ -299,46 +264,9 @@ internal fun TodayScreen(
                 } else null
             ) { expandedTargets = !expandedTargets }
         }
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Daily spending", style = MaterialTheme.typography.titleLarge)
-                    MetricRow("Known spending", formatMoney(state.spending.knownTotalMicros, state.goals.currencyCode))
-                    MetricRow("Catalog estimate", formatMoney(state.spending.catalogEstimatedMicros, state.goals.currencyCode))
-                    if (state.spending.actualPaidEntries > 0) MetricRow(
-                        "Actual paid overrides",
-                        formatMoney(state.spending.actualPaidMicros, state.goals.currencyCode)
-                    )
-                    MetricRow("Budget", formatMoney(state.goals.dailyBudgetMicros, state.goals.currencyCode))
-                    if (!state.spending.isComplete) Text(
-                        "${state.spending.unknownEntries} entr${if (state.spending.unknownEntries == 1) "y has" else "ies have"} unknown cost.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Button(
-                        onClick = viewModel::planRemainingDay,
-                        enabled = !state.planning && state.goals.dailyBudgetMicros > 0L && state.planningAvailable,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (state.planning) "Planning…" else if (state.planningAvailable) "Plan remaining day" else "Projected burn required") }
-                }
-            }
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Activity", style = MaterialTheme.typography.titleLarge)
-                    MetricRow("Steps", formatInteger(state.report.health.steps))
-                    MetricRow("Distance", "${formatDecimal(state.report.health.distanceKm)} km")
-                    MetricRow("Active burn", "${formatCalories(state.report.health.activeCalories)} kcal")
-                    MetricRow(
-                        if (state.burnForecast?.isEstimate == true) "Estimated final burn" else "Total burn",
-                        "${formatCalories(state.report.health.totalCalories)} kcal"
-                    )
-                    Text(state.report.health.healthConnectStatus, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
         item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Food log", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            LedgerLabel(if (state.logs.size == 1) "1 item" else "${state.logs.size} items")
             var menu by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(painterResource(R.drawable.ic_more), contentDescription = "Food log actions") }
@@ -362,7 +290,53 @@ internal fun TodayScreen(
                 )
             }
         }
-            item { Spacer(Modifier.height(80.dp)) }
+        item {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider()
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Daily spending", style = MaterialTheme.typography.titleLarge)
+                    MetricRow("Known spending", formatMoney(state.spending.knownTotalMicros, state.goals.currencyCode))
+                    MetricRow("Catalog estimate", formatMoney(state.spending.catalogEstimatedMicros, state.goals.currencyCode))
+                    if (state.spending.actualPaidEntries > 0) MetricRow(
+                        "Actual paid overrides",
+                        formatMoney(state.spending.actualPaidMicros, state.goals.currencyCode)
+                    )
+                    MetricRow("Budget", formatMoney(state.goals.dailyBudgetMicros, state.goals.currencyCode))
+                    if (!state.spending.isComplete) Text(
+                        "${state.spending.unknownEntries} entr${if (state.spending.unknownEntries == 1) "y has" else "ies have"} unknown cost.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Button(
+                        onClick = viewModel::planRemainingDay,
+                        enabled = !state.planning && state.goals.dailyBudgetMicros > 0L && state.planningAvailable,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.planning) "Planning…" else if (state.planningAvailable) "Plan remaining day" else "Projected burn required") }
+                }
+            }
+        }
+        item {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider()
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Activity", style = MaterialTheme.typography.titleLarge)
+                    MetricRow("Steps", formatInteger(state.report.health.steps))
+                    MetricRow("Distance", "${formatDecimal(state.report.health.distanceKm)} km")
+                    MetricRow("Active burn", "${formatCalories(state.report.health.activeCalories)} kcal")
+                    MetricRow(
+                        if (state.burnForecast?.isEstimate == true) "Estimated final burn" else "Total burn",
+                        "${formatCalories(state.report.health.totalCalories)} kcal"
+                    )
+                    state.burnForecast?.takeIf { it.isEstimate }?.let { forecast ->
+                        forecast.liveBurnCalories?.let { MetricRow("Recorded so far", "${formatCalories(it)} kcal") }
+                        if (forecast.lowerBoundCalories != null && forecast.upperBoundCalories != null) {
+                            MetricRow("Estimate range", "${formatCalories(forecast.lowerBoundCalories)}–${formatCalories(forecast.upperBoundCalories)} kcal")
+                        }
+                    }
+                    Text(state.report.health.healthConnectStatus, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+            item { Spacer(Modifier.height(8.dp)) }
         }
     }
     state.recommendations?.let { RecommendationDialog(it, state.goals.currencyCode, viewModel::clearRecommendations) }
@@ -377,22 +351,20 @@ private fun NutritionTargetsCard(
     subtitle: String? = null,
     onToggle: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge)
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             TargetRow("Calories", nutrition.calories, targets.calories, "kcal")
             TargetRow("Protein", nutrition.proteinG, targets.proteinG, "g")
-            TargetRow("Sodium", nutrition.sodiumMg, targets.sodiumMg, "mg")
             if (expanded) {
+                TargetRow("Sodium", nutrition.sodiumMg, targets.sodiumMg, "mg")
                 TargetRow("Carbs", nutrition.carbsG, targets.carbsG, "g")
                 TargetRow("Fat", nutrition.fatG, targets.fatG, "g")
                 TargetRow("Sugar", nutrition.sugarG, targets.sugarG, "g")
                 TargetRow("Fiber", nutrition.fiberG, targets.fiberG, "g")
                 TargetRow("Saturated fat", nutrition.saturatedFatG, targets.saturatedFatG, "g")
             }
-            TextButton(onClick = onToggle) { Text(if (expanded) "Show less" else "Show all nutrients") }
-        }
+            TextButton(onClick = onToggle) { Text(if (expanded) "Show less" else "More nutrients") }
     }
 }
 
@@ -413,7 +385,7 @@ private fun TargetRow(label: String, value: Double, target: Double, unit: String
         }
         LinearProgressIndicator(
             progress = { progress },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().height(3.dp)
         )
     }
 }
@@ -424,22 +396,20 @@ internal fun FoodsScreen(
     selectedDate: LocalDate,
     dateViewModel: ReportDateViewModel,
     viewModel: FoodsViewModel,
+    cart: @Composable () -> Unit,
     onCreateProduct: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val temporaryMeals by viewModel.temporaryMeals.collectAsStateWithLifecycle()
     var showTemporaryMeals by rememberSaveable { mutableStateOf(false) }
 
-    Scaffold(floatingActionButton = {
-        FloatingActionButton(onClick = onCreateProduct) { Text("Add") }
-    }) { inner ->
+    Scaffold(bottomBar = { LedgerActions("New food", R.drawable.ic_add_circle, onCreateProduct, cart) }) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Text("Foods", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("Adding to ${selectedDate.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}", style = MaterialTheme.typography.bodySmall)
+                LedgerTitle("Foods") { LedgerLabel("Catalog") }
                 DateHeader(selectedDate, dateViewModel)
             }
             state.recoverableDraft?.let { pending ->
@@ -497,7 +467,7 @@ internal fun FoodsScreen(
                     ProductCatalogRow(product, state.goals.currencyCode, viewModel)
                 }
             }
-            item { Spacer(Modifier.height(80.dp)) }
+            item { Spacer(Modifier.height(8.dp)) }
         }
     }
 }
@@ -706,20 +676,14 @@ private fun MultiScanReviewDialog(
 @Composable
 private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -> Unit, onDelete: () -> Unit) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+    var details by rememberSaveable(log.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().clickable { details = !details }.heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(log.productName, fontWeight = FontWeight.Bold)
                 Text(log.loggedQuantity().displayParts().joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                log.mealName?.let { Text("Bulk log · $it", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
-                Text("${formatCalories(log.calories)} kcal · ${formatDecimal(log.proteinG)} g protein", style = MaterialTheme.typography.bodyMedium)
-                Text("${formatDecimal(log.sodiumMg)} mg sodium · ${formatDecimal(log.carbsG)} g carbs", style = MaterialTheme.typography.bodySmall)
-                Text(
-                    (log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "Cost unknown") +
-                        if (log.excludeCostFromBudget) " · ignored in budget" else "",
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
+            Text("${formatCalories(log.calories)} kcal", style = MaterialTheme.typography.labelLarge)
             Box {
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(painterResource(R.drawable.ic_more), contentDescription = "Food entry actions")
@@ -730,6 +694,13 @@ private fun FoodLogCard(log: FoodLogSnapshot, currencyCode: String, onEdit: () -
                 }
             }
         }
+        if (details) {
+            Text("${formatDecimal(log.proteinG)} g protein · ${formatDecimal(log.sodiumMg)} mg sodium · ${formatDecimal(log.carbsG)} g carbs",
+                style = MaterialTheme.typography.bodySmall)
+            Text((log.recordedCostMicros?.let { formatMoney(it, currencyCode) } ?: "Cost unknown") +
+                if (log.excludeCostFromBudget) " · ignored in budget" else "", style = MaterialTheme.typography.bodySmall)
+        }
+        HorizontalDivider()
     }
 }
 
@@ -744,8 +715,9 @@ private fun BulkFoodLogCard(
 ) {
     var expanded by remember(group.mealId) { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth()) {
+        HorizontalDivider()
+        Column(Modifier.padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(group.label, fontWeight = FontWeight.Bold)
@@ -1079,6 +1051,7 @@ internal fun HealthScreen(
     selectedDate: LocalDate,
     dateViewModel: ReportDateViewModel,
     viewModel: HealthViewModel,
+    cart: @Composable () -> Unit,
     onMessage: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -1091,34 +1064,32 @@ internal fun HealthScreen(
         state.message?.let { onMessage(it); viewModel.clearMessage() }
     }
     Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showWeightEntry = true }) { Text("Weight") }
-        }
+        bottomBar = { LedgerActions("Weight", R.drawable.ic_health, { showWeightEntry = true }, cart) }
     ) { inner ->
         LazyColumn(
             Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
         item {
-            Text("Health", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            LedgerTitle("Health") { LedgerLabel("28 days") }
             DateHeader(selectedDate, dateViewModel)
         }
         if (dashboard == null) {
             item { Text("Loading local health history…") }
         } else {
-            item { DeficitSummaryCard(dashboard) }
-            item { BurnComparisonCard(internalBurn, dashboard.burnForecast, dashboard.intakeCalories) }
             item { WeightAndProjectionCard(dashboard, onManage = { showWeightManager = true }) }
-            item { WalkingGuidanceCard(dashboard) }
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("28-day trend", style = MaterialTheme.typography.titleLarge)
                         HealthTrendChart(dashboard.trends, dashboard.profile.weightUnit)
                         Text("Each series uses its own scale so calorie and weight changes remain readable.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
+            item { DeficitSummaryCard(dashboard) }
+            item { WalkingGuidanceCard(dashboard) }
+            item { BurnComparisonCard(internalBurn, dashboard.burnForecast, dashboard.intakeCalories) }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1143,7 +1114,7 @@ internal fun HealthScreen(
                 }
             }
         }
-            item { Spacer(Modifier.height(80.dp)) }
+            item { Spacer(Modifier.height(8.dp)) }
         }
     }
     if (showWeightEntry && dashboard != null) {
@@ -1237,29 +1208,33 @@ private fun DeficitSummaryCard(dashboard: HealthDashboard) {
 @Composable
 private fun WeightAndProjectionCard(dashboard: HealthDashboard, onManage: () -> Unit) {
     val projection = dashboard.projection
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Weight and expected change", style = MaterialTheme.typography.titleLarge)
-            val latest = dashboard.latestWeight
-            if (latest == null) {
-                Text("No weight recorded. Manual weights work without Health Connect permission.")
-            } else {
-                MetricRow(
-                    "Latest",
-                    "${formatDecimal(dashboard.profile.weightUnit.fromKg(latest.weightKg))} ${dashboard.profile.weightUnit.label} · " +
-                        Instant.ofEpochMilli(latest.recordedAtEpochMs).atZone(ZoneId.systemDefault())
-                            .format(DateTimeFormatter.ofPattern("HH:mm"))
-                )
-                Text(
-                    latest.source.name.lowercase().replace('_', ' ') +
-                        if (dashboard.selectedDateWeights.size > 1) " · latest of ${dashboard.selectedDateWeights.size} recordings" else "",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                dashboard.selectedDateMedianKg?.takeIf { dashboard.selectedDateWeights.size > 1 }?.let {
-                    MetricRow("Daily median", "${formatDecimal(dashboard.profile.weightUnit.fromKg(it))} ${dashboard.profile.weightUnit.label}")
+    val unit = dashboard.profile.weightUnit
+    fun weight(kg: Double) = "${formatDecimal(unit.fromKg(kg))} ${unit.label}"
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val latest = dashboard.latestWeight
+        LedgerLabel("Latest weight")
+        LedgerNumber(latest?.let { formatDecimal(unit.fromKg(it.weightKg)) }, unit.label)
+        if (latest == null) {
+            Text("No recording for this date. Use Weight to add one.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            val time = Instant.ofEpochMilli(latest.recordedAtEpochMs).atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("HH:mm"))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("$time · ${latest.source.name.lowercase().replace('_', ' ')}", style = MaterialTheme.typography.bodySmall)
+                    if (dashboard.selectedDateWeights.size > 1) dashboard.selectedDateMedianKg?.let {
+                        Text("${dashboard.selectedDateWeights.size} recordings · median ${weight(it)}", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
                 TextButton(onClick = onManage) { Text("Manage recordings") }
             }
+        }
+        LedgerStrip("Weekly estimate", projection.weeklyChangeKg?.let {
+            when { it > 0 -> "${weight(it)} loss"; it < 0 -> "${weight(-it)} gain"; else -> "Stable" }
+        } ?: "Unavailable", "Goal weight", dashboard.profile.targetWeightKg?.let(::weight) ?: "Not set")
+        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide projection" else "Projection details") }
+        if (expanded) {
             if (projection.weeklyChangeKg == null) {
                 Text("More valid burn, intake, or weight history is needed.")
             } else {
@@ -1356,6 +1331,48 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
     val deficitColor = MaterialTheme.colorScheme.primary
     val surplusColor = MaterialTheme.colorScheme.error
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (validWeights.isNotEmpty()) {
+            val minWeight = validWeights.minOrNull() ?: 0.0
+            val maxWeight = validWeights.maxOrNull() ?: minWeight
+            val range = (maxWeight - minWeight).coerceAtLeast(0.5)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Smoothed weight", fontWeight = FontWeight.Bold)
+                Text("${formatDecimal(minWeight)}–${formatDecimal(maxWeight)} ${weightUnit.label}", style = MaterialTheme.typography.bodySmall)
+            }
+            val axisMin = minWeight - range * 0.125
+            val axisMax = maxWeight + range * 0.125
+            Row(Modifier.fillMaxWidth().height(112.dp)) {
+                Column(
+                    Modifier.width(48.dp).height(112.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.End
+                ) {
+                    Text(formatDecimal(axisMax), style = MaterialTheme.typography.labelSmall)
+                    Text(formatDecimal(axisMin), style = MaterialTheme.typography.labelSmall)
+                }
+                Canvas(Modifier.weight(1f).height(112.dp).padding(start = 6.dp)) {
+                    val xStep = size.width / (points.size - 1).coerceAtLeast(1)
+                    repeat(2) { line ->
+                        val y = size.height * line
+                        drawLine(gridColor.copy(alpha = 0.12f),
+                            androidx.compose.ui.geometry.Offset(0f, y),
+                            androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
+                    }
+                    var previous: androidx.compose.ui.geometry.Offset? = null
+                    points.forEachIndexed { index, point ->
+                        point.weightKg?.let(weightUnit::fromKg)?.let { value ->
+                            val current = androidx.compose.ui.geometry.Offset(
+                                index * xStep,
+                                size.height - ((value - axisMin) / (axisMax - axisMin) * size.height).toFloat()
+                            )
+                            previous?.let { drawLine(deficitColor, it, current, 3.dp.toPx()) }
+                            drawCircle(deficitColor, 2.5.dp.toPx(), current)
+                            previous = current
+                        } ?: run { previous = null }
+                    }
+                }
+            }
+        }
         if (validDeficits.isNotEmpty()) {
             val maxDeficit = validDeficits.maxOfOrNull { abs(it) }?.coerceAtLeast(1.0) ?: 1.0
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1398,48 +1415,6 @@ private fun HealthTrendChart(points: List<HealthTrendPoint>, weightUnit: WeightU
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Deficit", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                 Text("Surplus", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-            }
-        }
-        if (validWeights.isNotEmpty()) {
-            val minWeight = validWeights.minOrNull() ?: 0.0
-            val maxWeight = validWeights.maxOrNull() ?: minWeight
-            val range = (maxWeight - minWeight).coerceAtLeast(0.5)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Smoothed weight", fontWeight = FontWeight.Bold)
-                Text("${formatDecimal(minWeight)}–${formatDecimal(maxWeight)} ${weightUnit.label}", style = MaterialTheme.typography.bodySmall)
-            }
-            val axisMin = minWeight - range * 0.125
-            val axisMax = maxWeight + range * 0.125
-            Row(Modifier.fillMaxWidth().height(112.dp)) {
-                Column(
-                    Modifier.width(48.dp).height(112.dp),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    horizontalAlignment = Alignment.End
-                ) {
-                    Text(formatDecimal(axisMax), style = MaterialTheme.typography.labelSmall)
-                    Text(formatDecimal(axisMin), style = MaterialTheme.typography.labelSmall)
-                }
-                Canvas(Modifier.weight(1f).height(112.dp).padding(start = 6.dp)) {
-                    val xStep = size.width / (points.size - 1).coerceAtLeast(1)
-                    repeat(2) { line ->
-                        val y = size.height * line
-                        drawLine(gridColor.copy(alpha = 0.12f),
-                            androidx.compose.ui.geometry.Offset(0f, y),
-                            androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
-                    }
-                    var previous: androidx.compose.ui.geometry.Offset? = null
-                    points.forEachIndexed { index, point ->
-                        point.weightKg?.let(weightUnit::fromKg)?.let { value ->
-                            val current = androidx.compose.ui.geometry.Offset(
-                                index * xStep,
-                                size.height - ((value - axisMin) / (axisMax - axisMin) * size.height).toFloat()
-                            )
-                            previous?.let { drawLine(Color(0xFF70D680), it, current, 3.dp.toPx()) }
-                            drawCircle(Color(0xFF70D680), 2.5.dp.toPx(), current)
-                            previous = current
-                        } ?: run { previous = null }
-                    }
-                }
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1492,9 +1467,11 @@ internal fun SettingsScreen(
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (page == null) {
-            item { Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-            SettingsPage.entries.forEach { destination ->
-                item(destination.route) {
+            item { LedgerTitle("Settings") { LedgerLabel("Preferences") } }
+            val planning = listOf(SettingsPage.GOALS, SettingsPage.GOAL_ASSISTANT, SettingsPage.PLANNER)
+            listOf("Planning" to planning, "Data & privacy" to SettingsPage.entries.filterNot { it in planning }).forEach { (label, pages) ->
+                item { LedgerLabel(label) }
+                items(pages, key = { it.route }) { destination ->
                     SettingsMenuButton(destination.title, destination.summary) { onNavigate(destination) }
                 }
             }
@@ -1608,13 +1585,15 @@ internal fun SettingsScreen(
 
 @Composable
 private fun SettingsMenuButton(title: String, summary: String, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp)) {
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-            Text(title, fontWeight = FontWeight.Bold)
-            Text(summary, style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.fillMaxWidth().clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+        .heightIn(min = 52.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text("›", style = MaterialTheme.typography.headlineSmall)
+        Text("›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
     }
+    HorizontalDivider()
 }
 
 @Composable
@@ -2466,14 +2445,4 @@ private fun String.number(): Double = numberOrNull() ?: 0.0
 private fun Double.toInput(): String = toEntryText()
 private fun Double.toReviewInput(): String = toDisplay()
 internal fun Double.toDisplay(): String = formatDecimal(this)
-private fun balanceLabel(balance: EnergyBalance): String = when (balance) {
-    EnergyBalance.Unavailable -> "Add Health Connect burn data"
-    is EnergyBalance.Cut -> "−${balance.calories.roundToInt()} kcal"
-    is EnergyBalance.Surplus -> "+${balance.calories.roundToInt()} kcal"
-    is EnergyBalance.Maintenance -> when {
-        balance.calories > 0 -> "−${balance.calories.roundToInt()} kcal"
-        balance.calories < 0 -> "+${-balance.calories.roundToInt()} kcal"
-        else -> "0 kcal"
-    }
-}
 private fun parseExtras(productId: String, value: String): List<ProductExtraNutrientEntity> = parseProductExtras(productId, value)

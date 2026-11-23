@@ -17,8 +17,8 @@ android {
         applicationId = "com.littleone.dailycutreport"
         minSdk = 28
         targetSdk = 35
-        versionCode = 41
-        versionName = "0.17.3"
+        versionCode = 42
+        versionName = "0.18.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         providers.gradleProperty("dcrAbi").orNull?.let { requestedAbi ->
             require(requestedAbi == "arm64-v8a") { "Unsupported dcrAbi: $requestedAbi" }
@@ -87,6 +87,9 @@ android {
     }
 
     sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    for (suite in listOf("test", "androidTest")) {
+        sourceSets.getByName(suite).java.srcDir("src/sharedTest/java")
+    }
 }
 
 ksp {

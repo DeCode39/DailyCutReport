@@ -1,6 +1,9 @@
-# Daily Cut Report 0.17.3
+# Daily Cut Report 0.18.0
 
-### Unreleased: refresh and export reliability
+## New in 0.18.0 — Daily Ledger
+
+- Android's four tabs share a black-and-yellow ledger layout. Today prioritizes balance, targets and the food log; Foods has compact catalog rows; Health leads with weight and trends; Settings groups planning and data controls. Primary actions have a dedicated row clear of the log.
+- Version code **42**. Upgrade in place from the previous public build; no new permissions, database migration, or encrypted backup format change.
 
 - On foreground entry, refresh today's forecast after checking yesterday. A successful history import covering yesterday satisfies the check; if total burn is not available, retry on later opens. Manual refresh still covers the last 28 calendar days. A provider read without weight or nutrition access no longer replaces the corresponding cached data with an empty dataset.
 - Hold Copy on Today for compact weekly JSON. **Save weekly JSON** writes the same prepared document through the system picker, including when clipboard copy fails. It is plain-text health data, not an encrypted backup. The selected end date is inclusive; an incomplete current day is not a completed calendar week.
@@ -8,7 +11,7 @@
 
 Daily Cut Report is a strictly offline Android fitness and nutrition journal. It combines Health Connect activity data with a local food catalog and daily food log, calculates daily energy balance, and exports a structured clipboard report.
 
-## New in 0.17.3
+## Previous: 0.17.3
 
 - Manual refresh on Today, Health, and Settings re-imports **today plus the previous 27 calendar days**, anchored to today even when viewing an older date. Every press bypasses the daily history throttle, picking up delayed Health Connect corrections.
 - Completed-day burn caches are refreshed transactionally with imported totals. Today's live forecast runs last, using the corrected history. Concurrent manual/foreground imports and daily refreshes are serialized.

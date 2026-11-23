@@ -309,7 +309,7 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
     val haptics = LocalHapticFeedback.current
     var previewPinned by remember(product.productId) { mutableStateOf(false) }
     var previewHeld by remember(product.productId) { mutableStateOf(false) }
-    Card(
+    Column(
         Modifier
             .fillMaxWidth()
             .combinedClickable(
@@ -320,21 +320,15 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
                 }
             )
     ) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                IconButton(onClick = { viewModel.addProductToCart(product) }) {
-                    Icon(painterResource(R.drawable.ic_add_circle), contentDescription = "Add ${product.name} to cart")
-                }
-                IconButton(onClick = { viewModel.editProduct(product) }) {
-                    Icon(painterResource(R.drawable.ic_edit), contentDescription = "Edit ${product.name}")
-                }
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { viewModel.addProductToCart(product) }) {
+                Icon(painterResource(R.drawable.ic_add_circle), contentDescription = "Add ${product.name} to cart", tint = MaterialTheme.colorScheme.primary)
             }
-            Column(Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(product.name, fontWeight = FontWeight.Bold)
-                if (product.brand.isNotBlank()) Text(product.brand, style = MaterialTheme.typography.bodySmall)
-                product.purchasePriceMicros?.let {
-                    Text("${formatMoney(it, currencyCode)} / ${product.purchaseUnitServings.toDisplay()} serving(s)", style = MaterialTheme.typography.bodySmall)
-                }
+            Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                Text(product.name, style = MaterialTheme.typography.titleMedium)
+                Text(listOfNotNull(product.brand.takeIf { it.isNotBlank() }, product.servingLabel,
+                    "${formatCalories(product.calories)} kcal").joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Box(Modifier.size(48.dp).semantics {
                 contentDescription = "Preview nutrition for ${product.name}"
@@ -354,7 +348,9 @@ internal fun ProductCatalogRow(product: ProductEntity, currencyCode: String, vie
         }
         if (previewPinned || previewHeld) {
             ProductNutritionPreview(product, currencyCode, viewModel)
+            TextButton(onClick = { viewModel.editProduct(product) }) { Text("Edit ${product.name}") }
         }
+        androidx.compose.material3.HorizontalDivider()
     }
 }
 
